@@ -417,7 +417,14 @@ bool Get(
 		}
 		return cDialogLastPath();
 	}();
-	if (realLastPath.isEmpty() || realLastPath.endsWith(qstr("/tdummy"))) {
+	if (realLastPath.isEmpty()
+		|| realLastPath.endsWith(qstr("/tdummy"))
+		|| realLastPath.startsWith(qstr("//"))
+		|| realLastPath.startsWith(qstr("\\\\"))) {
+		// A persisted or derived UNC path can point at a network share
+		// that has since gone offline; handing that straight to the native
+		// file dialog makes Windows Shell block (and can crash) resolving
+		// it. Never restore one - fall back to a local, always-safe folder.
 		realLastPath = QStandardPaths::writableLocation(
 			QStandardPaths::DownloadLocation);
 	}
@@ -450,7 +457,9 @@ bool Get(
 	if (type != Type::ReadFolder) {
 		// Save last used directory for all queries except directory choosing.
 		const auto path = dialog.directory().absolutePath();
-		if (path != cDialogLastPath()) {
+		if (path != cDialogLastPath()
+			&& !path.startsWith(qstr("//"))
+			&& !path.startsWith(qstr("\\\\"))) {
 			cSetDialogLastPath(path);
 			Local::writeSettings();
 		}
