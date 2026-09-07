@@ -158,6 +158,13 @@ private:
 		crl::time willReadWhen = 0;
 		bool sentReadDone = false;
 		bool postponedRequestEntry = false;
+		// Set once a ReadHistory request for this history comes back
+		// with a terminal error (PEER_ID_INVALID); sendReadRequest's
+		// .fail was otherwise treated identically to .done, so an open
+		// chat whose peer the server rejects for read receipts kept
+		// re-issuing (and re-failing) a fresh request on every new
+		// message, forever, with no circuit breaker.
+		bool readRequestsDisabled = false;
 	};
 	struct ChatListGroupRequest {
 		MsgId aroundId = 0;

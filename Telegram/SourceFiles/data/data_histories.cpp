@@ -304,6 +304,17 @@ void Histories::readInboxTill(
 			sendPendingReadInbox(history);
 		}
 		return;
+	} else if (maybeState && maybeState->readRequestsDisabled) {
+		// Keep local read/unread bookkeeping in sync (so the UI still
+		// reflects what the user just read) without scheduling another
+		// network request that's already known to fail for this peer.
+		const auto stillUnread = history->countStillUnreadLocal(tillId);
+		history->setInboxReadTill(tillId);
+		if (stillUnread) {
+			history->setUnreadCount(*stillUnread);
+		}
+		history->updateChatListEntry();
+		return;
 	} else if (!needsRequest
 		&& (!maybeState || !maybeState->willReadTill)) {
 		return;
@@ -762,11 +773,28 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 			sendReadRequests();
 			finish();
 		};
+		const auto failed = [=](const MTP::Error &error) {
+			if (error.type() == "PEER_ID_INVALID") {
+				// The server doesn't recognize this peer for read
+				// receipts; without this, .fail was wired to the exact
+				// same continuation as .done, so a chat that's open and
+				// receiving new messages kept re-issuing a fresh,
+				// re-failing ReadHistory request forever.
+				if (const auto state = lookup(history)) {
+					state->readRequestsDisabled = true;
+					state->willReadTill = 0;
+					state->willReadWhen = 0;
+				}
+				LOG(("Reading: disabling read requests for a peer "
+					"after PEER_ID_INVALID."));
+			}
+			finished();
+		};
 		if (const auto channel = history->peer->asChannel()) {
 			return session().api().request(MTPchannels_ReadHistory(
 				channel->inputChannel(),
 				MTP_int(tillId)
-			)).done(finished).fail(finished).send();
+			)).done(finished).fail(failed).send();
 		} else {
 			return session().api().request(MTPmessages_ReadHistory(
 				history->peer->input(),
@@ -774,9 +802,7 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 			)).done([=](const MTPmessages_AffectedMessages &result) {
 				session().api().applyAffectedMessages(history->peer, result);
 				finished();
-			}).fail([=] {
-				finished();
-			}).send();
+			}).fail(failed).send();
 		}
 	});
 }

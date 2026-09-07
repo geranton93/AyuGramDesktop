@@ -6,6 +6,8 @@
 // Copyright @Radolyn, 2026
 #include "ayu/utils/rc_manager.h"
 
+#include "base/unixtime.h"
+
 #include <QJsonArray>
 #include <qjsondocument.h>
 #include <QTimer>
@@ -15,6 +17,39 @@ namespace {
 constexpr auto kPrimaryUrl = "https://update.ayugram.one/rc/current/desktop2";
 constexpr auto kExteraUrl = "https://api.exteragram.app/api/v1/profiles/compact";
 constexpr auto kFetchTimeout = 15 * 1000;
+
+// Without this, every single cold start re-paid the full kFetchTimeout
+// against the primary endpoint before falling back, even for a user whose
+// primary endpoint has been unreachable for a while. Persist the last
+// failure time and skip straight to the fallback for kFallbackStickyPeriod
+// afterwards, so this only gets re-paid periodically rather than on every
+// launch -- not forever, in case the primary endpoint recovers.
+const auto kFallbackMarkerPath = QString("./tdata/rc_fallback_since");
+constexpr auto kFallbackStickyPeriod = 24 * 60 * 60; // 1 day, in seconds
+
+bool ReadFallbackMarker() {
+	QFile file(kFallbackMarkerPath);
+	if (!file.open(QIODevice::ReadOnly)) {
+		return false;
+	}
+	bool ok = false;
+	const auto since = file.readAll().trimmed().toLongLong(&ok);
+	if (!ok) {
+		return false;
+	}
+	return (base::unixtime::now() - since) < kFallbackStickyPeriod;
+}
+
+void WriteFallbackMarker() {
+	QFile file(kFallbackMarkerPath);
+	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		file.write(QByteArray::number(qint64(base::unixtime::now())));
+	}
+}
+
+void ClearFallbackMarker() {
+	QFile::remove(kFallbackMarkerPath);
+}
 
 }
 
@@ -33,6 +68,11 @@ std::unordered_set<ID> default_channels = {
 void RCManager::start() {
 	DEBUG_LOG(("RCManager: starting"));
 	_manager = std::make_unique<QNetworkAccessManager>();
+
+	if (ReadFallbackMarker()) {
+		LOG(("RCManager: primary endpoint recently failed, starting on extera fallback endpoint"));
+		_useExteraFallback = true;
+	}
 
 	makeRequest();
 
@@ -81,6 +121,7 @@ bool RCManager::tryRetryWithExteraFallback() {
 	LOG(("RCManager: switching to extera fallback endpoint"));
 	_useExteraFallback = true;
 	_retryAttempted = true;
+	WriteFallbackMarker();
 	sendRequest();
 	return true;
 }
@@ -206,6 +247,12 @@ bool RCManager::applyResponse(const QByteArray &response) {
 	}
 
 	initialized = true;
+
+	if (!_useExteraFallback) {
+		// A successful primary-endpoint response means it has recovered;
+		// stop skipping it on future cold starts.
+		ClearFallbackMarker();
+	}
 
 	LOG(("RCManager: Loaded %1 developers, %2 official channels"
 	).arg(_developers.size()).arg(_officialChannels.size()));
