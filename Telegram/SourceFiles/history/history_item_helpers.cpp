@@ -1097,6 +1097,12 @@ MediaCheckResult CheckMessageMedia(const MTPMessageMedia &media) {
 				? Result::HasExpiredMediaTimeToLive
 				: Result::Empty;
 		}
+		// A still-alive self-destructing photo: AyuGram doesn't render
+		// these inline, so flag it as unsupported (drives the ayu hint
+		// and the anti-forward/anti-save checks) instead of Good.
+		if (data.vttl_seconds()) {
+			return Result::HasUnsupportedTimeToLive;
+		}
 		return photo->match([](const MTPDphoto &) {
 			return Result::Good;
 		}, [&](const MTPDphotoEmpty &) {
@@ -1110,6 +1116,11 @@ MediaCheckResult CheckMessageMedia(const MTPMessageMedia &media) {
 			return data.vttl_seconds()
 				? Result::HasExpiredMediaTimeToLive
 				: Result::Empty;
+		}
+		// Only self-destructing round videos are unsupported this way;
+		// TTL voice notes render fine and stay Good.
+		if (data.vttl_seconds() && data.is_video()) {
+			return Result::HasUnsupportedTimeToLive;
 		}
 		return document->match([](const MTPDdocument &) {
 			return Result::Good;
