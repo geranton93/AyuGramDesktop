@@ -248,10 +248,16 @@ void AyuMusicButton::downloadAndMakeCover(FullMsgId msgId) {
 
 void AyuMusicButton::makeCover() {
 	const auto weak = base::make_weak(this);
+	// AyuSettings fields are plain rpl::variable, not thread-safe: reading
+	// adaptiveCoverColor() here (on the main thread, before crossing into
+	// crl::async below) races with the setting being toggled from the
+	// button's own context menu concurrently with this background task
+	// running. Snapshot the value now instead of re-reading the live
+	// setting from the background thread.
+	const auto adaptiveCoverColor = AyuSettings::getInstance().adaptiveCoverColor();
 	crl::async(
 		[=, mediaView = _mediaView, performerText = _performerText, titleText = _titleText, overrideBg = _overrideBg]()
 		{
-			const auto &settings = AyuSettings::getInstance();
 			const auto &font = st::infoMusicButtonTitle.style.font;
 			const auto skip = st::normalFont->spacew / 2;
 			const auto size = font->height + skip + font->height;
@@ -273,7 +279,7 @@ void AyuMusicButton::makeCover() {
 			}
 
 			QColor bgColor;
-			if (cover.noCover || !settings.adaptiveCoverColor()) {
+			if (cover.noCover || !adaptiveCoverColor) {
 				bgColor = GetNoCoverBgColor(overrideBg);
 			} else {
 				if (const auto extractedColor = ExtractColorFromCover(cover.pixToBg)) {

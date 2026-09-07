@@ -33,21 +33,26 @@ public:
 
 	ForwardState(const ForwardState &other)
 	: totalChunks(other.totalChunks)
-	, currentChunk(other.currentChunk)
-	, totalMessages(other.totalMessages)
-	, sentMessages(other.sentMessages)
-	, state(other.state)
+	, currentChunk(other.currentChunk.load())
+	, totalMessages(other.totalMessages.load())
+	, sentMessages(other.sentMessages.load())
+	, state(other.state.load())
 	, stopRequested(other.stopRequested.load()) {
 	}
 
 	void updateBottomBar(const Main::Session &session, const PeerId *peer, const State &st);
 
-	int totalChunks = 0;
-	int currentChunk = 0;
-	int totalMessages = 0;
-	int sentMessages = 0;
+	// Written from a crl::async background thread (forwardMessages /
+	// intelligentForward) and read from the main thread (isForwarding,
+	// stateName, cancelForward) concurrently, so every field that crosses
+	// threads must be atomic. totalChunks is set once in the constructor
+	// and never mutated afterwards, so it doesn't need to be.
+	const int totalChunks = 0;
+	std::atomic<int> currentChunk = 0;
+	std::atomic<int> totalMessages = 0;
+	std::atomic<int> sentMessages = 0;
 
-	State state = State::Preparing;
+	std::atomic<State> state = State::Preparing;
 	std::atomic<bool> stopRequested = false;
 
 };

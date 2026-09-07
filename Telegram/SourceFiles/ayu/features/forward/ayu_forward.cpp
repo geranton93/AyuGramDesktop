@@ -13,6 +13,7 @@
 #include "ayu/utils/telegram_helpers.h"
 #include "base/random.h"
 #include "base/unixtime.h"
+#include "base/weak_ptr.h"
 #include "core/application.h"
 #include "data/data_changes.h"
 #include "data/data_document.h"
@@ -27,40 +28,62 @@
 #include "ui/chat/attach/attach_prepare.h"
 #include "ui/text/text_utilities.h"
 
+#include <mutex>
+
 namespace AyuForward {
 
+namespace {
+
+// forwardStates is written from the crl::async background thread that runs
+// forwardMessages/intelligentForward and read from the main thread
+// (isForwarding, stateName, cancelForward), so the map itself (insertion can
+// rehash) needs its own lock; the ForwardState fields it points to are
+// atomic (see ayu_forward.h) and stay valid via shared_ptr regardless of
+// later map mutations.
+std::mutex ForwardStatesMutex;
 std::unordered_map<PeerId, std::shared_ptr<ForwardState>> forwardStates;
 
-bool isForwarding(const PeerId &id) {
-	const auto fwState = forwardStates.find(id);
-	if (id.value && fwState != forwardStates.end()) {
-		const auto &state = *fwState->second;
+[[nodiscard]] std::shared_ptr<ForwardState> FindForwardState(const PeerId &id) {
+	std::lock_guard<std::mutex> lock(ForwardStatesMutex);
+	const auto it = forwardStates.find(id);
+	return (it != forwardStates.end()) ? it->second : nullptr;
+}
 
-		return state.state != ForwardState::State::Finished
-			&& state.currentChunk < state.totalChunks
-			&& !state.stopRequested
-			&& ((state.totalChunks && state.totalMessages) || state.state == ForwardState::State::Downloading);
+void SetForwardState(const PeerId &id, std::shared_ptr<ForwardState> state) {
+	std::lock_guard<std::mutex> lock(ForwardStatesMutex);
+	forwardStates[id] = std::move(state);
+}
+
+} // namespace
+
+bool isForwarding(const PeerId &id) {
+	if (!id.value) {
+		return false;
 	}
-	return false;
+	const auto state = FindForwardState(id);
+	if (!state) {
+		return false;
+	}
+	return state->state.load() != ForwardState::State::Finished
+		&& state->currentChunk.load() < state->totalChunks
+		&& !state->stopRequested.load()
+		&& ((state->totalChunks && state->totalMessages.load()) || state->state.load() == ForwardState::State::Downloading);
 }
 
 void cancelForward(const PeerId &id, const Main::Session &session) {
-	const auto fwState = forwardStates.find(id);
-	if (fwState != forwardStates.end()) {
-		fwState->second->stopRequested = true;
-		fwState->second->updateBottomBar(session, &id, ForwardState::State::Finished);
+	const auto state = FindForwardState(id);
+	if (state) {
+		state->stopRequested = true;
+		state->updateBottomBar(session, &id, ForwardState::State::Finished);
 	}
 }
 
 std::pair<QString, QString> stateName(const PeerId &id) {
-	const auto fwState = forwardStates.find(id);
+	const auto state = FindForwardState(id);
 
-
-	if (fwState == forwardStates.end()) {
+	if (!state) {
 		return std::make_pair(QString(), QString());
 	}
-
-	const auto state = fwState->second;
 
 	QString messagesString = tr::ayu_AyuForwardStatusSentCount(tr::now,
 															   lt_count1,
@@ -254,6 +277,16 @@ void intelligentForward(
 	not_null<Main::Session*> session,
 	const Api::SendAction &action,
 	const Data::ResolvedForwardDraft &draft) {
+	// This runs on a crl::async background thread with no lifetime guard
+	// at the call site, so session/history can already be gone (logout,
+	// account switch) by the time this thread actually starts. This only
+	// covers that startup race, not the whole multi-step operation below
+	// (which keeps dereferencing session throughout) -- narrowing that
+	// further would mean guarding every dereference in this function and
+	// forwardMessages below, which isn't done here.
+	if (!base::make_weak(session)) {
+		return;
+	}
 	const auto history = action.history;
 	const auto topicRootId = action.replyTo.topicRootId;
 	const auto monoforumPeerId = action.replyTo.monoforumPeerId;
@@ -295,7 +328,7 @@ void intelligentForward(
 	chunks.push_back(currentChunk);
 
 	auto state = std::make_shared<ForwardState>(chunks.size());
-	forwardStates[peer->id] = state;
+	SetForwardState(peer->id, state);
 
 
 	for (const auto &chunk : chunks) {
@@ -308,7 +341,7 @@ void intelligentForward(
 
 			AyuSync::forwardMessagesSync(session, chunk.items, action, draft.options);
 
-			state->sentMessages = state->totalMessages;
+			state->sentMessages = state->totalMessages.load();
 
 			state->updateBottomBar(*session, &peer->id, ForwardState::State::Finished);
 		}
@@ -323,6 +356,11 @@ void forwardMessages(
 	const Api::SendAction &action,
 	bool forwardState,
 	const Data::ResolvedForwardDraft &draft) {
+	// See the matching comment in intelligentForward above -- same guard,
+	// same scoping caveat (covers only the pre-start race).
+	if (!base::make_weak(session)) {
+		return;
+	}
 	const auto items = draft.items;
 	const auto history = action.history;
 	const auto peer = history->peer;
@@ -337,12 +375,15 @@ void forwardMessages(
 	std::shared_ptr<ForwardState> state;
 
 	if (forwardState) {
-		state = std::make_shared<ForwardState>(*forwardStates[peer->id]);
+		const auto existing = FindForwardState(peer->id);
+		state = existing
+			? std::make_shared<ForwardState>(*existing)
+			: std::make_shared<ForwardState>(1);
 	} else {
 		state = std::make_shared<ForwardState>(1);
 	}
 
-	forwardStates[peer->id] = state;
+	SetForwardState(peer->id, state);
 
 	std::unordered_map<uint64, uint64> groupIds;
 

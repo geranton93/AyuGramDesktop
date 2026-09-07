@@ -9,6 +9,7 @@
 #include "ayu/features/forward/ayu_sync.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/flat_map.h"
+#include "base/weak_ptr.h"
 #include "data/data_document.h"
 #include "data/data_file_origin.h"
 #include "data/data_peer.h"
@@ -346,11 +347,22 @@ bool forwardRichMessage(
 	FullMsgId itemId,
 	const Api::SendAction &action,
 	Fn<bool()> cancelled) {
-	if (!cancelled) {
-		cancelled = []
-		{
-			return false;
-		};
+	// session (and everything reached through it -- action.history->peer,
+	// session->data(), etc.) can be destroyed mid-flight if the user logs
+	// out or switches accounts while this runs on a background thread
+	// (this whole call is dispatched via crl::async with no lifetime
+	// guard at the call site). Fold a liveness check into cancelled() so
+	// every bail-out point already in this function -- and every deeper
+	// AyuSync::*Sync call that periodically polls cancelled() -- also
+	// catches that case, without needing a guard at each of them.
+	const auto weakSession = base::make_weak(session);
+	auto userCancelled = cancelled
+		? std::move(cancelled)
+		: Fn<bool()>([] { return false; });
+	cancelled = [=] { return !weakSession || userCancelled(); };
+
+	if (cancelled()) {
+		return false;
 	}
 
 	const auto source = AyuSync::loadFullRichPageSync(session, itemId);
