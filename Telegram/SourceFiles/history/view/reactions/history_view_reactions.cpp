@@ -637,7 +637,7 @@ void InlineList::paint(
 			p.setOpacity(1.);
 		}
 	}
-	if (!animations.empty() && !AyuFeatures::MessageShot::isTakingShot()) { // fix crash when taking shot
+	if (!animations.empty() && !AyuFeatures::MessageShot::isTakingShot() && context.reactionInfo) { // fix crash when taking shot
 		const auto now = context.now;
 		context.reactionInfo->effectPaint = [
 			now,
