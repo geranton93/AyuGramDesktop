@@ -4511,11 +4511,12 @@ void OverlayWidget::activate() {
 	QApplication::setActiveWindow(_window);
 	setFocus();
 
-	if (AyuSettings::getInstance().streamerMode()) {
-		AyuFeatures::StreamerMode::hideWidgetWindow(_window);
-	} else {
-		AyuFeatures::StreamerMode::showWidgetWindow(_window);
-	}
+	// Re-derive protection from both Streamer Mode and this window's own
+	// content, rather than letting Streamer Mode unconditionally override
+	// it here (Platform::SetWindowDisplayAffinity/NSWindow.sharingType is
+	// a single non-ref-counted per-window state - refreshScreenshotProtection()
+	// is the only other writer of it for this window, so both must agree).
+	refreshScreenshotProtection();
 }
 
 void OverlayWidget::show(OpenRequest request) {
@@ -6077,7 +6078,8 @@ bool OverlayWidget::contentNeedsScreenshotProtection() const {
 }
 
 void OverlayWidget::refreshScreenshotProtection() {
-	_screenshotProtected = contentNeedsScreenshotProtection();
+	_screenshotProtected = contentNeedsScreenshotProtection()
+		|| AyuSettings::getInstance().streamerMode();
 	Platform::SetWindowScreenshotProtection(_window, _screenshotProtected);
 }
 
