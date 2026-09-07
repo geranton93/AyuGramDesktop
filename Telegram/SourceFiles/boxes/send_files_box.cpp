@@ -702,6 +702,7 @@ SendFilesBox::SendFilesBox(QWidget*, SendFilesBoxDescriptor &&descriptor)
 	? *descriptor.stOverride
 	: st::defaultComposeControls)
 , _sendType(descriptor.sendType)
+, _welcomeTemplate(descriptor.welcomeTemplate)
 , _titleHeight(st::boxTitleHeight)
 , _list(std::move(descriptor.list))
 , _limits(descriptor.limits)
@@ -2630,10 +2631,12 @@ void SendFilesBox::send(
 		return;
 	}
 
-	const auto sumSize = ranges::accumulate(
-		_list.files, int64(0),
-		[](int64 sum, const auto &file) { return sum + file.size; });
-	applyGhostScheduling(&_show->session(), options, getScheduleTime(sumSize));
+	if (!_welcomeTemplate) {
+		const auto sumSize = ranges::accumulate(
+			_list.files, int64(0),
+			[](int64 sum, const auto &file) { return sum + file.size; });
+		applyGhostScheduling(&_show->session(), options, getScheduleTime(sumSize));
+	}
 
 	if ((_sendType == Api::SendType::Scheduled
 		|| _sendType == Api::SendType::ScheduledToUser)

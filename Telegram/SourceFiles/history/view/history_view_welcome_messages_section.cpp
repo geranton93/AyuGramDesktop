@@ -441,6 +441,7 @@ bool WelcomeMessagesWidget::confirmSendingFiles(
 		}),
 		.cancelled = _composeControls->restoreTextCallback(
 			insertTextOnCancel),
+		.welcomeTemplate = true,
 	});
 	box->takeTextWithTagsRequests(
 	) | rpl::on_next([=](TextWithTags &&text) {

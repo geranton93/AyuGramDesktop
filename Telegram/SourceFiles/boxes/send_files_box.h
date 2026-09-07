@@ -118,6 +118,10 @@ struct SendFilesBoxDescriptor {
 	Fn<void()> cancelled;
 	FullReplyTo replyTo;
 	Fn<void(const TextWithTags &text)> cancelled2;
+	// AyuGram: skip ghost-scheduling for boxes whose send() options will be
+	// stamped welcomeTemplate afterward - the box itself has no visibility
+	// into that flag until the caller's own confirmed() callback runs.
+	bool welcomeTemplate = false;
 };
 
 class SendFilesBox : public Ui::BoxContent {
@@ -295,6 +299,7 @@ private:
 	const std::shared_ptr<ChatHelpers::Show> _show;
 	const style::ComposeControls &_st;
 	const Api::SendType _sendType = Api::SendType();
+	const bool _welcomeTemplate = false;
 
 	QString _titleText;
 	rpl::variable<int> _titleHeight = 0;
