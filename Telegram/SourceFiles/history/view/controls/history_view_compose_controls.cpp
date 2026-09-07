@@ -1440,7 +1440,10 @@ ComposeControls::ComposeControls(
 				updateControlsGeometry(_wrap->size());
 			} else if (_botKeyboardHide && !has) {
 				_botKeyboardHide = nullptr;
-				_tabbedSelectorToggle->show();
+				// Re-derive visibility from settings.showEmojiButtonInMessageField()
+				// instead of an unconditional show(), which would override an
+				// explicit "always hide" user preference.
+				updateControlsVisibility();
 				updateControlsGeometry(_wrap->size());
 			}
 		}, _wrap->lifetime());

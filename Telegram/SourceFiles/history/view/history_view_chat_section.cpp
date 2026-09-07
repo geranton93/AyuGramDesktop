@@ -815,7 +815,8 @@ ChatWidget::ChatWidget(
 								std::make_shared<HistoryView::ScheduledMemento>(t));
 						});
 					}
-				} else if (mode() == Mode::History) {
+				} else if (mode() == Mode::History
+						&& !ghost.isUseScheduledMessages()) {
 					crl::on_main(this, [=, history = action.history] {
 						controller->showSection(
 							std::make_shared<HistoryView::ScheduledMemento>(
