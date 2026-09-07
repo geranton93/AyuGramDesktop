@@ -10,6 +10,8 @@
 #include "ayu/libs/sqlite/sqlite_orm.h"
 #include "base/unixtime.h"
 
+#include <mutex>
+
 using namespace sqlite_orm;
 auto storage = make_storage(
 	"./tdata/ayudata.db",
@@ -144,6 +146,47 @@ auto storage = make_storage(
 	)
 );
 
+namespace {
+
+// `storage` above is a single shared sqlite3 connection. It's queried from
+// a crl::async background thread (history_inner.cpp's preloadMore) while
+// written from the main thread (message delete/edit handling), with
+// nothing else in this file confining it to one thread the way the rest of
+// the codebase's shared state is. This mutex serializes every access.
+std::mutex DatabaseMutex;
+
+// DeletedMessage/EditedMessage otherwise grow forever: there was no TTL,
+// row cap, or scheduled purge anywhere, only a manual per-dialog "Clear"
+// action. Keep the most recent N rows per table, pruning opportunistically
+// after a write instead of adding a new background timer.
+constexpr auto kMaxArchivedRowsPerTable = 50'000;
+
+template<typename Table>
+void pruneOldestRows(int keep) {
+	// Caller already holds DatabaseMutex.
+	try {
+		const auto count = storage.count<Table>();
+		if (count <= keep) {
+			return;
+		}
+		const auto excess = static_cast<int>(count - keep);
+		const auto cutoffRows = storage.select(
+			columns(column<Table>(&Table::fakeId)),
+			order_by(column<Table>(&Table::fakeId)).asc(),
+			limit(1, offset(excess - 1))
+		);
+		if (cutoffRows.empty()) {
+			return;
+		}
+		const auto cutoff = std::get<0>(cutoffRows.front());
+		storage.remove_all<Table>(where(column<Table>(&Table::fakeId) <= cutoff));
+	} catch (const std::exception &ex) {
+		LOG(("Failed to prune old rows: %1").arg(ex.what()));
+	}
+}
+
+} // namespace
+
 namespace AyuMigrations {
 
 void migrateToV1(decltype(storage) &storage) {
@@ -225,7 +268,18 @@ void moveCurrentDatabase() {
 }
 
 void initialize() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
+		// WAL + synchronous=NORMAL trades a small, well-understood risk
+		// (losing the last commit, never DB corruption, on an actual power
+		// loss/OS crash) for avoiding a full fsync on every single
+		// transaction commit -- and this file commits once per deleted or
+		// edited message, so on the default rollback-journal +
+		// synchronous=FULL settings every one of those was a blocking
+		// disk fsync.
+		storage.pragma.journal_mode(sqlite_orm::journal_mode::WAL);
+		storage.pragma.synchronous(1); // NORMAL
+
 		storage.sync_schema(true);
 
 		runMigrations(storage);
@@ -243,6 +297,7 @@ void initialize() {
 }
 
 void addEditedMessage(const EditedMessage &message) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.begin_transaction();
 		storage.insert(message);
@@ -254,9 +309,11 @@ void addEditedMessage(const EditedMessage &message) {
 		}
 		LOG(("Failed to save edited message for some reason: %1").arg(ex.what()));
 	}
+	pruneOldestRows<EditedMessage>(kMaxArchivedRowsPerTable);
 }
 
 std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	return storage.get_all<EditedMessage>(
 		where(
 			column<EditedMessage>(&EditedMessage::userId) == userId and
@@ -271,6 +328,7 @@ std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageI
 }
 
 bool hasRevisions(ID userId, ID dialogId, ID messageId) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return !storage.select(
 			columns(column<EditedMessage>(&EditedMessage::messageId)),
@@ -288,6 +346,7 @@ bool hasRevisions(ID userId, ID dialogId, ID messageId) {
 }
 
 void addDeletedMessage(const DeletedMessage &message) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.begin_transaction();
 		storage.insert(message);
@@ -299,9 +358,32 @@ void addDeletedMessage(const DeletedMessage &message) {
 		}
 		LOG(("Failed to save edited message for some reason: %1").arg(ex.what()));
 	}
+	pruneOldestRows<DeletedMessage>(kMaxArchivedRowsPerTable);
+}
+
+void addDeletedMessages(const std::vector<DeletedMessage> &messages) {
+	if (messages.empty()) {
+		return;
+	}
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
+	try {
+		storage.begin_transaction();
+		for (const auto &message : messages) {
+			storage.insert(message);
+		}
+		storage.commit();
+	} catch (std::exception &ex) {
+		try {
+			storage.rollback();
+		} catch (...) {
+		}
+		LOG(("Failed to save deleted messages batch for some reason: %1").arg(ex.what()));
+	}
+	pruneOldestRows<DeletedMessage>(kMaxArchivedRowsPerTable);
 }
 
 std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	if (searchQuery.empty()) {
 		return storage.get_all<DeletedMessage>(
 			where(
@@ -340,6 +422,7 @@ std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicI
 }
 
 bool hasDeletedMessages(ID userId, ID dialogId, ID topicId) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return !storage.select(
 			columns(column<DeletedMessage>(&DeletedMessage::dialogId)),
@@ -357,6 +440,7 @@ bool hasDeletedMessages(ID userId, ID dialogId, ID topicId) {
 }
 
 void removeDeletedMessage(ID userId, ID dialogId, ID messageId) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<DeletedMessage>(
 			where(
@@ -371,6 +455,7 @@ void removeDeletedMessage(ID userId, ID dialogId, ID messageId) {
 }
 
 void clearDeletedMessages(ID userId, ID dialogId, ID topicId) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<DeletedMessage>(
 			where(
@@ -394,14 +479,17 @@ std::vector<T> getAllT() {
 }
 
 std::vector<RegexFilter> getAllRegexFilters() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	return getAllT<RegexFilter>();
 }
 
 std::vector<RegexFilterGlobalExclusion> getAllFiltersExclusions() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	return getAllT<RegexFilterGlobalExclusion>();
 }
 
 std::vector<RegexFilter> getExcludedByDialogId(ID dialogId) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return storage.get_all<RegexFilter>(
 			where(in(&RegexFilter::id,
@@ -417,6 +505,7 @@ std::vector<RegexFilter> getExcludedByDialogId(ID dialogId) {
 }
 
 int getCount() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return storage.count<RegexFilter>();
 	} catch (std::exception &ex) {
@@ -426,6 +515,7 @@ int getCount() {
 }
 
 RegexFilter getById(std::vector<char> id) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return storage.get<RegexFilter>(
 			where(column<RegexFilter>(&RegexFilter::id) == std::move(id))
@@ -437,6 +527,7 @@ RegexFilter getById(std::vector<char> id) {
 }
 
 std::vector<RegexFilter> getShared() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return storage.get_all<RegexFilter>(
 			where(is_null(column<RegexFilter>(&RegexFilter::dialogId)))
@@ -448,6 +539,7 @@ std::vector<RegexFilter> getShared() {
 }
 
 std::vector<RegexFilter> getByDialogId(ID dialogId) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return storage.get_all<RegexFilter>(
 			where(column<RegexFilter>(&RegexFilter::dialogId) == dialogId)
@@ -459,6 +551,7 @@ std::vector<RegexFilter> getByDialogId(ID dialogId) {
 }
 
 void addRegexFilter(const RegexFilter &filter) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.begin_transaction();
 		storage.replace(filter); // we're using replace as we set std::vector<char> as primary key
@@ -473,6 +566,7 @@ void addRegexFilter(const RegexFilter &filter) {
 }
 
 void addRegexExclusion(const RegexFilterGlobalExclusion &exclusion) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.begin_transaction();
 		storage.insert(exclusion);
@@ -487,6 +581,7 @@ void addRegexExclusion(const RegexFilterGlobalExclusion &exclusion) {
 }
 
 void updateRegexFilter(const RegexFilter &filter) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.update_all(
 			set(
@@ -504,6 +599,7 @@ void updateRegexFilter(const RegexFilter &filter) {
 }
 
 void deleteFilter(const std::vector<char> &id) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<RegexFilter>(
 			where(column<RegexFilter>(&RegexFilter::id) == id)
@@ -514,6 +610,7 @@ void deleteFilter(const std::vector<char> &id) {
 }
 
 void deleteExclusionsByFilterId(const std::vector<char> &id) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<RegexFilterGlobalExclusion>(
 			where(column<RegexFilterGlobalExclusion>(&RegexFilterGlobalExclusion::filterId) == id)
@@ -524,6 +621,7 @@ void deleteExclusionsByFilterId(const std::vector<char> &id) {
 }
 
 void deleteExclusion(ID dialogId, std::vector<char> filterId) {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<RegexFilterGlobalExclusion>(
 			where(column<RegexFilterGlobalExclusion>(&RegexFilterGlobalExclusion::filterId) == filterId and
@@ -536,6 +634,7 @@ void deleteExclusion(ID dialogId, std::vector<char> filterId) {
 }
 
 void deleteAllFilters() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<RegexFilter>();
 	} catch (std::exception &ex) {
@@ -544,6 +643,7 @@ void deleteAllFilters() {
 }
 
 void deleteAllExclusions() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<RegexFilterGlobalExclusion>();
 	} catch (std::exception &ex) {
@@ -552,6 +652,7 @@ void deleteAllExclusions() {
 }
 
 bool hasFilters() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return !storage.select(
 			columns(column<RegexFilter>(&RegexFilter::id)),
@@ -564,6 +665,7 @@ bool hasFilters() {
 }
 
 bool hasPerDialogFilters() {
+	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return
 			!storage.select(

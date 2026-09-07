@@ -122,6 +122,24 @@ void addDeletedMessage(not_null<HistoryItem*> item) {
 	AyuDatabase::addDeletedMessage(message);
 }
 
+void addDeletedMessages(const std::vector<not_null<HistoryItem*>> &items) {
+	// Mapping N items into one batch insert (one SQLite transaction total)
+	// instead of calling addDeletedMessage per item avoids N separate
+	// begin/insert/commit round trips when a single incoming update
+	// deletes many messages at once (bulk/admin deletes).
+	std::vector<DeletedMessage> messages;
+	messages.reserve(items.size());
+	for (const auto &item : items) {
+		DeletedMessage message;
+		map(item, message);
+		if (!message.text.empty()) {
+			messages.push_back(std::move(message));
+		}
+	}
+
+	AyuDatabase::addDeletedMessages(messages);
+}
+
 std::vector<AyuMessageBase>
 getDeletedMessages(not_null<PeerData*> peer, ID topicId, ID minId, ID maxId, int totalLimit, const QString &searchQuery) {
 	const ID userId = peer->session().userId().bare & PeerId::kChatTypeMask;

@@ -3269,12 +3269,22 @@ void Session::checkTTLs() {
 		expired.insert(expired.end(), items.begin(), items.end());
 	}
 	auto toDestroy = std::vector<not_null<HistoryItem*>>();
+	auto toArchive = std::vector<not_null<HistoryItem*>>();
 	for (const auto &item : expired) {
 		if (isMessageSavable(item)) {
-			processMessageDelete(item);
+			if (item->ttlDestroyAt() > 0) {
+				item->applyTTL(0);
+			}
+			item->setDeleted();
+			toArchive.push_back(item);
 		} else {
 			toDestroy.push_back(item);
 		}
+	}
+	if (!toArchive.empty()) {
+		// One batched transaction instead of one per expired message --
+		// many TTL messages can expire in the same tick.
+		AyuMessages::addDeletedMessages(toArchive);
 	}
 	if (!toDestroy.empty()) {
 		notifyItemsAboutToBeDestroyed(toDestroy);
@@ -3400,6 +3410,7 @@ void Session::processMessagesDeleted(
 	}
 
 	auto toDestroy = std::vector<not_null<HistoryItem*>>();
+	auto toArchive = std::vector<not_null<HistoryItem*>>();
 	auto historiesToCheck = base::flat_set<not_null<History*>>();
 	for (const auto &messageId : data) {
 		const auto i = list ? list->find(messageId.v) : Messages::iterator();
@@ -3407,7 +3418,11 @@ void Session::processMessagesDeleted(
 			const auto item = i->second;
 			const auto history = item->history();
 			if (isMessageSavable(item)) {
-				processMessageDelete(item);
+				if (item->ttlDestroyAt() > 0) {
+					item->applyTTL(0);
+				}
+				item->setDeleted();
+				toArchive.push_back(item);
 			} else {
 				toDestroy.push_back(item);
 			}
@@ -3415,6 +3430,11 @@ void Session::processMessagesDeleted(
 		} else if (affected) {
 			affected->unknownMessageDeleted(messageId.v);
 		}
+	}
+	if (!toArchive.empty()) {
+		// One batched transaction instead of one per message -- a single
+		// incoming update can carry a bulk/admin delete of many messages.
+		AyuMessages::addDeletedMessages(toArchive);
 	}
 	if (!toDestroy.empty()) {
 		notifyItemsAboutToBeDestroyed(toDestroy);
@@ -3431,17 +3451,25 @@ void Session::processMessagesDeleted(
 
 void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {
 	auto toDestroy = std::vector<not_null<HistoryItem*>>();
+	auto toArchive = std::vector<not_null<HistoryItem*>>();
 	auto historiesToCheck = base::flat_set<not_null<History*>>();
 	for (const auto &messageId : data) {
 		if (const auto item = nonChannelMessage(messageId.v)) {
 			const auto history = item->history();
 			if (isMessageSavable(item)) {
-				processMessageDelete(item);
+				if (item->ttlDestroyAt() > 0) {
+					item->applyTTL(0);
+				}
+				item->setDeleted();
+				toArchive.push_back(item);
 			} else {
 				toDestroy.push_back(item);
 			}
 			historiesToCheck.emplace(history);
 		}
+	}
+	if (!toArchive.empty()) {
+		AyuMessages::addDeletedMessages(toArchive);
 	}
 	if (!toDestroy.empty()) {
 		notifyItemsAboutToBeDestroyed(toDestroy);

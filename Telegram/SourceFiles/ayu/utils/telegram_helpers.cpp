@@ -718,6 +718,15 @@ bool isMessageSavable(const not_null<HistoryItem*> item) {
 		return false;
 	}
 
+	// Mirrors the exclusion Session::updateEditedMessage already applies
+	// for edit-history archival (data_session.cpp). Without it, deleting
+	// your own messages -- including via the "Delete my messages" cleanup
+	// feature, whose whole point is to erase your own history -- silently
+	// archived every one of them locally instead.
+	if (item->author()->isSelf()) {
+		return false;
+	}
+
 	if (const auto possiblyBot = item->history()->peer->asUser()) {
 		return !possiblyBot->isBot() || (settings.saveForBots() && possiblyBot->isBot());
 	}
