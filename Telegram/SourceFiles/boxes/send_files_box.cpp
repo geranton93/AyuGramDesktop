@@ -1460,7 +1460,8 @@ void SendFilesBox::pushBlock(int from, int till) {
 			Editor::OpenWithPreparedVideoFile(
 				this,
 				show,
-				&_list.files[index],
+				&_list,
+				index,
 				st::sendMediaPreviewSize,
 				std::move(done),
 				PhotoSideLimit(true));
