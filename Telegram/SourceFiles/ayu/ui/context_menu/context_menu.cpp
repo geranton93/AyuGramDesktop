@@ -925,37 +925,46 @@ void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 	if (ghost.sendReadMessages()) {
 		return;
 	}
+	const auto session = &readItem->history()->session();
+	const auto itemId = readItem->fullId();
 
 	menu->addAction(
 		tr::ayu_ReadUntilMenuText(tr::now),
-		[=]
-		{
-			readHistory(readItem);
-			const auto media = readItem->media();
-			if (media
-				&& media->ttlSeconds() <= 0
-				&& readItem->unsupportedTTL() <= 0
-				&& !readItem->out()) {
-				const auto ids = MTP_vector<MTPint>(1, MTP_int(readItem->id));
-				if (const auto channel = readItem->history()->peer->asChannel()) {
-					readItem->history()->session().api().request(
-						MTPchannels_ReadMessageContents(
-						channel->inputChannel(),
-						ids)).send();
-				} else {
-					readItem->history()->session().api().request(
-						MTPmessages_ReadMessageContents(ids)
-					).done([=](const MTPmessages_AffectedMessages &result)
-					{
-						readItem->history()->session().api()
-							.applyAffectedMessages(
-							readItem->history()->peer,
-							result);
-					}).send();
-				}
-				readItem->markContentsRead();
+		crl::guard(session, [=] {
+			const auto readItem = session->data().message(itemId);
+			if (!readItem) {
+				return;
 			}
-		},
+			const auto readContents = [&] {
+				const auto media = readItem->media();
+				return media
+					&& media->ttlSeconds() <= 0
+					&& readItem->unsupportedTTL() <= 0
+					&& !readItem->out();
+			}();
+			readHistory(readItem);
+			if (readContents) {
+				const auto ids = MTP_vector<MTPint>(1, MTP_int(itemId.msg));
+				const auto peer = session->data().peer(itemId.peer);
+				if (const auto channel = peer->asChannel()) {
+					session->api().request(
+						MTPchannels_ReadMessageContents(
+							channel->inputChannel(),
+							ids)).send();
+				} else {
+					session->api().request(
+						MTPmessages_ReadMessageContents(ids)
+					).done(crl::guard(session, [=](const MTPmessages_AffectedMessages &result) {
+						session->api().applyAffectedMessages(
+							session->data().peer(itemId.peer),
+							result);
+					})).send();
+				}
+				if (const auto current = session->data().message(itemId)) {
+					current->markContentsRead();
+				}
+			}
+		}),
 		&st::menuIconShowInChat);
 }
 
@@ -964,23 +973,34 @@ void AddBurnAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 		!item->hasUnreadMediaFlag()) {
 		return;
 	}
+	const auto session = &item->history()->session();
+	const auto itemId = item->fullId();
 
 	menu->addAction(
 		tr::ayu_ExpireMediaContextMenuText(tr::now),
-		[=]
-		{
-			const auto ids = MTP_vector<MTPint>(1, MTP_int(item->id));
+		crl::guard(session, [=] {
+			const auto item = session->data().message(itemId);
+			if (!item
+				|| !item->media()
+				|| (item->media()->ttlSeconds() <= 0
+					&& item->unsupportedTTL() <= 0)
+				|| item->out()
+				|| !item->hasUnreadMediaFlag()) {
+				return;
+			}
+			const auto ids = MTP_vector<MTPint>(1, MTP_int(itemId.msg));
 
-			item->history()->session().api().request(MTPmessages_ReadMessageContents(
+			session->api().request(MTPmessages_ReadMessageContents(
 					ids
-				)).done([=](const MTPmessages_AffectedMessages &result)
-				{
-					item->history()->session().api().applyAffectedMessages(
-						item->history()->peer,
+				)).done(crl::guard(session, [=](const MTPmessages_AffectedMessages &result) {
+					session->api().applyAffectedMessages(
+						session->data().peer(itemId.peer),
 						result);
-					item->markContentsRead();
-				}).send();
-		},
+					if (const auto current = session->data().message(itemId)) {
+						current->markContentsRead();
+					}
+				})).send();
+		}),
 		&st::menuIconTTLAny);
 }
 
@@ -996,19 +1016,19 @@ void AddCreateFilterAction(not_null<Ui::PopupMenu*> menu,
 	if (!item || selectedText.isEmpty()) {
 		return;
 	}
+	const auto dialogId = getDialogIdFromPeer(item->history()->peer);
 
 	menu->addAction(
 		tr::ayu_RegexFilterQuickAdd(tr::now),
-		[=]
-		{
+		crl::guard(controller, [=] {
 			RegexFilter filter;
 			filter.text = selectedText.toStdString();
 			filter.enabled = true;
 			filter.caseInsensitive = true;
 			filter.reversed = false;
 
-			controller->show(Settings::RegexEditBox(&filter, {}, getDialogIdFromPeer(item->history()->peer), true));
-		},
+			controller->show(Settings::RegexEditBox(&filter, {}, dialogId, true));
+		}),
 		&st::menuIconAddToFolder);
 }
 
