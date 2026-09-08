@@ -430,7 +430,7 @@ void Viewport::RendererGL::paint(
 
 	const auto defaultFramebufferObject = widget->defaultFramebufferObject();
 
-	validateDatas();
+	validateDatas(f);
 	auto index = 0;
 	for (const auto &tile : _owner->_tiles) {
 		if (!tile->visible()) {
@@ -1197,7 +1197,7 @@ void Viewport::RendererGL::ensureButtonsImage() {
 	_buttons.setImage(std::move(image));
 }
 
-void Viewport::RendererGL::validateDatas() {
+void Viewport::RendererGL::validateDatas(QOpenGLFunctions &f) {
 	const auto &tiles = _owner->_tiles;
 	const auto &st = st::groupCallVideoTile;
 	const auto count = int(tiles.size());
@@ -1252,117 +1252,139 @@ void Viewport::RendererGL::validateDatas() {
 			requests.push_back({ .index = i, .updating = false });
 		}
 	}
-	if (requests.empty()) {
-		return;
-	}
-	auto maybeStaleAfter = begin(_tileData);
-	auto maybeStaleEnd = end(_tileData);
-	for (auto &request : requests) {
-		const auto i = request.index;
-		if (_tileDataIndices[i] >= 0) {
-			continue;
-		}
-		const auto id = quintptr(tiles[i]->track().get());
-		const auto peer = tiles[i]->peer();
-		const auto paused = (tiles[i]->track()->state()
-			== Webrtc::VideoState::Paused);
-		auto index = int(_tileData.size());
-		maybeStaleAfter = ranges::find(
-			maybeStaleAfter,
-			maybeStaleEnd,
-			true,
-			&TileData::stale);
-		if (maybeStaleAfter != maybeStaleEnd) {
-			index = (maybeStaleAfter - begin(_tileData));
-			maybeStaleAfter->id = id;
-			maybeStaleAfter->peer = peer;
-			maybeStaleAfter->stale = false;
-			maybeStaleAfter->pause = paused;
-			maybeStaleAfter->paused.stop();
-			request.updating = true;
-		} else {
-			// This invalidates maybeStale*, but they're already equal.
-			_tileData.push_back({
-				.id = id,
-				.peer = peer,
-				.pause = paused,
-			});
-		}
-		const auto nameTop = pausedBottom + index * nameHeight;
-		_tileData[index].nameVersion = peer->nameVersion();
-		_tileData[index].nameRect = QRect(
-			0,
-			nameTop,
-			nameWidth(i),
-			nameHeight);
-		_tileDataIndices[i] = index;
-	}
-	auto image = _names.takeImage();
-	const auto imageSize = QSize(
-		available,
-		pausedBottom + _tileData.size() * nameHeight);
-	const auto allocate = (image.size() != imageSize);
-	auto paintToImage = allocate
-		? QImage(imageSize, QImage::Format_ARGB32_Premultiplied)
-		: base::take(image);
-	paintToImage.setDevicePixelRatio(factor);
-	if (allocate && image.isNull()) {
-		paintToImage.fill(Qt::transparent);
-	}
-	{
-		auto p = Painter(&paintToImage);
-		p.setPen(st::groupCallVideoTextFg);
-		if (!image.isNull()) {
-			p.setCompositionMode(QPainter::CompositionMode_Source);
-			p.drawImage(0, 0, image);
-			if (paintToImage.width() > image.width()) {
-				p.fillRect(
-					image.width() / factor,
-					0,
-					(paintToImage.width() - image.width()) / factor,
-					image.height() / factor,
-					Qt::transparent);
-			}
-			if (paintToImage.height() > image.height()) {
-				p.fillRect(
-					0,
-					image.height() / factor,
-					paintToImage.width() / factor,
-					(paintToImage.height() - image.height()) / factor,
-					Qt::transparent);
-			}
-			p.setCompositionMode(QPainter::CompositionMode_SourceOver);
-		} else if (allocate) {
-			p.setFont(st::semiboldFont);
-			p.drawText(0, st::semiboldFont->ascent, pausedText);
-			_pausedTextRect = QRect(0, 0, pausedWidth, nameHeight);
-		}
-		for (const auto &request : requests) {
+	if (!requests.empty()) {
+		auto maybeStaleAfter = begin(_tileData);
+		auto maybeStaleEnd = end(_tileData);
+		for (auto &request : requests) {
 			const auto i = request.index;
-			const auto &data = _tileData[_tileDataIndices[i]];
-			if (data.nameRect.isEmpty()) {
+			if (_tileDataIndices[i] >= 0) {
 				continue;
 			}
-			const auto row = tiles[i]->row();
-			if (request.updating) {
+			const auto id = quintptr(tiles[i]->track().get());
+			const auto peer = tiles[i]->peer();
+			const auto paused = (tiles[i]->track()->state()
+				== Webrtc::VideoState::Paused);
+			auto index = int(_tileData.size());
+			maybeStaleAfter = ranges::find(
+				maybeStaleAfter,
+				maybeStaleEnd,
+				true,
+				&TileData::stale);
+			if (maybeStaleAfter != maybeStaleEnd) {
+				index = (maybeStaleAfter - begin(_tileData));
+				maybeStaleAfter->id = id;
+				maybeStaleAfter->peer = peer;
+				maybeStaleAfter->stale = false;
+				maybeStaleAfter->pause = paused;
+				maybeStaleAfter->paused.stop();
+				request.updating = true;
+			} else {
+				// This invalidates maybeStale*, but they're already equal.
+				_tileData.push_back({
+					.id = id,
+					.peer = peer,
+					.pause = paused,
+				});
+			}
+			const auto nameTop = pausedBottom + index * nameHeight;
+			_tileData[index].nameVersion = peer->nameVersion();
+			_tileData[index].nameRect = QRect(
+				0,
+				nameTop,
+				nameWidth(i),
+				nameHeight);
+			_tileDataIndices[i] = index;
+		}
+		auto image = _names.takeImage();
+		const auto imageSize = QSize(
+			available,
+			pausedBottom + _tileData.size() * nameHeight);
+		const auto allocate = (image.size() != imageSize);
+		auto paintToImage = allocate
+			? QImage(imageSize, QImage::Format_ARGB32_Premultiplied)
+			: base::take(image);
+		paintToImage.setDevicePixelRatio(factor);
+		if (allocate && image.isNull()) {
+			paintToImage.fill(Qt::transparent);
+		}
+		{
+			auto p = Painter(&paintToImage);
+			p.setPen(st::groupCallVideoTextFg);
+			if (!image.isNull()) {
 				p.setCompositionMode(QPainter::CompositionMode_Source);
-				p.fillRect(
+				p.drawImage(0, 0, image);
+				if (paintToImage.width() > image.width()) {
+					p.fillRect(
+						image.width() / factor,
+						0,
+						(paintToImage.width() - image.width()) / factor,
+						image.height() / factor,
+						Qt::transparent);
+				}
+				if (paintToImage.height() > image.height()) {
+					p.fillRect(
+						0,
+						image.height() / factor,
+						paintToImage.width() / factor,
+						(paintToImage.height() - image.height()) / factor,
+						Qt::transparent);
+				}
+				p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+			} else if (allocate) {
+				p.setFont(st::semiboldFont);
+				p.drawText(0, st::semiboldFont->ascent, pausedText);
+				_pausedTextRect = QRect(0, 0, pausedWidth, nameHeight);
+			}
+			for (const auto &request : requests) {
+				const auto i = request.index;
+				const auto &data = _tileData[_tileDataIndices[i]];
+				if (data.nameRect.isEmpty()) {
+					continue;
+				}
+				const auto row = tiles[i]->row();
+				if (request.updating) {
+					p.setCompositionMode(QPainter::CompositionMode_Source);
+					p.fillRect(
+						0,
+						data.nameRect.y() / factor,
+						paintToImage.width() / factor,
+						nameHeight / factor,
+						Qt::transparent);
+					p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+				}
+				row->name().drawLeftElided(
+					p,
 					0,
 					data.nameRect.y() / factor,
-					paintToImage.width() / factor,
-					nameHeight / factor,
-					Qt::transparent);
-				p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+					data.nameRect.width() / factor,
+					paintToImage.width() / factor);
 			}
-			row->name().drawLeftElided(
-				p,
-				0,
-				data.nameRect.y() / factor,
-				data.nameRect.width() / factor,
-				paintToImage.width() / factor);
+		}
+		_names.setImage(std::move(paintToImage));
+	}
+	if (!ranges::contains(_tileData, true, &TileData::stale)) {
+		return;
+	}
+	auto remapped = std::vector<int>(_tileData.size(), -1);
+	for (auto i = 0, kept = 0; i != int(_tileData.size()); ++i) {
+		if (!_tileData[i].stale) {
+			remapped[i] = kept++;
 		}
 	}
-	_names.setImage(std::move(paintToImage));
+	for (auto i = _tileData.begin(); i != _tileData.end();) {
+		if (i->stale) {
+			i->textures.destroy(&f);
+			i->framebuffers.destroy(&f);
+			i = _tileData.erase(i);
+		} else {
+			++i;
+		}
+	}
+	for (auto &index : _tileDataIndices) {
+		if (index >= 0) {
+			index = remapped[index];
+		}
+	}
 }
 
 void Viewport::RendererGL::validateNoiseTexture(

@@ -543,9 +543,9 @@ void ShowPluginInfoBox(
 			session->downloaderTaskFinished()
 		) | rpl::filter([=] {
 			return media->loaded();
-		}) | rpl::take(1) | rpl::on_next([=] {
+		}) | rpl::take(1) | rpl::on_next(crl::guard(controller, [=] {
 			showBox(std::move(*shared), doc);
-		}, session->lifetime());
+		}), session->lifetime());
 		media->automaticLoad(doc->stickerSetOrigin(), nullptr);
 	}).fail([=](const MTP::Error &)
 	{

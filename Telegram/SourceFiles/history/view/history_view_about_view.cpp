@@ -68,6 +68,7 @@ namespace {
 
 constexpr auto kLabelOpacity = 0.85;
 constexpr auto kMaxCommonChatsUserpics = 3;
+constexpr auto kMaxCachedCommonGroupsUsers = 300;
 
 class EmptyChatLockedBox final
 	: public ServiceBoxContent
@@ -949,6 +950,7 @@ void AboutView::loadCommonGroups() {
 	};
 	struct Session {
 		base::flat_map<not_null<UserData*>, Cached> data;
+		std::deque<not_null<UserData*>> order;
 	};
 	static auto Map = base::flat_map<not_null<Main::Session*>, Session>();
 	const auto session = &_history->session();
@@ -959,7 +961,15 @@ void AboutView::loadCommonGroups() {
 			Map.remove(session);
 		});
 	}
-	auto &cached = i->second.data[user];
+	auto &entry = i->second;
+	if (!entry.data.contains(user)) {
+		if (entry.order.size() >= kMaxCachedCommonGroupsUsers) {
+			entry.data.remove(entry.order.front());
+			entry.order.pop_front();
+		}
+		entry.order.push_back(user);
+	}
+	auto &cached = entry.data[user];
 
 	const auto count = user->commonChatsCount();
 	if (!count) {

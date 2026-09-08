@@ -71,6 +71,7 @@ private:
 
 	rpl::lifetime _callbackFromTrayLifetime;
 	rpl::lifetime _actionsLifetime;
+	rpl::lifetime _iconLifetime;
 	rpl::lifetime _lifetime;
 
 };

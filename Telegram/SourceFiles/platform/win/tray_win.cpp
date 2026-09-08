@@ -201,7 +201,7 @@ void Tray::createIcon() {
 			rpl::mappers::_1 != Reason::Context
 		) | rpl::map_to(
 			rpl::empty
-		) | rpl::start_to_stream(_iconClicks, _lifetime);
+		) | rpl::start_to_stream(_iconClicks, _iconLifetime);
 
 		base::qt_signal_producer(
 			_icon.get(),
@@ -218,13 +218,14 @@ void Tray::createIcon() {
 			InvokeQueued(_menu.get(), [=] {
 				_menu->popup(position);
 			});
-		}, _lifetime);
+		}, _iconLifetime);
 	} else {
 		updateIcon();
 	}
 }
 
 void Tray::destroyIcon() {
+	_iconLifetime.destroy();
 	_icon = nullptr;
 }
 

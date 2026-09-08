@@ -202,6 +202,7 @@ private:
 	base::flat_map<KickRequest, std::unique_ptr<Kicked>> _kicked;
 
 	base::flat_map<not_null<PeerData*>, SimilarPeers> _similar;
+	std::deque<not_null<PeerData*>> _similarOrder;
 	rpl::event_stream<not_null<PeerData*>> _similarLoaded;
 
 	SimilarPeers _recommendations;

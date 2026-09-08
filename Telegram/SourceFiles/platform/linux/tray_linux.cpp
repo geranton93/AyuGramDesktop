@@ -304,7 +304,7 @@ void Tray::createIcon() {
 			} else {
 				_iconClicks.fire({});
 			}
-		}, _lifetime);
+		}, _iconLifetime);
 
 		_icon->setContextMenu(_menu.get());
 
@@ -323,6 +323,7 @@ void Tray::createIcon() {
 }
 
 void Tray::destroyIcon() {
+	_iconLifetime.destroy();
 	_icon = nullptr;
 }
 

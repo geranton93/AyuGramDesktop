@@ -1549,6 +1549,9 @@ void MainWidget::showHistory(
 		if (wasActivePeer != history->peer) {
 			session().api().views().removeIncremented(history->peer);
 		}
+		if (wasActivePeer && wasActivePeer != history->peer) {
+			session().api().views().removeIncremented(wasActivePeer);
+		}
 		auto memento = std::make_shared<ChatMemento>(
 			ChatViewId{ .history = history },
 			showAtMsgId,
@@ -1712,6 +1715,9 @@ void MainWidget::showHistory(
 		const auto nowActivePeer = _controller->activeChatCurrent().peer();
 		if (nowActivePeer && nowActivePeer != wasActivePeer) {
 			session().api().views().removeIncremented(nowActivePeer);
+		}
+		if (wasActivePeer && wasActivePeer != nowActivePeer) {
+			session().api().views().removeIncremented(wasActivePeer);
 		}
 		if (isOneColumn() && _dialogs && !_dialogs->isHidden()) {
 			_dialogs->hide();

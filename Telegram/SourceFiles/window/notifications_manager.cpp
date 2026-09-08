@@ -69,6 +69,7 @@ constexpr auto kMinimalForwardDelay = crl::time(500);
 constexpr auto kMinimalAlertDelay = crl::time(500);
 constexpr auto kWaitingForAllGroupedDelay = crl::time(1000);
 constexpr auto kReactionNotificationEach = 60 * 60 * crl::time(1000);
+constexpr auto kMaxCustomSoundTracks = 32;
 
 #ifdef Q_OS_MAC
 constexpr auto kSystemAlertDuration = crl::time(1000);
@@ -1031,19 +1032,34 @@ not_null<Media::Audio::Track*> System::lookupSound(
 	}
 	const auto i = _customSoundTracks.find(id);
 	if (i != end(_customSoundTracks)) {
+		touchCustomSoundTrack(id);
 		return i->second.get();
 	}
 	const auto bytes = lookupSoundBytes(owner, id);
 	if (!bytes.isEmpty()) {
+		if (_customSoundTracks.size() >= kMaxCustomSoundTracks
+			&& !_customSoundTracksLru.empty()) {
+			_customSoundTracks.remove(_customSoundTracksLru.front());
+			_customSoundTracksLru.erase(_customSoundTracksLru.begin());
+		}
 		const auto j = _customSoundTracks.emplace(
 			id,
 			Media::Audio::Current().createTrack()
 		).first;
 		j->second->fillFromData(bytes::make_vector(bytes));
+		touchCustomSoundTrack(id);
 		return j->second.get();
 	}
 	ensureSoundCreated();
 	return _soundTrack.get();
+}
+
+void System::touchCustomSoundTrack(DocumentId id) {
+	const auto i = ranges::find(_customSoundTracksLru, id);
+	if (i != end(_customSoundTracksLru)) {
+		_customSoundTracksLru.erase(i);
+	}
+	_customSoundTracksLru.push_back(id);
 }
 
 void System::ensureSoundCreated() {

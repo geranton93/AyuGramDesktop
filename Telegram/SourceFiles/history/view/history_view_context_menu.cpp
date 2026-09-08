@@ -133,6 +133,7 @@ namespace {
 constexpr auto kRescheduleLimit = 20;
 constexpr auto kTagNameLimit = 12;
 constexpr auto kPublicPostLinkToastDuration = 4 * crl::time(1000);
+constexpr auto kMaxCachedMessageAuthorsPerSession = 300;
 
 class RevertAction final : public Ui::Menu::ItemBase {
 public:
@@ -1586,6 +1587,7 @@ void EditTagBox(
 	};
 	struct Authors {
 		base::flat_map<FullMsgId, Author> map;
+		std::deque<FullMsgId> order;
 	};
 	static auto Cache = base::flat_map<not_null<Main::Session*>, Authors>();
 
@@ -1601,10 +1603,18 @@ void EditTagBox(
 
 	return [channel, id](auto consumer) {
 		const auto session = &channel->session();
-		auto &map = Cache[session].map;
+		auto &authors = Cache[session];
+		auto &map = authors.map;
 		auto i = map.find(id);
 		if (i == end(map)) {
 			i = map.emplace(id).first;
+			authors.order.push_back(id);
+			if (authors.order.size() > kMaxCachedMessageAuthorsPerSession) {
+				const auto oldest = authors.order.front();
+				authors.order.pop_front();
+				map.remove(oldest);
+				i = map.find(id);
+			}
 			const auto finishWith = [=](UserData *user) {
 				auto &entry = Cache[session].map[id];
 				entry.user = user;

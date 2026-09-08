@@ -206,6 +206,10 @@ void UserPhotos::replace(UserPhotosReplace &&query) {
 	}
 }
 
+void UserPhotos::unload(UserId user) {
+	_lists.erase(user);
+}
+
 rpl::producer<UserPhotosResult> UserPhotos::query(
 		UserPhotosQuery &&query) const {
 	auto userIt = _lists.find(query.key.userId);

@@ -114,7 +114,9 @@ HBITMAP IconToBitmap(LPWSTR icon, int iconindex) {
 
 	DestroyIcon(ico);
 
-	return (HBITMAP)CopyImage(result, IMAGE_BITMAP, 0, 0, LR_DEFAULTSIZE | LR_CREATEDIBSECTION);
+	const auto copy = (HBITMAP)CopyImage(result, IMAGE_BITMAP, 0, 0, LR_DEFAULTSIZE | LR_CREATEDIBSECTION);
+	DeleteBitmap(result);
+	return copy;
 }
 
 bool ShouldSaveZoneInformation() {

@@ -148,8 +148,31 @@ struct ComposeThreadEntry {
 	return result;
 }
 
+[[nodiscard]] auto &ComposeThreadsSweptSessions() {
+	static auto result = base::flat_set<Main::Session*>();
+	return result;
+}
+
+void SweepComposeThreadsFor(not_null<Main::Session*> session) {
+	auto &threads = ComposeThreads();
+	for (auto i = begin(threads); i != end(threads);) {
+		if (i->first.session == session.get()) {
+			i = threads.erase(i);
+		} else {
+			++i;
+		}
+	}
+	ComposeThreadsSweptSessions().remove(session.get());
+}
+
 [[nodiscard]] ComposeThreadEntry &ComposeThreadEntryFor(
 		const ComposeThreadKey &key) {
+	if (const auto session = key.session
+			; session && ComposeThreadsSweptSessions().emplace(session).second) {
+		session->lifetime().add([session] {
+			SweepComposeThreadsFor(session);
+		});
+	}
 	return ComposeThreads()[key];
 }
 
@@ -903,7 +926,7 @@ private:
 		entry.fieldVisible.force_assign(true);
 	}
 
-	void releaseComposeThreadWindow() {
+	void releaseComposeThreadWindow(bool sessionTearingDown = false) {
 		if (!_composeThreadKey) {
 			return;
 		}
@@ -912,6 +935,10 @@ private:
 			if (current.get() != this) {
 				return;
 			}
+		}
+		if (sessionTearingDown) {
+			ComposeThreads().erase(*_composeThreadKey);
+			return;
 		}
 		entry.articleSession.reset();
 		entry.fieldVisible.force_assign(false);
@@ -2034,7 +2061,7 @@ private:
 			// dropping the self-hold inside forceClose() doesn't run
 			// ~ArticleSession re-entrantly while this handler is on the stack.
 			if (const auto strong = weak.lock()) {
-				strong->forceClose();
+				strong->forceClose(true);
 			}
 		}, _lifetime);
 	}
@@ -2050,7 +2077,7 @@ private:
 	// and mirrored to the local draft / input field, while the server
 	// save is only scheduled (it fires after unlock and simply never
 	// happens during logout or shutdown).
-	void forceClose() {
+	void forceClose(bool sessionTearingDown = false) {
 		if (!_windowHost && !_backgroundHold) {
 			return;
 		}
@@ -2074,7 +2101,7 @@ private:
 					&*prepared);
 			}
 		}
-		releaseComposeThreadWindow();
+		releaseComposeThreadWindow(sessionTearingDown);
 		_editor = nullptr;
 		_submitButton = nullptr;
 		_windowHost = nullptr;
@@ -3655,8 +3682,10 @@ private:
 		const auto erasedUploadId = i->uploadId;
 		const auto state = i->state;
 		const auto finalizationRequestId = i->finalizationRequestId;
+		const auto localMediaId = i->localMediaId;
 		detachMediaBatchUpload(erasedUploadId);
 		_attachments.erase(i);
+		_originalMediaImages.erase(localMediaId);
 		if (state != AttachmentState::Ready) {
 			_session->uploader().cancel(erasedUploadId);
 		}

@@ -32,6 +32,7 @@ namespace Calls::Group {
 namespace {
 
 constexpr auto kMaxShownVideoStreamMessages = 100;
+constexpr auto kMaxSkippedIds = 4000;
 constexpr auto kStarsStatsShortPollDelay = 30 * crl::time(1000);
 
 [[nodiscard]] StarsTop ParseStarsTop(
@@ -160,6 +161,7 @@ void Messages::send(TextWithTags text, int stars) {
 	const auto skip = skipMessage(prepared, stars);
 	if (skip) {
 		_skippedIds.emplace(localId);
+		trimSkippedIds();
 	} else {
 		_messages.push_back({
 			.id = localId,
@@ -273,6 +275,14 @@ void Messages::deleted(const MTPDupdateDeleteGroupCallMessages &data) {
 		if (i != end(_messages)) {
 			_messages.erase(i);
 		}
+		for (auto j = begin(_conferenceIdByRandomId)
+			; j != end(_conferenceIdByRandomId);) {
+			if (j->second == id.v) {
+				j = _conferenceIdByRandomId.erase(j);
+			} else {
+				++j;
+			}
+		}
 	}
 	if (_messages.size() < was) {
 		pushChanges();
@@ -306,7 +316,9 @@ void Messages::sent(uint64 randomId, MsgId realId) {
 
 	const auto j = ranges::find(_messages, localId, &Message::id);
 	if (j == end(_messages)) {
+		_skippedIds.erase(localId);
 		_skippedIds.emplace(realId);
+		trimSkippedIds();
 		return;
 	}
 	j->id = realId;
@@ -367,6 +379,7 @@ void Messages::received(
 	const auto skip = skipMessage(text, stars);
 	if (skip) {
 		_skippedIds.emplace(id);
+		trimSkippedIds();
 	} else {
 		// Should check by sendAsPeers() list instead, but it may not be
 		// loaded here yet.
@@ -451,6 +464,15 @@ void Messages::checkDestroying(bool afterChanges) {
 	}
 }
 
+void Messages::trimSkippedIds() {
+	if (_skippedIds.size() <= kMaxSkippedIds) {
+		return;
+	}
+	_skippedIds.erase(
+		begin(_skippedIds),
+		begin(_skippedIds) + (_skippedIds.size() / 2));
+}
+
 rpl::producer<std::vector<Message>> Messages::listValue() const {
 	return _changes.events_starting_with_copy(_messages);
 }
@@ -490,7 +512,9 @@ void Messages::failed(uint64 randomId, const MTP::Response &response) {
 	_sendingIdByRandomId.erase(i);
 
 	const auto j = ranges::find(_messages, localId, &Message::id);
-	if (j != end(_messages) && !j->date) {
+	if (j == end(_messages)) {
+		_skippedIds.erase(localId);
+	} else if (!j->date) {
 		j->date = Api::UnixtimeFromMsgId(response.outerMsgId);
 		j->stars = 0;
 		j->failed = true;
@@ -620,6 +644,7 @@ void Messages::reactionsPaidSend() {
 	const auto skip = skipMessage({}, stars);
 	if (skip) {
 		_skippedIds.emplace(localId);
+		trimSkippedIds();
 	} else {
 		_messages.push_back({
 			.id = localId,

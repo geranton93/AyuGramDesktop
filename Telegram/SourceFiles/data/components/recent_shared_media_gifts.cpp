@@ -28,6 +28,7 @@ namespace {
 constexpr auto kReloadThreshold = 60 * crl::time(1000);
 constexpr auto kMaxGifts = 3;
 constexpr auto kMaxPinnedGifts = 6;
+constexpr auto kMaxRecentPeers = 300;
 
 } // namespace
 
@@ -61,6 +62,7 @@ void RecentSharedMediaGifts::request(
 	const auto it = _recent.find(peer->id);
 	if (it != _recent.end()) {
 		auto &entry = it->second;
+		entry.lastAccessTime = crl::now();
 		if (entry.lastRequestTime
 			&& entry.lastRequestTime + kReloadThreshold > crl::now()) {
 			done(filterGifts(entry.gifts, onlyPinnedToTop));
@@ -75,9 +77,13 @@ void RecentSharedMediaGifts::request(
 			});
 			return;
 		}
+	} else {
+		trimRecentCache();
 	}
 
-	_recent[peer->id].requestId = peer->session().api().request(
+	auto &entry = _recent[peer->id];
+	entry.lastAccessTime = crl::now();
+	entry.requestId = peer->session().api().request(
 		MTPpayments_GetSavedStarGifts(
 			MTP_flags(0),
 			peer->input(),
@@ -113,6 +119,25 @@ void RecentSharedMediaGifts::clearLastRequestTime(
 	const auto it = _recent.find(peer->id);
 	if (it != _recent.end()) {
 		it->second.lastRequestTime = 0;
+	}
+}
+
+void RecentSharedMediaGifts::trimRecentCache() {
+	if (_recent.size() < kMaxRecentPeers) {
+		return;
+	}
+	auto oldest = _recent.end();
+	for (auto i = _recent.begin(); i != _recent.end(); ++i) {
+		if (i->second.requestId) {
+			continue;
+		}
+		if (oldest == _recent.end()
+			|| i->second.lastAccessTime < oldest->second.lastAccessTime) {
+			oldest = i;
+		}
+	}
+	if (oldest != _recent.end()) {
+		_recent.erase(oldest);
 	}
 }
 

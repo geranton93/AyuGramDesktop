@@ -325,6 +325,7 @@ void PeerListGlobalSearchController::searchOnServer() {
 	)).done([=](const MTPcontacts_Found &result, mtpRequestId requestId) {
 		searchDone(result, requestId);
 	}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+		_queries.erase(requestId);
 		if (_requestId == requestId) {
 			_requestId = 0;
 			delegate()->peerListSearchRefreshRows();

@@ -36,6 +36,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "inline_bots/inline_bot_layout_item.h"
 #include "storage/storage_account.h"
 #include "storage/storage_encrypted_file.h"
+#include "storage/storage_facade.h"
 #include "media/player/media_player_instance.h" // instance()->play()
 #include "media/audio/media_audio.h"
 #include "boxes/abstract_box.h"
@@ -533,6 +534,11 @@ void Session::clear() {
 	for (const auto &channel : channelForums) {
 		channel->setFlags(channel->flags()
 			& ~(ChannelDataFlag::Forum | ChannelDataFlag::MonoforumAdmin));
+	}
+	for (const auto &entry : _peers) {
+		if (peerIsUser(entry.first)) {
+			_session->storage().unload(peerToUser(entry.first));
+		}
 	}
 	_savedMusic->clear();
 	_savedMessages->clear();

@@ -615,16 +615,19 @@ void CreateModerateMessagesBox(
 		const auto participantIndex = lifetime->make_state<int>(0);
 		const auto channelIndex = lifetime->make_state<int>(0);
 		const auto timer = lifetime->make_state<base::Timer>();
-		timer->setCallback(crl::guard(session, [=] {
+		const auto step = crl::guard(session, [=] {
+			const auto from = session->data().peer(
+				participantIds[*participantIndex]);
+			const auto channel = session->data().peer(
+				channelIdList[*channelIndex])->asChannel();
+			if (from && channel) {
+				request(from, channel);
+			}
+		});
+		timer->setCallback([=] {
 			if ((*participantIndex) < participantIds.size()) {
 				if ((*channelIndex) < channelIdList.size()) {
-					const auto from = session->data().peer(
-						participantIds[*participantIndex]);
-					const auto channel = session->data().peer(
-						channelIdList[*channelIndex])->asChannel();
-					if (from && channel) {
-						request(from, channel);
-					}
+					step();
 					(*channelIndex)++;
 				} else {
 					(*participantIndex)++;
@@ -633,7 +636,7 @@ void CreateModerateMessagesBox(
 			} else {
 				lifetime->destroy();
 			}
-		}));
+		});
 		timer->callEach(kSmallDelayMs);
 	};
 

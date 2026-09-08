@@ -151,6 +151,11 @@ void SystemMediaControlsManager::applyPlayerTrack(AudioMsgId::Type audioType) {
 		const auto view = document->createMediaView();
 		view->thumbnailWanted(current.contextId());
 		_cachedMediaView.push_back(view);
+		if (_cachedMediaView.size() > 2) {
+			_cachedMediaView.erase(
+				_cachedMediaView.begin(),
+				_cachedMediaView.end() - 2);
+		}
 		if (const auto imagePtr = view->thumbnail()) {
 			_controls->setThumbnail(imagePtr->original());
 		} else {

@@ -118,6 +118,9 @@ void CheckPinned() {
 		LOG(("Init Error: could not find files in pinned folder"));
 		return;
 	}
+	const auto findGuard = gsl::finally([&] {
+		FindClose(findHandle);
+	});
 	do {
 		std::wstring fname = native + findData.cFileName;
 		LOG(("Checking %1").arg(QString::fromStdWString(fname)));
@@ -194,7 +197,6 @@ void CheckPinned() {
 		LOG(("Init Error: could not find some files in pinned folder"));
 		return;
 	}
-	FindClose(findHandle);
 }
 
 QString systemShortcutPath() {

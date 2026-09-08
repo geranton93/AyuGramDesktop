@@ -138,6 +138,7 @@ private:
 	void sendPending();
 	void pushChanges();
 	void checkDestroying(bool afterChanges = false);
+	void trimSkippedIds();
 
 	void received(
 		MsgId id,

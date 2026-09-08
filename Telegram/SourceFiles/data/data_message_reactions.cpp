@@ -401,6 +401,12 @@ Reactions::Reactions(not_null<Session*> owner)
 		}
 	}, _lifetime);
 
+	_owner->session().changes().realtimeSublistUpdates(
+		SublistUpdate::Flag::Destroyed
+	) | rpl::on_next([=](const SublistUpdate &update) {
+		forgetSublist(update.sublist.get());
+	}, _lifetime);
+
 	crl::on_main(&owner->session(), [=] {
 		// applyFavorite accesses not yet constructed parts of session.
 		rpl::single(rpl::empty) | rpl::then(
@@ -599,14 +605,27 @@ void Reactions::scheduleMyTagsUpdate(SavedSublist *sublist) {
 	auto &my = _myTags[sublist];
 	my.updateScheduled = true;
 	crl::on_main(&session(), [=] {
-		auto &my = _myTags[sublist];
-		if (!my.updateScheduled) {
+		const auto i = _myTags.find(sublist);
+		if (i == end(_myTags) || !i->second.updateScheduled) {
 			return;
 		}
+		auto &my = i->second;
 		my.updateScheduled = false;
 		my.tags = resolveByInfos(my.info, _unresolvedMyTags, sublist);
 		_myTagsUpdated.fire_copy(sublist);
 	});
+}
+
+void Reactions::forgetSublist(SavedSublist *sublist) {
+	if (const auto i = _myTags.find(sublist); i != end(_myTags)) {
+		if (const auto requestId = i->second.requestId) {
+			_owner->session().api().request(requestId).cancel();
+		}
+		_myTags.erase(i);
+	}
+	for (auto &entry : _unresolvedMyTags) {
+		entry.second.remove(sublist);
+	}
 }
 
 DocumentData *Reactions::chooseGenericAnimation(
@@ -1072,16 +1091,22 @@ void Reactions::requestMyTags(SavedSublist *sublist) {
 		(sublist ? sublist->sublistPeer()->input() : MTP_inputPeerEmpty()),
 		MTP_long(my.hash)
 	)).done([=](const MTPmessages_SavedReactionTags &result) {
-		auto &my = _myTags[sublist];
-		my.requestId = 0;
+		const auto i = _myTags.find(sublist);
+		if (i == end(_myTags)) {
+			return;
+		}
+		i->second.requestId = 0;
 		result.match([&](const MTPDmessages_savedReactionTags &data) {
 			updateMyTags(sublist, data);
 		}, [](const MTPDmessages_savedReactionTagsNotModified&) {
 		});
 	}).fail([=] {
-		auto &my = _myTags[sublist];
-		my.requestId = 0;
-		my.hash = 0;
+		const auto i = _myTags.find(sublist);
+		if (i == end(_myTags)) {
+			return;
+		}
+		i->second.requestId = 0;
+		i->second.hash = 0;
 	}).send();
 }
 

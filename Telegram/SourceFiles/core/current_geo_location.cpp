@@ -26,6 +26,7 @@ namespace Core {
 namespace {
 
 constexpr auto kDestroyManagerTimeout = 20 * crl::time(1000);
+constexpr auto kGeoAddressCacheLimit = size_t(256);
 
 [[nodiscard]] QString ChooseLanguage(const QString &language) {
 	// https://docs.mapbox.com/api/search/geocoding#language-coverage
@@ -73,6 +74,7 @@ void ResolveLocationAddressGeneric(
 		.arg(location.point.x())
 		.arg(ChooseLanguage(language));
 	static auto Cache = base::flat_map<QString, GeoAddress>();
+	static auto CacheOrder = std::deque<QString>();
 	const auto i = Cache.find(partialUrl);
 	if (i != end(Cache)) {
 		callback(i->second);
@@ -80,6 +82,11 @@ void ResolveLocationAddressGeneric(
 	}
 	const auto finishWith = [=](GeoAddress result) {
 		Cache[partialUrl] = result;
+		CacheOrder.push_back(partialUrl);
+		if (CacheOrder.size() > kGeoAddressCacheLimit) {
+			Cache.remove(CacheOrder.front());
+			CacheOrder.pop_front();
+		}
 		callback(result);
 	};
 
