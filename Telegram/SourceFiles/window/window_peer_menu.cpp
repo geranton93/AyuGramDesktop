@@ -4110,14 +4110,14 @@ Fn<void()> DeleteAndLeaveHandler(
 			*requestId = peer->session().api().request(
 				MTPmessages_GetFutureChatCreatorAfterLeave(
 					peer->input()
-			)).done([=](const MTPUser &result) {
+			)).done(crl::guard(controller, [=](const MTPUser &result) {
 				*requestId = 0;
 				const auto user = peer->owner().processUser(result);
 				controller->show(Box(SelectFutureOwnerbox, peer, user));
-			}).fail([=](const MTP::Error &error) {
+			})).fail(crl::guard(controller, [=](const MTP::Error &error) {
 				*requestId = 0;
 				controller->show(Box(DeleteChatBox, peer));
-			}).send();
+			})).send();
 		};
 	}
 	return [=] {

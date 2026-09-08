@@ -3596,7 +3596,19 @@ void SessionController::pushLastUsedChatTheme(
 	const auto i = ranges::find(_lastUsedCustomChatThemes, theme);
 	if (i == end(_lastUsedCustomChatThemes)) {
 		if (_lastUsedCustomChatThemes.size() >= kCustomThemesInMemory) {
+			const auto evicted = _lastUsedCustomChatThemes.back();
 			_lastUsedCustomChatThemes.pop_back();
+			if (evicted.use_count() <= 1) {
+				const auto key = CachedThemeKey{
+					evicted->key(),
+					evicted->background().key,
+				};
+				const auto j = _customChatThemes.find(key);
+				if (j != end(_customChatThemes)
+					&& j->second.theme.lock() == evicted) {
+					_customChatThemes.erase(j);
+				}
+			}
 		}
 		_lastUsedCustomChatThemes.push_front(theme);
 	} else if (i != begin(_lastUsedCustomChatThemes)) {

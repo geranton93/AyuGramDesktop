@@ -38,6 +38,8 @@ constexpr auto kMaxUsersPerInvite = 100;
 // that was added to this chat.
 constexpr auto kForwardMessagesOnAdd = 100;
 
+constexpr auto kMaxCachedSimilarPeers = 300;
+
 std::vector<ChatParticipant> ParseList(
 		const ChatParticipants::TLMembers &data,
 		not_null<PeerData*> peer) {
@@ -819,7 +821,9 @@ void ChatParticipants::unblock(
 }
 
 void ChatParticipants::loadSimilarPeers(not_null<PeerData*> peer) {
-	if (const auto i = _similar.find(peer); i != end(_similar)) {
+	const auto i = _similar.find(peer);
+	const auto isNew = (i == end(_similar));
+	if (!isNew) {
 		if (i->second.requestId
 			|| !i->second.peers.more
 			|| !peer->session().premium()) {
@@ -828,6 +832,13 @@ void ChatParticipants::loadSimilarPeers(not_null<PeerData*> peer) {
 	}
 	if (const auto channel = peer->asBroadcast()) {
 		using Flag = MTPchannels_GetChannelRecommendations::Flag;
+		if (isNew) {
+			_similarOrder.push_back(peer);
+			if (_similarOrder.size() > kMaxCachedSimilarPeers) {
+				_similar.remove(_similarOrder.front());
+				_similarOrder.pop_front();
+			}
+		}
 		_similar[peer].requestId = _api.request(
 			MTPchannels_GetChannelRecommendations(
 				MTP_flags(Flag::f_channel),
@@ -848,6 +859,13 @@ void ChatParticipants::loadSimilarPeers(not_null<PeerData*> peer) {
 			_similarLoaded.fire_copy(channel);
 		}).send();
 	} else if (const auto bot = peer->asBot()) {
+		if (isNew) {
+			_similarOrder.push_back(peer);
+			if (_similarOrder.size() > kMaxCachedSimilarPeers) {
+				_similar.remove(_similarOrder.front());
+				_similarOrder.pop_front();
+			}
+		}
 		_similar[peer].requestId = _api.request(
 			MTPbots_GetBotRecommendations(bot->inputUser())
 		).done([=](const MTPusers_Users &result) {

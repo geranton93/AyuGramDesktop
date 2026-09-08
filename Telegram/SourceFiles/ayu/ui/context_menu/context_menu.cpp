@@ -97,6 +97,8 @@ void DeleteMyMessagesAfterConfirm(not_null<PeerData*> peer) {
 	{
 		if (index >= int(collected->size())) {
 			DEBUG_LOG(("Deleted all %1 my messages in this chat").arg(collected->size()));
+			*requestNext = nullptr;
+			*removeNext = nullptr;
 			return;
 		}
 
@@ -146,6 +148,8 @@ void DeleteMyMessagesAfterConfirm(not_null<PeerData*> peer) {
 			}
 
 			DEBUG_LOG(("Stopping deletion, unrecoverable error: %1").arg(type));
+			*requestNext = nullptr;
+			*removeNext = nullptr;
 		};
 
 		if (const auto channel = peer->asChannel()) {
@@ -213,7 +217,12 @@ void DeleteMyMessagesAfterConfirm(not_null<PeerData*> peer) {
 					(*removeNext)(0);
 				}
 			})
-			.fail([=](const MTP::Error &error) { DEBUG_LOG(("History fetch failed: %1").arg(error.type())); })
+			.fail([=](const MTP::Error &error)
+			{
+				DEBUG_LOG(("History fetch failed: %1").arg(error.type()));
+				*requestNext = nullptr;
+				*removeNext = nullptr;
+			})
 			.send();
 	};
 

@@ -147,11 +147,18 @@ struct RecognitionId {
 using RecognitionResult = Platform::TextRecognition::Result;
 using RecognitionCacheMap = base::flat_map<RecognitionId, RecognitionResult>;
 
+constexpr auto kRecognitionCacheLimit = 300;
+
 [[nodiscard]] RecognitionCacheMap *RecognitionCache() {
 	static auto cache = Platform::TextRecognition::IsAvailable()
 		? std::make_unique<base::flat_map<RecognitionId, RecognitionResult>>()
 		: nullptr;
 	return cache.get();
+}
+
+[[nodiscard]] std::vector<RecognitionId> *RecognitionCacheOrder() {
+	static auto order = std::vector<RecognitionId>();
+	return &order;
 }
 
 [[nodiscard]] bool InstantViewMediaItemMatches(
@@ -6146,7 +6153,18 @@ void OverlayWidget::tryStartTextRecognition() {
 				_recognitionPendingPhotoId = 0;
 				_recognitionPendingDocumentId = 0;
 			}
-			(*cache)[id] = result;
+			if (const auto i = cache->find(id); i != cache->end()) {
+				i->second = result;
+			} else {
+				const auto order = RecognitionCacheOrder();
+				if (cache->size() >= kRecognitionCacheLimit
+					&& !order->empty()) {
+					cache->remove(order->front());
+					order->erase(order->begin());
+				}
+				cache->emplace(id, result);
+				order->push_back(id);
+			}
 			const auto stillSame = _session
 				&& (_session->uniqueId() == id.sessionUniqueId)
 				&& (id.photoId

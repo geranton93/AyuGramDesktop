@@ -1551,8 +1551,9 @@ void GroupCall::startRejoin() {
 		// Don't reset _e2e in that case, if rejoin() is a no-op.
 		return;
 	}
-	for (const auto &[task, part] : _broadcastParts) {
-		_api.request(part.requestId).cancel();
+	for (auto i = _broadcastParts.begin(); i != _broadcastParts.end();) {
+		_api.request(i->second.requestId).cancel();
+		i = _broadcastParts.erase(i);
 	}
 	if (conference()) {
 		initConferenceE2E();

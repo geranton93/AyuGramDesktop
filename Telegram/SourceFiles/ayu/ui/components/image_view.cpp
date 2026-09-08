@@ -64,7 +64,15 @@ void ImageView::setImage(const QImage &image) {
 		return;
 	}
 
-	dispatchToMainThread(set, 100);
+	const auto weak = base::make_weak(this);
+	dispatchToMainThread(
+		[=]
+		{
+			if (const auto strong = weak.get()) {
+				set();
+			}
+		},
+		100);
 }
 
 void ImageView::computeDiffImages(const QImage &prev, const QImage &curr) {

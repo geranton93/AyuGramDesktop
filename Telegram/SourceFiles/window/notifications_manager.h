@@ -196,6 +196,7 @@ private:
 	[[nodiscard]] not_null<Media::Audio::Track*> lookupSound(
 		not_null<Data::Session*> owner,
 		DocumentId id);
+	void touchCustomSoundTrack(DocumentId id);
 
 	void registerThread(not_null<Data::Thread*> thread);
 
@@ -228,6 +229,7 @@ private:
 	base::flat_map<
 		DocumentId,
 		std::unique_ptr<Media::Audio::Track>> _customSoundTracks;
+	std::vector<DocumentId> _customSoundTracksLru;
 
 	base::flat_map<
 		not_null<Data::ForumTopic*>,

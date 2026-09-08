@@ -181,7 +181,12 @@ History::History(not_null<Data::Session*> owner, PeerId peerId)
 	updateCommunityRegistration();
 }
 
-History::~History() = default;
+History::~History() {
+	session().storage().unload(Storage::SharedMediaUnloadThread(
+		peer->id,
+		MsgId(),
+		PeerId()));
+}
 
 void History::clearLastKeyboard() {
 	if (lastKeyboardId) {
@@ -675,7 +680,17 @@ not_null<HistoryItem*> History::insertItem(
 void History::destroyMessage(not_null<HistoryItem*> item) {
 	// Expects(item->isHistoryEntry() || !item->mainView());
 	if (!(item->isHistoryEntry() || !item->mainView())) {
-		return; // AyuGram: fix crash when using `saveDeletedMessages`
+		// AyuGram: fix crash when using `saveDeletedMessages`
+		owner().unregisterMessage(item);
+
+		auto hack = std::unique_ptr<HistoryItem>(item.get());
+		const auto i = _items.find(hack);
+		hack.release();
+
+		if (i != end(_items)) {
+			_items.erase(i);
+		}
+		return;
 	}
 
 	const auto peerId = peer->id;

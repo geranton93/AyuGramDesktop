@@ -352,8 +352,11 @@ void SelfForwardsTagger::showChannelFilterToast(not_null<PeerData*> peer) {
 						QPoint(
 							rightButton->width(),
 							rightButton->height() + rightButton->y())));
-				QObject::connect(menu, &QObject::destroyed, [=] {
-					hideToast();
+				QObject::connect(menu, &QObject::destroyed, [
+						weak = base::make_weak(this)] {
+					if (const auto that = weak.get()) {
+						that->hideToast();
+					}
 				});
 			} else {
 				hideToast();

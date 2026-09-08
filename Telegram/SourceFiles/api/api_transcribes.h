@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <deque>
+
 #include "mtproto/sender.h"
 #include "spellcheck/spellcheck_types.h"
 
@@ -64,6 +66,9 @@ private:
 	void load(not_null<HistoryItem*> item);
 	void summarize(not_null<HistoryItem*> item);
 
+	Entry &mapEntry(FullMsgId id);
+	SummaryEntry &summaryEntry(FullMsgId id);
+
 	const not_null<Main::Session*> _session;
 	MTP::Sender _api;
 
@@ -73,8 +78,10 @@ private:
 
 	base::flat_map<FullMsgId, Entry> _map;
 	base::flat_map<uint64, FullMsgId> _ids;
+	std::deque<FullMsgId> _mapOrder;
 
 	base::flat_map<FullMsgId, SummaryEntry> _summaries;
+	std::deque<FullMsgId> _summariesOrder;
 
 };
 

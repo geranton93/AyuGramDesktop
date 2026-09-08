@@ -557,6 +557,8 @@ void Templates::updateRequestFinished(QNetworkReply *reply) {
 		).arg(reply->error()
 		).arg(reply->errorString());
 		_session->data().serviceNotification({ message });
+		_updates->requests.erase(path);
+		checkUpdateFinished();
 		return;
 	}
 	LOG(("Got template from url '%1'"

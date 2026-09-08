@@ -57,9 +57,12 @@ private:
 		const std::deque<SavedStarGift> &gifts,
 		bool onlyPinnedToTop);
 
+	void trimRecentCache();
+
 	struct Entry {
 		std::deque<SavedStarGift> gifts;
 		crl::time lastRequestTime = 0;
+		crl::time lastAccessTime = 0;
 		mtpRequestId requestId = 0;
 		std::vector<Fn<void()>> pendingCallbacks;
 	};

@@ -1565,6 +1565,9 @@ void MainWidget::showHistory(
 		if (nowActivePeer && nowActivePeer != wasActivePeer) {
 			session().api().views().removeIncremented(nowActivePeer);
 		}
+		if (wasActivePeer && wasActivePeer != nowActivePeer) {
+			session().api().views().removeIncremented(wasActivePeer);
+		}
 		if (isOneColumn() && _dialogs && !_dialogs->isHidden()) {
 			_dialogs->hide();
 		}

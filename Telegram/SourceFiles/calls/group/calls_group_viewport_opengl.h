@@ -91,7 +91,7 @@ private:
 		QOpenGLFunctions &f,
 		TileData &tileData,
 		QSize blurSize);
-	void validateDatas();
+	void validateDatas(QOpenGLFunctions &f);
 	void validateNoiseTexture(
 		QOpenGLFunctions &f,
 		GLuint defaultFramebufferObject);

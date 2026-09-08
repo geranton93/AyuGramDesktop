@@ -242,6 +242,7 @@ private:
 	void resolve(const ReactionId &id);
 	void applyFavorite(const ReactionId &id);
 	void scheduleMyTagsUpdate(SavedSublist *sublist);
+	void forgetSublist(SavedSublist *sublist);
 
 	[[nodiscard]] std::optional<Reaction> parse(
 		const MTPAvailableReaction &entry);

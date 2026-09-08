@@ -23,6 +23,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "spellcheck/spellcheck_types.h"
 
 namespace Api {
+namespace {
+
+constexpr auto kMaxCachedEntries = 500;
+
+} // namespace
 
 Transcribes::Transcribes(not_null<ApiWrap*> api)
 : _session(&api->session())
@@ -170,6 +175,41 @@ void Transcribes::apply(const MTPDupdateTranscribedAudio &update) {
 	}
 }
 
+Transcribes::Entry &Transcribes::mapEntry(FullMsgId id) {
+	const auto i = _map.find(id);
+	if (i != _map.end()) {
+		return i->second;
+	}
+	_mapOrder.push_back(id);
+	while (_map.size() >= kMaxCachedEntries && !_mapOrder.empty()) {
+		const auto oldest = _mapOrder.front();
+		_mapOrder.pop_front();
+		_map.erase(oldest);
+		for (auto j = _ids.begin(); j != _ids.end();) {
+			if (j->second == oldest) {
+				j = _ids.erase(j);
+			} else {
+				++j;
+			}
+		}
+	}
+	return _map.emplace(id).first->second;
+}
+
+SummaryEntry &Transcribes::summaryEntry(FullMsgId id) {
+	const auto i = _summaries.find(id);
+	if (i != _summaries.end()) {
+		return i->second;
+	}
+	_summariesOrder.push_back(id);
+	while (_summaries.size() >= kMaxCachedEntries
+			&& !_summariesOrder.empty()) {
+		_summaries.erase(_summariesOrder.front());
+		_summariesOrder.pop_front();
+	}
+	return _summaries.emplace(id).first->second;
+}
+
 void Transcribes::load(not_null<HistoryItem*> item) {
 	if (!item->isHistoryEntry() || item->isLocal()) {
 		return;
@@ -207,7 +247,7 @@ void Transcribes::load(not_null<HistoryItem*> item) {
 			}
 		}
 
-		auto &entry = _map[id];
+		auto &entry = mapEntry(id);
 		entry.requestId = 0;
 		entry.pending = data.is_pending();
 		entry.result = qs(data.vtext());
@@ -217,7 +257,7 @@ void Transcribes::load(not_null<HistoryItem*> item) {
 			_session->data().requestItemResize(item);
 		}
 	}).fail([=](const MTP::Error &error) {
-		auto &entry = _map[id];
+		auto &entry = mapEntry(id);
 		entry.requestId = 0;
 		entry.pending = false;
 		entry.failed = true;
@@ -229,7 +269,7 @@ void Transcribes::load(not_null<HistoryItem*> item) {
 			_session->data().requestItemResize(item);
 		}
 	}).send();
-	auto &entry = _map.emplace(id).first->second;
+	auto &entry = mapEntry(id);
 	entry.requestId = requestId;
 	entry.shown = true;
 	entry.failed = false;
@@ -256,7 +296,7 @@ void Transcribes::summarize(not_null<HistoryItem*> item) {
 		MTPstring() // tone
 	)).done([=](const MTPTextWithEntities &result) {
 		const auto &data = result.data();
-		auto &entry = _summaries[id];
+		auto &entry = summaryEntry(id);
 		entry.requestId = 0;
 		entry.loading = false;
 		entry.premiumRequired = false;
@@ -269,7 +309,7 @@ void Transcribes::summarize(not_null<HistoryItem*> item) {
 			_session->data().requestItemShowHighlight(item);
 		}
 	}).fail([=](const MTP::Error &error) {
-		auto &entry = _summaries[id];
+		auto &entry = summaryEntry(id);
 		if (error.type() == u"SUMMARY_FLOOD_PREMIUM"_q) {
 			entry.premiumRequired = true;
 		}
@@ -281,7 +321,7 @@ void Transcribes::summarize(not_null<HistoryItem*> item) {
 		}
 	}).send();
 
-	auto &entry = _summaries.emplace(id).first->second;
+	auto &entry = summaryEntry(id);
 	entry.requestId = requestId;
 	entry.shown = true;
 	entry.loading = true;

@@ -20,8 +20,10 @@
 namespace AyuWorker {
 
 void runOnce();
+void removeStaleState();
 
 std::unordered_map<ID, bool> state;
+rpl::lifetime workerLifetime;
 
 base::Timer &workerTimer() {
 	static base::Timer timer([] {
@@ -41,6 +43,26 @@ void lateInit() {
 		if (const auto session = account->maybeSession()) {
 			const auto id = session->userId().bare;
 			state[id] = true;
+		}
+	}
+}
+
+void removeStaleState() {
+	for (auto it = state.begin(); it != state.end();) {
+		const auto id = it->first;
+		auto stillExists = false;
+		for (const auto &[index, account] : Core::App().domain().accounts()) {
+			if (const auto session = account->maybeSession()) {
+				if (session->userId().bare == id) {
+					stillExists = true;
+					break;
+				}
+			}
+		}
+		if (stillExists) {
+			++it;
+		} else {
+			it = state.erase(it);
 		}
 	}
 }
@@ -83,6 +105,11 @@ void runOnce() {
 }
 
 void initialize() {
+	Core::App().domain().accountsChanges(
+	) | rpl::on_next([] {
+		removeStaleState();
+	}, workerLifetime);
+
 	workerTimer().callEach(3000);
 }
 

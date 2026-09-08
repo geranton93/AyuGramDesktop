@@ -66,6 +66,7 @@ public:
 	void remove(UserPhotosRemoveOne &&query);
 	void remove(UserPhotosRemoveAfter &&query);
 	void replace(UserPhotosReplace &&query);
+	void unload(UserId userId);
 
 	rpl::producer<UserPhotosResult> query(UserPhotosQuery &&query) const;
 	rpl::producer<UserPhotosSliceUpdate> userPhotosSliceUpdated() const;

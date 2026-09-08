@@ -367,12 +367,13 @@ void Tray::createIcon() {
 				_nativeIcon->deactivateButton();
 				_showFromTrayRequests.fire({});
 			}
-		}, _lifetime);
+		}, _iconLifetime);
 	}
 	updateIcon();
 }
 
 void Tray::destroyIcon() {
+	_iconLifetime.destroy();
 	_nativeIcon = nullptr;
 }
 

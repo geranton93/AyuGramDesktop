@@ -66,6 +66,7 @@ private:
 	rpl::event_stream<> _showFromTrayRequests;
 
 	rpl::lifetime _actionsLifetime;
+	rpl::lifetime _iconLifetime;
 	rpl::lifetime _lifetime;
 
 };

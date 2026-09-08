@@ -1734,42 +1734,78 @@ void Viewport::RendererRhi::validateDatas() {
 			pending.push_back(i);
 		}
 	}
-	if (pending.empty()) {
+	if (!pending.empty()) {
+		auto maybeStaleAfter = begin(_tileData);
+		const auto maybeStaleEnd = end(_tileData);
+		for (const auto i : pending) {
+			const auto id = quintptr(tiles[i]->track().get());
+			const auto peer = tiles[i]->peer();
+			const auto paused = (tiles[i]->track()->state()
+				== Webrtc::VideoState::Paused);
+			maybeStaleAfter = ranges::find(
+				maybeStaleAfter,
+				maybeStaleEnd,
+				true,
+				&TileData::stale);
+			if (maybeStaleAfter != maybeStaleEnd) {
+				maybeStaleAfter->id = id;
+				maybeStaleAfter->peer = peer;
+				maybeStaleAfter->nameVersion = peer->nameVersion();
+				maybeStaleAfter->stale = false;
+				maybeStaleAfter->pause = paused;
+				maybeStaleAfter->paused.stop();
+				maybeStaleAfter->outline = false;
+				maybeStaleAfter->outlined.stop();
+				maybeStaleAfter->userpicFrame = QImage();
+				maybeStaleAfter->trackIndex = -1;
+				_tileDataIndices[i] = int(
+					maybeStaleAfter - begin(_tileData));
+			} else {
+				_tileDataIndices[i] = int(_tileData.size());
+				_tileData.push_back({
+					.id = id,
+					.peer = peer,
+					.nameVersion = peer->nameVersion(),
+					.pause = paused,
+				});
+			}
+		}
+	}
+	if (!ranges::contains(_tileData, true, &TileData::stale)) {
 		return;
 	}
-	auto maybeStaleAfter = begin(_tileData);
-	const auto maybeStaleEnd = end(_tileData);
-	for (const auto i : pending) {
-		const auto id = quintptr(tiles[i]->track().get());
-		const auto peer = tiles[i]->peer();
-		const auto paused = (tiles[i]->track()->state()
-			== Webrtc::VideoState::Paused);
-		maybeStaleAfter = ranges::find(
-			maybeStaleAfter,
-			maybeStaleEnd,
-			true,
-			&TileData::stale);
-		if (maybeStaleAfter != maybeStaleEnd) {
-			maybeStaleAfter->id = id;
-			maybeStaleAfter->peer = peer;
-			maybeStaleAfter->nameVersion = peer->nameVersion();
-			maybeStaleAfter->stale = false;
-			maybeStaleAfter->pause = paused;
-			maybeStaleAfter->paused.stop();
-			maybeStaleAfter->outline = false;
-			maybeStaleAfter->outlined.stop();
-			maybeStaleAfter->userpicFrame = QImage();
-			maybeStaleAfter->trackIndex = -1;
-			_tileDataIndices[i] = int(
-				maybeStaleAfter - begin(_tileData));
+	auto remapped = std::vector<int>(_tileData.size(), -1);
+	for (auto i = 0, kept = 0; i != int(_tileData.size()); ++i) {
+		if (!_tileData[i].stale) {
+			remapped[i] = kept++;
+		}
+	}
+	for (auto i = _tileData.begin(); i != _tileData.end();) {
+		if (i->stale) {
+			delete i->rgbaTexture;
+			delete i->yTexture;
+			delete i->uTexture;
+			delete i->vTexture;
+			delete i->convertedTexture;
+			delete i->convertedRpDesc;
+			delete i->convertedRt;
+			delete i->downscaleTexture;
+			delete i->downscaleRpDesc;
+			delete i->downscaleRt;
+			delete i->blurHTexture;
+			delete i->blurHRpDesc;
+			delete i->blurHRt;
+			delete i->blurVTexture;
+			delete i->blurVRpDesc;
+			delete i->blurVRt;
+			i = _tileData.erase(i);
 		} else {
-			_tileDataIndices[i] = int(_tileData.size());
-			_tileData.push_back({
-				.id = id,
-				.peer = peer,
-				.nameVersion = peer->nameVersion(),
-				.pause = paused,
-			});
+			++i;
+		}
+	}
+	for (auto &index : _tileDataIndices) {
+		if (index >= 0) {
+			index = remapped[index];
 		}
 	}
 }
