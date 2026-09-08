@@ -25,6 +25,7 @@
 #include "ui/widgets/labels.h"
 #include "window/themes/window_theme.h"
 
+#include <QImage>
 #include <QSvgRenderer>
 
 namespace Info::Profile {
@@ -67,9 +68,10 @@ QColor GetNoCoverBgColor(std::optional<QColor> overrideBg) {
 
 struct Cover
 {
-	QPixmap pixToDraw;
-	QPixmap pixToBg;
+	QImage imageToDraw;
+	QImage imageToBg;
 	bool noCover;
+	bool needsRounding = false;
 };
 
 QPixmap MakeNoCoverImage(const QSize &size) {
@@ -105,14 +107,14 @@ Cover GetCurrentCover(
 	const std::shared_ptr<Data::DocumentMedia> &dataMedia,
 	const QSize &size) {
 	if (!dataMedia) {
+		const auto image = MakeNoCoverImage(size).toImage();
 		return {
-			.pixToDraw = MakeNoCoverImage(size),
-			.pixToBg = MakeNoCoverImage(size),
+			.imageToDraw = image,
+			.imageToBg = image,
 			.noCover = true
 		};
 	}
 
-	auto cover = QPixmap();
 	const auto scaled = [&](not_null<Image*> image)
 	{
 		const auto aspectRatio = Qt::KeepAspectRatioByExpanding;
@@ -124,21 +126,24 @@ Cover GetCurrentCover(
 		.outer = size,
 	};
 	if (const auto normal = dataMedia->thumbnail()) {
+		const auto pixToDraw = normal->pixNoCache(scaled(normal), args);
+		const auto pixToBg = normal->pixNoCache();
 		return {
-			.pixToDraw = normal->pixNoCache(scaled(normal), args),
-			.pixToBg = normal->pixNoCache(),
+			.imageToDraw = pixToDraw.toImage(),
+			.imageToBg = pixToBg.toImage(),
 			.noCover = false
 		};
 	}
 
+	const auto image = MakeNoCoverImage(size).toImage();
 	return {
-		.pixToDraw = MakeNoCoverImage(size),
-		.pixToBg = MakeNoCoverImage(size),
+		.imageToDraw = image,
+		.imageToBg = image,
 		.noCover = true
 	};
 }
 
-std::optional<QRgb> ExtractColorFromCover(const QPixmap &cover) {
+std::optional<QRgb> ExtractColorFromCover(const QImage &cover) {
 	const auto palette = Ayu::Ui::Palette::from(cover).generate();
 
 	const auto *swatch = palette.darkVibrantSwatch();
@@ -248,6 +253,13 @@ void AyuMusicButton::downloadAndMakeCover(FullMsgId msgId) {
 
 void AyuMusicButton::makeCover() {
 	const auto weak = base::make_weak(this);
+	const auto generation = ++_coverGeneration;
+	const auto &font = st::infoMusicButtonTitle.style.font;
+	const auto skip = st::normalFont->spacew / 2;
+	const auto size = font->height + skip + font->height;
+	const auto coverSize = QSize(size, size);
+	auto cover = GetCurrentCover(_mediaView, coverSize);
+	const auto noCoverBg = GetNoCoverBgColor(_overrideBg);
 	// AyuSettings fields are plain rpl::variable, not thread-safe: reading
 	// adaptiveCoverColor() here (on the main thread, before crossing into
 	// crl::async below) races with the setting being toggled from the
@@ -256,50 +268,62 @@ void AyuMusicButton::makeCover() {
 	// setting from the background thread.
 	const auto adaptiveCoverColor = AyuSettings::getInstance().adaptiveCoverColor();
 	crl::async(
-		[=, mediaView = _mediaView, performerText = _performerText, titleText = _titleText, overrideBg = _overrideBg]()
+		[=,
+			cover = std::move(cover),
+			performerText = _performerText,
+			titleText = _titleText,
+			overrideBg = _overrideBg]() mutable
 		{
-			const auto &font = st::infoMusicButtonTitle.style.font;
-			const auto skip = st::normalFont->spacew / 2;
-			const auto size = font->height + skip + font->height;
-
-			auto cover = GetCurrentCover(mediaView, QSize(size, size));
-
 			if (cover.noCover) {
-				const auto pix = Ayu::Ui::Itunes::FetchCover(performerText, titleText, size);
-				if (!pix.isNull()) {
-					const auto img = Image(pix.toImage());
-					const auto args = Images::PrepareArgs{
-						.options = Images::Option::RoundSmall,
-						.outer = QSize(size, size),
-					};
-					cover.pixToDraw = img.pix(QSize(size, size), args);
-					cover.pixToBg = pix;
+				const auto image = Ayu::Ui::Itunes::FetchCover(
+					performerText,
+					titleText,
+					size);
+				if (!image.isNull()) {
+					cover.imageToDraw = image;
+					cover.imageToBg = image;
 					cover.noCover = false;
+					cover.needsRounding = true;
 				}
 			}
 
 			QColor bgColor;
 			if (cover.noCover || !adaptiveCoverColor) {
-				bgColor = GetNoCoverBgColor(overrideBg);
+				bgColor = noCoverBg;
 			} else {
-				if (const auto extractedColor = ExtractColorFromCover(cover.pixToBg)) {
+				if (const auto extractedColor = ExtractColorFromCover(cover.imageToBg)) {
 					bgColor = QColor::fromRgb(*extractedColor);
 				} else {
 					// example: fully black image
 					cover.noCover = true;
-					bgColor = GetNoCoverBgColor(overrideBg);
+					bgColor = noCoverBg;
 				}
 			}
 
-			crl::on_main([weak, cover = std::move(cover), bgColor, overrideBg]() mutable
+			crl::on_main([weak,
+				cover = std::move(cover),
+				bgColor,
+				overrideBg,
+				coverSize,
+				generation]() mutable
 			{
 				const auto strong = weak.get();
-				if (!strong) {
+				if (!strong || strong->_coverGeneration != generation) {
 					return;
 				}
 
+				auto pix = QPixmap();
+				if (cover.needsRounding) {
+					const auto image = Image(std::move(cover.imageToDraw));
+					pix = image.pix(coverSize, Images::PrepareArgs{
+						.options = Images::Option::RoundSmall,
+						.outer = coverSize,
+					});
+				} else {
+					pix = QPixmap::fromImage(cover.imageToDraw);
+				}
 				strong->_currentCover = {
-					.pix = cover.pixToDraw,
+					.pix = std::move(pix),
 					.bg = bgColor,
 					.noCover = cover.noCover,
 				};

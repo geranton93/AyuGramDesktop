@@ -15,21 +15,27 @@
 #include <QtCore/QTimer>
 #include <QtCore/QUrlQuery>
 #include <QtGui/QImage>
-#include <QtGui/QPixmap>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
+
+#include <mutex>
 
 namespace Ayu::Ui::Itunes {
 namespace {
 
 struct CacheEntry
 {
-	QPixmap pix;
+	QImage image;
 };
 
 QCache<QString, CacheEntry> &cache() {
 	static QCache<QString, CacheEntry> c(50);
 	return c;
+}
+
+std::mutex &cacheMutex() {
+	static auto result = std::mutex();
+	return result;
 }
 
 QString translitSafe(const QString &s) {
@@ -713,14 +719,17 @@ QString upgradeArtworkSize(QString url, int sizeHint) {
 
 } // namespace
 
-QPixmap FetchCover(const QString &performer, const QString &title, int sizeHintPx, int timeoutMs) {
+QImage FetchCover(const QString &performer, const QString &title, int sizeHintPx, int timeoutMs) {
 	const auto perf = performer.trimmed();
 	const auto titl = title.trimmed();
 	if (perf.isEmpty() && titl.isEmpty()) return {};
 
 	const auto key = perf + QString::fromUtf8(" - ") + titl;
-	if (auto *entry = cache().object(key)) {
-		return entry->pix;
+	{
+		const auto lock = std::lock_guard(cacheMutex());
+		if (const auto entry = cache().object(key)) {
+			return entry->image;
+		}
 	}
 
 	const auto url = buildItunesUrl(perf, titl);
@@ -740,11 +749,12 @@ QPixmap FetchCover(const QString &performer, const QString &title, int sizeHintP
 
 	QImage img;
 	if (!img.loadFromData(imgBytes)) return {};
-	QPixmap pix = QPixmap::fromImage(img);
 
-	auto *stored = new CacheEntry{pix};
-	cache().insert(key, stored);
-	return pix;
+	{
+		const auto lock = std::lock_guard(cacheMutex());
+		cache().insert(key, new CacheEntry{img});
+	}
+	return img;
 }
 
 }

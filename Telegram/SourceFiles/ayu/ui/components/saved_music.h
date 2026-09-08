@@ -50,6 +50,7 @@ private:
 	std::unique_ptr<Ui::FlatLabel> _title;
 	std::shared_ptr<Data::DocumentMedia> _mediaView;
 	std::optional<ResultCover> _currentCover;
+	int _coverGeneration = 0;
 	rpl::event_stream<> _onReady;
 
 	QString _performerText;
