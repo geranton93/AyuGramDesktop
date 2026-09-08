@@ -8,14 +8,31 @@
 
 #include "ayu/data/entities.h"
 
+#include <string>
+
 namespace AyuMessages {
 
 void addEditedMessage(not_null<HistoryItem *> item);
+std::vector<AyuMessageBase> getEditedMessages(
+	ID userId,
+	ID dialogId,
+	ID messageId,
+	ID minId,
+	ID maxId,
+	int totalLimit);
 std::vector<AyuMessageBase> getEditedMessages(not_null<HistoryItem*> item, ID minId, ID maxId, int totalLimit);
 bool hasRevisions(not_null<HistoryItem*> item);
 
 void addDeletedMessage(not_null<HistoryItem*> item);
 void addDeletedMessages(const std::vector<not_null<HistoryItem*>> &items);
+std::vector<AyuMessageBase> getDeletedMessages(
+	ID userId,
+	ID dialogId,
+	ID topicId,
+	ID minId,
+	ID maxId,
+	int totalLimit,
+	const std::string &searchQuery = "");
 std::vector<AyuMessageBase> getDeletedMessages(not_null<PeerData*> peer, ID topicId, ID minId, ID maxId, int totalLimit, const QString &searchQuery = QString());
 bool hasDeletedMessages(not_null<PeerData*> peer, ID topicId);
 void removeDeletedMessage(not_null<HistoryItem*> item);

@@ -15,6 +15,7 @@
 #include "data/data_document_media.h"
 #include "data/data_file_origin.h"
 #include "data/data_forum.h"
+#include "data/data_msg_id.h"
 #include "data/data_peer.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
@@ -204,22 +205,15 @@ QColor makeDefaultBackgroundColor() {
 }
 
 void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage&,bool)>& callback) {
-	const auto controller = config.controller;
+	const auto sessionController = config.controller;
 	const auto st = config.st;
+	const auto weakBox = base::make_weak(box);
+	const auto weakController = base::make_weak(sessionController);
 	auto messages = config.messages;
 
 	if (messages.empty()) {
 		return;
 	}
-
-	auto delegate = std::make_shared<MessageShotDelegate>(
-		box,
-		st.get(),
-		[=]
-		{
-			box->update();
-		},
-		messages.front()->history());
 
 	// remove deleted messages
 	messages.erase(
@@ -227,7 +221,7 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 			messages,
 			[=](const auto &message)
 			{
-				return !message || !controller->session().data().message(message->fullId());
+				return !message || !sessionController->session().data().message(message->fullId());
 			}).begin(),
 		messages.end()
 	);
@@ -235,6 +229,23 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 	if (messages.empty()) {
 		return;
 	}
+
+	auto messageIds = std::vector<FullMsgId>();
+	messageIds.reserve(messages.size());
+	for (const auto &message : messages) {
+		messageIds.push_back(message->fullId());
+	}
+
+	auto delegate = std::make_shared<MessageShotDelegate>(
+		box,
+		st.get(),
+		[weakBox]
+		{
+			if (const auto strong = weakBox.get()) {
+				strong->update();
+			}
+		},
+		messages.front()->history());
 
 	auto createdViews = std::make_shared<std::unordered_map<not_null<HistoryItem*>, std::shared_ptr<HistoryView::Element>>>();
 	createdViews->reserve(messages.size());
@@ -303,8 +314,24 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 	}
 
 	const auto showBackground = AyuSettings::getInstance().messageShotSettings().showBackground();
-	auto render = [=, messages = std::move(messages), delegate = std::move(delegate)](bool final)
+	auto render = [=,
+		messages = std::move(messages),
+		messageIds = std::move(messageIds),
+		delegate = std::move(delegate)](bool final)
 	{
+		if (!weakBox) {
+			return;
+		}
+		const auto controller = weakController.get();
+		if (!controller) {
+			return;
+		}
+		for (auto i = 0; i != messages.size(); ++i) {
+			if (controller->session().data().message(messageIds[i]) != messages[i].get()) {
+				return;
+			}
+		}
+
 		takingShot = true;
 
 		// calculate the size of the image
@@ -412,7 +439,7 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 		auto lifetime = std::make_shared<rpl::lifetime>();
 		auto latch = std::make_shared<TimedCountDownLatch>(1);
 		rpl::single() | rpl::then(
-			config.controller->session().downloaderTaskFinished()
+			sessionController->session().downloaderTaskFinished()
 		) | rpl::filter([=]
 			{
 				for (const auto &media : preload->photos) {

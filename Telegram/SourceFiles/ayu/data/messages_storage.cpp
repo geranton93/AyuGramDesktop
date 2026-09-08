@@ -95,12 +95,22 @@ void addEditedMessage(not_null<HistoryItem *> item) {
 	AyuDatabase::addEditedMessage(message);
 }
 
+std::vector<AyuMessageBase> getEditedMessages(
+		ID userId,
+		ID dialogId,
+		ID messageId,
+		ID minId,
+		ID maxId,
+		int totalLimit) {
+	return convertToBase(AyuDatabase::getEditedMessages(userId, dialogId, messageId, minId, maxId, totalLimit));
+}
+
 std::vector<AyuMessageBase> getEditedMessages(not_null<HistoryItem*> item, ID minId, ID maxId, int totalLimit) {
 	const ID userId = item->history()->owner().session().userId().bare & PeerId::kChatTypeMask;
 	const auto dialogId = getDialogIdFromPeer(item->history()->peer);
-	const auto msgId = item->id.bare;
+	const auto messageId = item->id.bare;
 
-	return convertToBase(AyuDatabase::getEditedMessages(userId, dialogId, msgId, minId, maxId, totalLimit));
+	return getEditedMessages(userId, dialogId, messageId, minId, maxId, totalLimit);
 }
 
 bool hasRevisions(not_null<HistoryItem*> item) {
@@ -140,11 +150,29 @@ void addDeletedMessages(const std::vector<not_null<HistoryItem*>> &items) {
 	AyuDatabase::addDeletedMessages(messages);
 }
 
+std::vector<AyuMessageBase> getDeletedMessages(
+		ID userId,
+		ID dialogId,
+		ID topicId,
+		ID minId,
+		ID maxId,
+		int totalLimit,
+		const std::string &searchQuery) {
+	return convertToBase(
+		AyuDatabase::getDeletedMessages(userId, dialogId, topicId, minId, maxId, totalLimit, searchQuery));
+}
+
 std::vector<AyuMessageBase>
 getDeletedMessages(not_null<PeerData*> peer, ID topicId, ID minId, ID maxId, int totalLimit, const QString &searchQuery) {
 	const ID userId = peer->session().userId().bare & PeerId::kChatTypeMask;
-	return convertToBase(
-		AyuDatabase::getDeletedMessages(userId, getDialogIdFromPeer(peer), topicId, minId, maxId, totalLimit, searchQuery.toStdString()));
+	return getDeletedMessages(
+		userId,
+		getDialogIdFromPeer(peer),
+		topicId,
+		minId,
+		maxId,
+		totalLimit,
+		searchQuery.toStdString());
 }
 
 bool hasDeletedMessages(not_null<PeerData*> peer, ID topicId) {

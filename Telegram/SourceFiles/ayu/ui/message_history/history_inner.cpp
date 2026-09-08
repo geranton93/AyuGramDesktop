@@ -12,6 +12,7 @@
 #include "api/api_attached_stickers.h"
 #include "ayu/data/messages_storage.h"
 #include "ayu/ui/message_history/history_section.h"
+#include "ayu/utils/telegram_helpers.h"
 #include "base/call_delayed.h"
 #include "base/unixtime.h"
 #include "base/platform/base_platform_info.h"
@@ -748,16 +749,37 @@ void InnerWidget::preloadMore(Direction direction) {
 	const auto item = _item;
 	const auto peer = _peer;
 	const auto topicId = _topicId;
-	const auto searchQuery = _searchQuery;
+	const auto edited = (item != nullptr);
+	const auto userId = edited
+		? item->history()->owner().session().userId().bare & PeerId::kChatTypeMask
+		: peer->session().userId().bare & PeerId::kChatTypeMask;
+	const auto dialogId = edited
+		? getDialogIdFromPeer(item->history()->peer)
+		: getDialogIdFromPeer(peer);
+	const auto messageId = edited ? item->id.bare : 0;
+	const auto searchQuery = _searchQuery.toStdString();
 
 	const auto weak = base::make_weak(this);
 
 	crl::async([=] {
 		std::vector<AyuMessageBase> messages;
-		if (item) { // viewing edited history
-			messages = AyuMessages::getEditedMessages(item, minId, maxId, perPage);
+		if (edited) { // viewing edited history
+			messages = AyuMessages::getEditedMessages(
+				userId,
+				dialogId,
+				messageId,
+				minId,
+				maxId,
+				perPage);
 		} else { // viewing deleted messages
-			messages = AyuMessages::getDeletedMessages(peer, topicId, minId, maxId, perPage, searchQuery);
+			messages = AyuMessages::getDeletedMessages(
+				userId,
+				dialogId,
+				topicId,
+				minId,
+				maxId,
+				perPage,
+				searchQuery);
 		}
 
 		crl::on_main([=, messages = std::move(messages)]() mutable

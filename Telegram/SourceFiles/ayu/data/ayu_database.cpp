@@ -11,6 +11,7 @@
 #include "base/unixtime.h"
 
 #include <mutex>
+#include <optional>
 
 using namespace sqlite_orm;
 auto storage = make_storage(
@@ -148,11 +149,10 @@ auto storage = make_storage(
 
 namespace {
 
-// `storage` above is a single shared sqlite3 connection. It's queried from
-// a crl::async background thread (history_inner.cpp's preloadMore) while
-// written from the main thread (message delete/edit handling), with
-// nothing else in this file confining it to one thread the way the rest of
-// the codebase's shared state is. This mutex serializes every access.
+// Archive reads run from crl::async while message handling writes on the main
+// thread. Serialize all storage access and keep one connection open after
+// initialization so connection-local SQLite settings remain active for every
+// access.
 std::mutex DatabaseMutex;
 
 // DeletedMessage/EditedMessage otherwise grow forever: there was no TTL,
@@ -162,25 +162,44 @@ std::mutex DatabaseMutex;
 constexpr auto kMaxArchivedRowsPerTable = 50'000;
 
 template<typename Table>
-void pruneOldestRows(int keep) {
+std::optional<int> &archivedRowCount() {
+	static auto result = std::optional<int>();
+	return result;
+}
+
+void resetArchivedRowCounts() {
+	archivedRowCount<DeletedMessage>().reset();
+	archivedRowCount<EditedMessage>().reset();
+}
+
+template<typename Table>
+void pruneOldestRows(int keep, int added) {
 	// Caller already holds DatabaseMutex.
+	auto &count = archivedRowCount<Table>();
 	try {
-		const auto count = storage.count<Table>();
-		if (count <= keep) {
+		if (count) {
+			*count += added;
+		} else {
+			count = static_cast<int>(storage.count<Table>());
+		}
+		if (*count <= keep) {
 			return;
 		}
-		const auto excess = static_cast<int>(count - keep);
+		const auto excess = *count - keep;
 		const auto cutoffRows = storage.select(
 			columns(column<Table>(&Table::fakeId)),
 			order_by(column<Table>(&Table::fakeId)).asc(),
 			limit(1, offset(excess - 1))
 		);
 		if (cutoffRows.empty()) {
+			count.reset();
 			return;
 		}
 		const auto cutoff = std::get<0>(cutoffRows.front());
 		storage.remove_all<Table>(where(column<Table>(&Table::fakeId) <= cutoff));
+		count = keep;
 	} catch (const std::exception &ex) {
+		count.reset();
 		LOG(("Failed to prune old rows: %1").arg(ex.what()));
 	}
 }
@@ -252,6 +271,7 @@ void runMigrations(decltype(storage) &storage) {
 namespace AyuDatabase {
 
 void moveCurrentDatabase() {
+	resetArchivedRowCounts();
 	const auto time = base::unixtime::now();
 
 	if (QFile::exists("./tdata/ayudata.db")) {
@@ -270,16 +290,6 @@ void moveCurrentDatabase() {
 void initialize() {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
-		// WAL + synchronous=NORMAL trades a small, well-understood risk
-		// (losing the last commit, never DB corruption, on an actual power
-		// loss/OS crash) for avoiding a full fsync on every single
-		// transaction commit -- and this file commits once per deleted or
-		// edited message, so on the default rollback-journal +
-		// synchronous=FULL settings every one of those was a blocking
-		// disk fsync.
-		storage.pragma.journal_mode(sqlite_orm::journal_mode::WAL);
-		storage.pragma.synchronous(1); // NORMAL
-
 		storage.sync_schema(true);
 
 		runMigrations(storage);
@@ -294,37 +304,60 @@ void initialize() {
 			storage.insert(SchemaVersion{1, 0});
 		}
 	}
+	try {
+		// WAL + synchronous=NORMAL trades a small, well-understood risk
+		// (losing the last commit, never DB corruption, on an actual power
+		// loss/OS crash) for avoiding a full fsync on every single
+		// transaction commit. Keep the connection open after initialization:
+		// sqlite_orm documents this as the safe mode for shared, multithreaded
+		// file-backed storage and it avoids reopening the archive per operation.
+		storage.open_forever();
+		storage.pragma.journal_mode(sqlite_orm::journal_mode::WAL);
+		storage.pragma.synchronous(1); // NORMAL
+	} catch (const std::exception &ex) {
+		LOG(("Failed to configure archive database connection: %1").arg(ex.what()));
+	}
 }
 
 void addEditedMessage(const EditedMessage &message) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
+	auto saved = false;
 	try {
 		storage.begin_transaction();
 		storage.insert(message);
 		storage.commit();
+		saved = true;
 	} catch (std::exception &ex) {
 		try {
 			storage.rollback();
 		} catch (...) {
 		}
+		archivedRowCount<EditedMessage>().reset();
 		LOG(("Failed to save edited message for some reason: %1").arg(ex.what()));
 	}
-	pruneOldestRows<EditedMessage>(kMaxArchivedRowsPerTable);
+	if (saved) {
+		pruneOldestRows<EditedMessage>(kMaxArchivedRowsPerTable, 1);
+	}
 }
 
 std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
-	return storage.get_all<EditedMessage>(
-		where(
-			column<EditedMessage>(&EditedMessage::userId) == userId and
-			column<EditedMessage>(&EditedMessage::dialogId) == dialogId and
-			column<EditedMessage>(&EditedMessage::messageId) == messageId and
-			(column<EditedMessage>(&EditedMessage::fakeId) > minId or minId == 0) and
-			(column<EditedMessage>(&EditedMessage::fakeId) < maxId or maxId == 0)
-		),
-		order_by(column<EditedMessage>(&EditedMessage::fakeId)).desc(),
-		limit(totalLimit)
-	);
+	try {
+		return storage.get_all<EditedMessage>(
+			where(
+				column<EditedMessage>(&EditedMessage::userId) == userId and
+				column<EditedMessage>(&EditedMessage::dialogId) == dialogId and
+				column<EditedMessage>(&EditedMessage::messageId) == messageId and
+				(column<EditedMessage>(&EditedMessage::fakeId) > minId or minId == 0) and
+				(column<EditedMessage>(&EditedMessage::fakeId) < maxId or maxId == 0)
+			),
+			order_by(column<EditedMessage>(&EditedMessage::fakeId)).desc(),
+			limit(totalLimit)
+		);
+	} catch (const std::exception &ex) {
+		LOG(("Failed to load edited message revisions: %1").arg(ex.what()));
+		return {};
+	}
 }
 
 bool hasRevisions(ID userId, ID dialogId, ID messageId) {
@@ -347,18 +380,23 @@ bool hasRevisions(ID userId, ID dialogId, ID messageId) {
 
 void addDeletedMessage(const DeletedMessage &message) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
+	auto saved = false;
 	try {
 		storage.begin_transaction();
 		storage.insert(message);
 		storage.commit();
+		saved = true;
 	} catch (std::exception &ex) {
 		try {
 			storage.rollback();
 		} catch (...) {
 		}
-		LOG(("Failed to save edited message for some reason: %1").arg(ex.what()));
+		archivedRowCount<DeletedMessage>().reset();
+		LOG(("Failed to save deleted message for some reason: %1").arg(ex.what()));
 	}
-	pruneOldestRows<DeletedMessage>(kMaxArchivedRowsPerTable);
+	if (saved) {
+		pruneOldestRows<DeletedMessage>(kMaxArchivedRowsPerTable, 1);
+	}
 }
 
 void addDeletedMessages(const std::vector<DeletedMessage> &messages) {
@@ -366,59 +404,71 @@ void addDeletedMessages(const std::vector<DeletedMessage> &messages) {
 		return;
 	}
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
+	auto saved = false;
 	try {
 		storage.begin_transaction();
 		for (const auto &message : messages) {
 			storage.insert(message);
 		}
 		storage.commit();
+		saved = true;
 	} catch (std::exception &ex) {
 		try {
 			storage.rollback();
 		} catch (...) {
 		}
+		archivedRowCount<DeletedMessage>().reset();
 		LOG(("Failed to save deleted messages batch for some reason: %1").arg(ex.what()));
 	}
-	pruneOldestRows<DeletedMessage>(kMaxArchivedRowsPerTable);
+	if (saved) {
+		pruneOldestRows<DeletedMessage>(
+			kMaxArchivedRowsPerTable,
+			static_cast<int>(messages.size()));
+	}
 }
 
 std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
-	if (searchQuery.empty()) {
+	try {
+		if (searchQuery.empty()) {
+			return storage.get_all<DeletedMessage>(
+				where(
+					column<DeletedMessage>(&DeletedMessage::userId) == userId and
+					column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
+					(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0) and
+					(column<DeletedMessage>(&DeletedMessage::messageId) > minId or minId == 0) and
+					(column<DeletedMessage>(&DeletedMessage::messageId) < maxId or maxId == 0)
+				),
+				order_by(column<DeletedMessage>(&DeletedMessage::messageId)).desc(),
+				limit(totalLimit)
+			);
+		}
+
+		std::string escaped;
+		escaped.reserve(searchQuery.size());
+		for (const auto c : searchQuery) {
+			if (c == '%' || c == '_' || c == '\\') {
+				escaped += '\\';
+			}
+			escaped += c;
+		}
+		const auto pattern = "%" + escaped + "%";
 		return storage.get_all<DeletedMessage>(
 			where(
 				column<DeletedMessage>(&DeletedMessage::userId) == userId and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0) and
 				(column<DeletedMessage>(&DeletedMessage::messageId) > minId or minId == 0) and
-				(column<DeletedMessage>(&DeletedMessage::messageId) < maxId or maxId == 0)
+				(column<DeletedMessage>(&DeletedMessage::messageId) < maxId or maxId == 0) and
+				like(column<DeletedMessage>(&DeletedMessage::text), pattern, "\\")
 			),
 			order_by(column<DeletedMessage>(&DeletedMessage::messageId)).desc(),
 			limit(totalLimit)
 		);
+	} catch (const std::exception &ex) {
+		LOG(("Failed to load deleted messages: %1").arg(ex.what()));
+		return {};
 	}
-
-	std::string escaped;
-	escaped.reserve(searchQuery.size());
-	for (const auto c : searchQuery) {
-		if (c == '%' || c == '_' || c == '\\') {
-			escaped += '\\';
-		}
-		escaped += c;
-	}
-	const auto pattern = "%" + escaped + "%";
-	return storage.get_all<DeletedMessage>(
-		where(
-			column<DeletedMessage>(&DeletedMessage::userId) == userId and
-			column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
-			(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0) and
-			(column<DeletedMessage>(&DeletedMessage::messageId) > minId or minId == 0) and
-			(column<DeletedMessage>(&DeletedMessage::messageId) < maxId or maxId == 0) and
-			like(column<DeletedMessage>(&DeletedMessage::text), pattern, "\\")
-		),
-		order_by(column<DeletedMessage>(&DeletedMessage::messageId)).desc(),
-		limit(totalLimit)
-	);
 }
 
 bool hasDeletedMessages(ID userId, ID dialogId, ID topicId) {
@@ -449,7 +499,9 @@ void removeDeletedMessage(ID userId, ID dialogId, ID messageId) {
 				column<DeletedMessage>(&DeletedMessage::messageId) == messageId
 			)
 		);
+		archivedRowCount<DeletedMessage>().reset();
 	} catch (std::exception &ex) {
+		archivedRowCount<DeletedMessage>().reset();
 		LOG(("Failed to remove deleted message: %1").arg(ex.what()));
 	}
 }
@@ -464,7 +516,10 @@ void clearDeletedMessages(ID userId, ID dialogId, ID topicId) {
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0)
 			)
 		);
-	} catch (std::exception &) {
+		archivedRowCount<DeletedMessage>().reset();
+	} catch (const std::exception &ex) {
+		archivedRowCount<DeletedMessage>().reset();
+		LOG(("Failed to clear deleted messages: %1").arg(ex.what()));
 	}
 }
 
