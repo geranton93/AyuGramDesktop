@@ -1244,6 +1244,8 @@ void Viewport::RendererGL::validateDatas(QOpenGLFunctions &f) {
 				|| (j->nameVersion != peer->nameVersion())
 				|| (j->nameRect.width() != width)) {
 				const auto nameTop = pausedBottom + index * nameHeight;
+				j->peer = peer;
+				j->nameVersion = peer->nameVersion();
 				j->nameRect = QRect(0, nameTop, width, nameHeight);
 				requests.push_back({ .index = i, .updating = true });
 			}
@@ -1369,6 +1371,15 @@ void Viewport::RendererGL::validateDatas(QOpenGLFunctions &f) {
 	for (auto i = 0, kept = 0; i != int(_tileData.size()); ++i) {
 		if (!_tileData[i].stale) {
 			remapped[i] = kept++;
+		}
+	}
+	for (auto i = 0; i != int(_tileData.size()); ++i) {
+		if (!_tileData[i].stale && remapped[i] != i) {
+			// The name image is indexed by _tileData position. Keep the old rect
+			// drawable for this frame, then force a new position and repaint when
+			// validateDatas runs next; otherwise a survivor whose index moved samples
+			// the old atlas row.
+			_tileData[i].nameVersion = -1;
 		}
 	}
 	for (auto i = _tileData.begin(); i != _tileData.end();) {
