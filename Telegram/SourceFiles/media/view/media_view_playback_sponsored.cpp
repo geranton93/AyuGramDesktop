@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/view/media_view_playback_sponsored.h"
 
+#include "ayu/ayu_settings.h"
 #include "boxes/premium_preview_box.h"
 #include "data/components/sponsored_messages.h"
 #include "data/data_file_origin.h"
@@ -561,9 +562,15 @@ PlaybackSponsored::PlaybackSponsored(
 , _itemId(item->fullId())
 , _controlsGeometry(controls->geometryValue())
 , _timer([=] { update(); }) {
+	AyuSettings::getInstance().disableAdsChanges(
+	) | rpl::filter([](bool disabled) {
+		return disabled;
+	}) | rpl::on_next([=] {
+		clearForDisabledAds();
+	}, _lifetime);
 	_session->sponsoredMessages().requestForVideo(item, crl::guard(this, [=](
 			Data::SponsoredForVideo data) {
-		if (data.list.empty()) {
+		if (AyuSettings::getInstance().disableAds() || data.list.empty()) {
 			return;
 		}
 		_data = std::move(data);
@@ -640,7 +647,18 @@ void PlaybackSponsored::finish() {
 	}
 }
 
+void PlaybackSponsored::clearForDisabledAds() {
+	finish();
+	_start = 0;
+	_allowCloseAt = 0;
+	_widget = nullptr;
+}
+
 void PlaybackSponsored::update() {
+	if (AyuSettings::getInstance().disableAds()) {
+		clearForDisabledAds();
+		return;
+	}
 	if (!_data || !_start) {
 		return;
 	}
@@ -688,6 +706,9 @@ void PlaybackSponsored::update() {
 }
 
 void PlaybackSponsored::show(const Data::SponsoredMessage &data) {
+	if (AyuSettings::getInstance().disableAds()) {
+		return;
+	}
 	_widget = std::make_unique<Message>(
 		_parent,
 		_show,
@@ -715,6 +736,9 @@ void PlaybackSponsored::show(const Data::SponsoredMessage &data) {
 }
 
 void PlaybackSponsored::showPremiumPromo() {
+	if (AyuSettings::getInstance().disableAds()) {
+		return;
+	}
 	ShowPremiumPreviewBox(_show, PremiumFeature::NoAds);
 }
 

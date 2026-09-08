@@ -703,6 +703,15 @@ OverlayWidget::OverlayWidget()
 	) | rpl::on_next([=] {
 		refreshLang();
 	}, lifetime());
+	AyuSettings::getInstance().disableAdsChanges(
+	) | rpl::filter([](bool disabled) {
+		return disabled;
+	}) | rpl::on_next([=] {
+		initSponsoredButton();
+		refreshCaption();
+		updateControlsGeometry();
+		update();
+	}, lifetime());
 
 	_lastPositiveVolume = (Core::App().settings().videoVolume() > 0.)
 		? Core::App().settings().videoVolume()
@@ -2219,7 +2228,9 @@ void OverlayWidget::refreshPollVotersWidgetGeometry() {
 
 void OverlayWidget::fillContextMenuActions(
 		const Ui::Menu::MenuCallback &addAction) {
-	if (_message && _message->isSponsored()) {
+	if (_message
+		&& _message->isSponsored()
+		&& !AyuSettings::getInstance().disableAds()) {
 		if (const auto window = findWindow()) {
 			const auto show = window->uiShow();
 			const auto fullId = _message->fullId();
@@ -4202,6 +4213,10 @@ void OverlayWidget::refreshCaption() {
 		if (_stories) {
 			return StripQuoteEntities(_stories->captionText());
 		} else if (_message) {
+			if (_message->isSponsored()
+				&& AyuSettings::getInstance().disableAds()) {
+				return TextWithEntities();
+			}
 			if (const auto caption = InstantViewMediaCaption(
 					_message,
 					_photo,
@@ -4210,7 +4225,8 @@ void OverlayWidget::refreshCaption() {
 			}
 			if (const auto media = _message->media()) {
 				if (media->webpage()) {
-					if (_message->isSponsored()) {
+					if (_message->isSponsored()
+						&& !AyuSettings::getInstance().disableAds()) {
 						return TextWithEntities()
 							.append(tr::bold(media->webpage()->title))
 							.append('\n')
@@ -4902,7 +4918,10 @@ void OverlayWidget::displayVideoStream(
 }
 
 void OverlayWidget::initSponsoredButton() {
-	const auto has = _message && _message->isSponsored() && _session;
+	const auto has = _message
+		&& _message->isSponsored()
+		&& _session
+		&& !AyuSettings::getInstance().disableAds();
 	if (has && _sponsoredButton) {
 		return;
 	} else if (!has && _sponsoredButton) {

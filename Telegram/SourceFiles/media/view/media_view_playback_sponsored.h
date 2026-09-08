@@ -49,6 +49,7 @@ private:
 
 	void update();
 	void finish();
+	void clearForDisabledAds();
 	void updatePaused();
 	void showPremiumPromo();
 	void setPausedInside(bool paused);

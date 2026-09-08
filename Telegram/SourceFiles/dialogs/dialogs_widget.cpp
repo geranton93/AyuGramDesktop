@@ -528,6 +528,16 @@ Widget::Widget(
 		listScrollUpdated();
 	}, lifetime());
 
+	AyuSettings::getInstance().disableAdsChanges(
+	) | rpl::filter([](bool disabled) {
+		return disabled;
+	}) | rpl::on_next([=] {
+		_peerSearch.disableSponsored();
+		_inner->clearSponsoredPeerSearchResults();
+		listScrollUpdated();
+		update();
+	}, lifetime());
+
 	rpl::combine(
 		session().api().dialogsLoadMayBlockByDate(),
 		session().api().dialogsLoadBlockedByDate()

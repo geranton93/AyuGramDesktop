@@ -46,6 +46,10 @@ void PeerSearch::request(
 		return;
 	}
 	auto &cache = _cache[_query];
+	if (AyuSettings::getInstance().disableAds()) {
+		cache.result.sponsored.clear();
+		cache.sponsoredReady = true;
+	}
 	if (cache.peersReady && cache.sponsoredReady) {
 		finish(cache.result);
 		return;
@@ -57,9 +61,11 @@ void PeerSearch::request(
 	}
 	cache.requested = true;
 	cache.result.query = _query;
-	if (_query.size() < kMinSponsoredQueryLength) {
+	if (_query.size() < kMinSponsoredQueryLength
+		|| _type != Type::WithSponsored
+		|| AyuSettings::getInstance().disableAds()) {
 		cache.sponsoredReady = true;
-	} else if (_type == Type::WithSponsored) {
+	} else {
 		requestSponsored();
 	}
 	requestPeers();
@@ -93,6 +99,15 @@ void PeerSearch::requestPeers() {
 }
 
 void PeerSearch::requestSponsored() {
+	if (AyuSettings::getInstance().disableAds()) {
+		auto &cache = _cache[_query];
+		cache.result.sponsored.clear();
+		cache.sponsoredReady = true;
+		if (cache.peersReady) {
+			finish(cache.result);
+		}
+		return;
+	}
 	const auto requestId = _session->api().request(
 		MTPcontacts_GetSponsoredPeers(MTP_string(_query))
 	).done([=](
@@ -149,7 +164,9 @@ void PeerSearch::finishSponsored(
 		mtpRequestId requestId,
 		PeerSearchResult result) {
 	const auto query = _sponsoredRequests.take(requestId);
-	Assert(query.has_value());
+	if (!query) {
+		return;
+	}
 
 	auto &cache = _cache[*query];
 	cache.sponsoredReady = true;
@@ -162,6 +179,22 @@ void PeerSearch::finishSponsored(
 void PeerSearch::finish(PeerSearchResult result) {
 	if (const auto onstack = base::take(_callback)) {
 		onstack(std::move(result));
+	}
+}
+
+void PeerSearch::disableSponsored() {
+	if (_type != Type::WithSponsored) {
+		return;
+	}
+	for (const auto &[requestId, query] : base::take(_sponsoredRequests)) {
+		_session->api().request(requestId).cancel();
+	}
+	for (auto &[query, cache] : _cache) {
+		cache.result.sponsored.clear();
+		cache.sponsoredReady = true;
+		if (cache.peersReady && _query == query) {
+			finish(cache.result);
+		}
 	}
 }
 

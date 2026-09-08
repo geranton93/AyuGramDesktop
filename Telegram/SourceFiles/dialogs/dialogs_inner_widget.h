@@ -145,6 +145,7 @@ public:
 		SearchRequestType type,
 		int fullCount);
 	void peerSearchReceived(Api::PeerSearchResult result);
+	void clearSponsoredPeerSearchResults();
 	void idSearchReceived(const std::vector<not_null<PeerData*>> &results);
 
 	[[nodiscard]] FilterId filterId() const;

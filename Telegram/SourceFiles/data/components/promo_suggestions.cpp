@@ -57,6 +57,15 @@ PromoSuggestions::PromoSuggestions(
 	) | rpl::on_next([=] {
 		refreshTopPromotion();
 	}, _lifetime);
+	AyuSettings::getInstance().disableAdsChanges(
+	) | rpl::on_next([=](bool disabled) {
+		if (disabled) {
+			setTopPromoted(nullptr, QString(), QString());
+		} else {
+			_topPromotionNextRequestTime = 0;
+			refreshTopPromotion();
+		}
+	}, _lifetime);
 }
 
 PromoSuggestions::~PromoSuggestions() = default;
@@ -138,10 +147,7 @@ void PromoSuggestions::refreshTopPromotion() {
 			const auto &settings = AyuSettings::getInstance();
 			if (settings.disableAds()) {
 				setTopPromoted(nullptr, QString(), QString());
-				return;
-			}
-
-			if (const auto peer = data.vpeer()) {
+			} else if (const auto peer = data.vpeer()) {
 				const auto peerId = peerFromMTP(*peer);
 				const auto history = _session->data().history(peerId);
 				setTopPromoted(

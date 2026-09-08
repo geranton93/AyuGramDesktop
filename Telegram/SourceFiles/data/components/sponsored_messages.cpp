@@ -67,23 +67,53 @@ SponsoredMessages::SponsoredMessages(not_null<Main::Session*> session)
 			clear();
 		}
 	}, _lifetime);
+	AyuSettings::getInstance().disableAdsChanges(
+	) | rpl::filter([](bool disabled) {
+		return disabled;
+	}) | rpl::on_next([=] {
+		clearForDisabledAds();
+	}, _settingsLifetime);
 }
 
 SponsoredMessages::~SponsoredMessages() {
 	Expects(_data.empty());
 	Expects(_requests.empty());
 	Expects(_viewRequests.empty());
+	Expects(_dataForVideo.empty());
+	Expects(_requestsForVideo.empty());
 }
 
 void SponsoredMessages::clear() {
 	_lifetime.destroy();
+	_settingsLifetime.destroy();
+	clearForDisabledAds();
+}
+
+void SponsoredMessages::clearForDisabledAds() {
+	_clearTimer.cancel();
 	for (const auto &request : base::take(_requests)) {
-		_session->api().request(request.second.requestId).cancel();
+		if (request.second.requestId) {
+			_session->api().request(request.second.requestId).cancel();
+		}
 	}
 	for (const auto &request : base::take(_viewRequests)) {
-		_session->api().request(request.second.requestId).cancel();
+		if (request.second.requestId) {
+			_session->api().request(request.second.requestId).cancel();
+		}
+	}
+	const auto requestsForVideo = base::take(_requestsForVideo);
+	for (const auto &request : requestsForVideo) {
+		if (request.second.requestId) {
+			_session->api().request(request.second.requestId).cancel();
+		}
 	}
 	base::take(_data);
+	base::take(_dataForVideo);
+	for (const auto &request : requestsForVideo) {
+		for (const auto &callback : request.second.callbacks) {
+			callback({});
+		}
+	}
 }
 
 void SponsoredMessages::clearOldRequests() {
@@ -107,7 +137,7 @@ void SponsoredMessages::clearOldRequests() {
 
 SponsoredMessages::AppendResult SponsoredMessages::append(
 		not_null<History*> history) {
-	if (isTopBarFor(history)) {
+	if (!canHaveFor(history) || isTopBarFor(history)) {
 		return SponsoredMessages::AppendResult::None;
 	}
 	const auto it = _data.find(history);
@@ -276,6 +306,9 @@ auto SponsoredMessages::injectState(not_null<History*> history)
 HistoryItem *SponsoredMessages::injectItem(
 		not_null<History*> history,
 		not_null<HistoryItem*> after) {
+	if (!canHaveFor(history)) {
+		return nullptr;
+	}
 	const auto it = _data.find(history);
 	if (it == end(_data)) {
 		return nullptr;
@@ -442,7 +475,7 @@ void SponsoredMessages::requestForVideo(
 void SponsoredMessages::updateForVideo(
 		FullMsgId itemId,
 		SponsoredForVideoState state) {
-	if (state.initial()) {
+	if (AyuSettings::getInstance().disableAds() || state.initial()) {
 		return;
 	}
 	const auto i = _dataForVideo.find(_session->data().peer(itemId.peer));
@@ -454,7 +487,14 @@ void SponsoredMessages::updateForVideo(
 void SponsoredMessages::parse(
 		not_null<History*> history,
 		const MTPmessages_sponsoredMessages &list) {
-	auto &request = _requests[history];
+	if (!canHaveFor(history)) {
+		return;
+	}
+	const auto requestIt = _requests.find(history);
+	if (requestIt == end(_requests)) {
+		return;
+	}
+	auto &request = requestIt->second;
 	request.lastReceived = crl::now();
 	request.requestId = 0;
 	if (!_clearTimer.isActive()) {
@@ -489,7 +529,14 @@ void SponsoredMessages::parse(
 void SponsoredMessages::parseForVideo(
 		not_null<PeerData*> peer,
 		const MTPmessages_sponsoredMessages &list) {
-	auto &request = _requestsForVideo[peer];
+	if (AyuSettings::getInstance().disableAds()) {
+		return;
+	}
+	const auto requestIt = _requestsForVideo.find(peer);
+	if (requestIt == end(_requestsForVideo)) {
+		return;
+	}
+	auto &request = requestIt->second;
 	request.lastReceived = crl::now();
 	request.requestId = 0;
 	if (!_clearTimer.isActive()) {
@@ -540,6 +587,9 @@ SponsoredForVideo SponsoredMessages::prepareForVideo(
 FullMsgId SponsoredMessages::fillTopBar(
 		not_null<History*> history,
 		not_null<Ui::RpWidget*> widget) {
+	if (AyuSettings::getInstance().disableAds()) {
+		return {};
+	}
 	const auto it = _data.find(history);
 	if (it != end(_data)) {
 		const auto &list = it->second;
@@ -725,6 +775,9 @@ void SponsoredMessages::clearItems(not_null<History*> history) {
 
 const SponsoredMessages::Entry *SponsoredMessages::find(
 		const FullMsgId &fullId) const {
+	if (AyuSettings::getInstance().disableAds()) {
+		return nullptr;
+	}
 	if (!peerIsChannel(fullId.peer) && !peerIsUser(fullId.peer)) {
 		return nullptr;
 	}
@@ -752,6 +805,9 @@ void SponsoredMessages::view(const FullMsgId &fullId) {
 }
 
 void SponsoredMessages::view(const QByteArray &randomId) {
+	if (AyuSettings::getInstance().disableAds()) {
+		return;
+	}
 	auto &request = _viewRequests[randomId];
 	if (request.requestId || TooEarlyForRequest(request.lastReceived)) {
 		return;
@@ -759,7 +815,12 @@ void SponsoredMessages::view(const QByteArray &randomId) {
 	request.requestId = _session->api().request(
 		MTPmessages_ViewSponsoredMessage(MTP_bytes(randomId))
 	).done([=] {
-		auto &request = _viewRequests[randomId];
+		const auto i = _viewRequests.find(randomId);
+		if (i == end(_viewRequests)
+			|| AyuSettings::getInstance().disableAds()) {
+			return;
+		}
+		auto &request = i->second;
 		request.lastReceived = crl::now();
 		request.requestId = 0;
 	}).fail([=] {
@@ -778,6 +839,9 @@ SponsoredMessages::Details SponsoredMessages::lookupDetails(
 
 SponsoredMessages::Details SponsoredMessages::lookupDetails(
 		const SponsoredMessage &data) const {
+	if (AyuSettings::getInstance().disableAds()) {
+		return {};
+	}
 	return {
 		.info = Prepare(data),
 		.link = data.link,
@@ -794,6 +858,9 @@ SponsoredMessages::Details SponsoredMessages::lookupDetails(
 
 SponsoredMessages::Details SponsoredMessages::lookupDetails(
 		const Api::SponsoredSearchResult &data) const {
+	if (AyuSettings::getInstance().disableAds()) {
+		return {};
+	}
 	return {
 		.info = Prepare(data),
 		.canReport = true,
@@ -815,6 +882,9 @@ void SponsoredMessages::clicked(
 		const QByteArray &randomId,
 		bool isMedia,
 		bool isFullscreen) {
+	if (AyuSettings::getInstance().disableAds()) {
+		return;
+	}
 	using Flag = MTPmessages_ClickSponsoredMessage::Flag;
 	_session->api().request(MTPmessages_ClickSponsoredMessage(
 		MTP_flags(Flag(0)
@@ -847,6 +917,9 @@ SponsoredReportAction SponsoredMessages::createReportCallback(
 SponsoredReportAction SponsoredMessages::createReportCallback(
 		const QByteArray &randomId,
 		Fn<void()> erase) {
+	if (AyuSettings::getInstance().disableAds()) {
+		return { .callback = [=](const auto &...) {} };
+	}
 	using TLChoose = MTPDchannels_sponsoredMessageReportResultChooseOption;
 	using TLAdsHidden = MTPDchannels_sponsoredMessageReportResultAdsHidden;
 	using TLReported = MTPDchannels_sponsoredMessageReportResultReported;
@@ -863,6 +936,11 @@ SponsoredReportAction SponsoredMessages::createReportCallback(
 	const auto state = std::make_shared<State>();
 
 	return { .callback = [=](Result::Id optionId, Fn<void(Result)> done) {
+		if (AyuSettings::getInstance().disableAds()) {
+			erase();
+			done({ .result = Result::FinalStep::Hidden });
+			return;
+		}
 		if (optionId == Result::Id("-1")) {
 			erase();
 			return;
@@ -912,12 +990,15 @@ SponsoredReportAction SponsoredMessages::createReportCallback(
 
 SponsoredMessages::State SponsoredMessages::state(
 		not_null<History*> history) const {
+	if (AyuSettings::getInstance().disableAds()) {
+		return State::None;
+	}
 	const auto it = _data.find(history);
 	return (it == end(_data)) ? State::None : it->second.state;
 }
 
 bool SponsoredMessages::hasUnshownFor(not_null<History*> history) const {
-	if (isTopBarFor(history)) {
+	if (!canHaveFor(history) || isTopBarFor(history)) {
 		return false;
 	}
 	const auto it = _data.find(history);

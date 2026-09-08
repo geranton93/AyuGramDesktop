@@ -40,11 +40,12 @@ public:
         CacheOnly,
         CacheOrRemote,
     };
-    void request(
-        const QString &query,
-        Fn<void(PeerSearchResult)> callback,
-        RequestType type = RequestType::CacheOrRemote);
-    void clear();
+	void request(
+		const QString &query,
+		Fn<void(PeerSearchResult)> callback,
+		RequestType type = RequestType::CacheOrRemote);
+	void disableSponsored();
+	void clear();
 
 private:
     struct CacheEntry {

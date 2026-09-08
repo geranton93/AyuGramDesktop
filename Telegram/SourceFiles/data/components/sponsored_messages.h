@@ -234,6 +234,7 @@ private:
 		const MTPSponsoredMessage &message);
 	[[nodiscard]] SponsoredForVideo prepareForVideo(
 		not_null<PeerData*> peer);
+	void clearForDisabledAds();
 	void clearOldRequests();
 
 	const Entry *find(const FullMsgId &fullId) const;
@@ -251,6 +252,7 @@ private:
 	rpl::event_stream<FullMsgId> _itemRemoved;
 
 	rpl::lifetime _lifetime;
+	rpl::lifetime _settingsLifetime;
 
 };
 

@@ -4488,6 +4488,66 @@ void InnerWidget::clearPeerSearchResults() {
 	_peerSearchResults.clear();
 }
 
+void InnerWidget::clearSponsoredPeerSearchResults() {
+	const auto hasSponsored = ranges::any_of(
+		_peerSearchResults,
+		[](const auto &result) { return result->sponsored != nullptr; });
+	if (!hasSponsored) {
+		return;
+	}
+	const auto selected = base::in_range(
+		_peerSearchSelected,
+		0,
+		_peerSearchResults.size())
+		? _peerSearchResults[_peerSearchSelected].get()
+		: nullptr;
+	const auto pressed = base::in_range(
+		_peerSearchPressed,
+		0,
+		_peerSearchResults.size())
+		? _peerSearchResults[_peerSearchPressed].get()
+		: nullptr;
+	const auto pressedRightButtonWasSponsored = _pressedRightButtonData
+		&& ranges::any_of(_peerSearchResults, [&](const auto &result) {
+			return result->sponsored
+				&& _pressedRightButtonData == &result->sponsored->button;
+		});
+	if (_peerSearchMenu >= 0) {
+		_peerSearchMenu = -1;
+		_menu = nullptr;
+	}
+	updateSelectedRow();
+	if (pressed) {
+		pressed->row.stopLastRipple();
+	}
+	_peerSearchResults.erase(
+		ranges::remove_if(_peerSearchResults, [](const auto &result) {
+			return result->sponsored != nullptr;
+		}),
+		end(_peerSearchResults));
+	const auto indexOf = [&](const PeerSearchResult *result) {
+		const auto i = ranges::find_if(
+			_peerSearchResults,
+			[=](const auto &entry) {
+				return entry.get() == result;
+			});
+		return (i == end(_peerSearchResults))
+			? -1
+			: int(std::distance(begin(_peerSearchResults), i));
+	};
+	_peerSearchSelected = indexOf(selected);
+	_peerSearchPressed = indexOf(pressed);
+	if (_peerSearchSelected < 0) {
+		_selectedRightButton = false;
+	}
+	if (_peerSearchPressed < 0 || pressedRightButtonWasSponsored) {
+		_pressedRightButton = false;
+		_pressedRightButtonData = nullptr;
+	}
+	updateSelectedRow();
+	refresh();
+}
+
 void InnerWidget::clearPreviewResults() {
 	_previewResults.clear();
 	_previewCount = 0;
