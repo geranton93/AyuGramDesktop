@@ -35,7 +35,7 @@ base::Timer &workerTimer() {
 void markAsOnline(not_null<Main::Session*> session) {
 	state[session->userId().bare] = true;
 	workerTimer().cancel();
-	workerTimer().callEach(3000);
+	workerTimer().callOnce(3000);
 }
 
 void lateInit() {
@@ -108,9 +108,10 @@ void initialize() {
 	Core::App().domain().accountsChanges(
 	) | rpl::on_next([] {
 		removeStaleState();
+		workerTimer().callOnce(3000);
 	}, workerLifetime);
 
-	workerTimer().callEach(3000);
+	workerTimer().callOnce(3000);
 }
 
 }
