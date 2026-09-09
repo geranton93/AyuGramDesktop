@@ -37,43 +37,76 @@ And many more. Check out our [Documentation](https://docs.ayugram.one/desktop/).
 
 ## Downloads
 
+The canonical binaries for this fork are published in the [latest stable fork release](https://github.com/geranton93/AyuGramDesktop/releases/latest).
+Use the [full releases list](https://github.com/geranton93/AyuGramDesktop/releases) when you intentionally want to test a beta or pre-release.
+The fork-specific updater trusts only releases from `geranton93/AyuGramDesktop`.
+If a platform asset is not present in the latest release yet, use that platform's build guide below instead of substituting an upstream package.
+
 ### Windows
 
-#### Fork release
+#### Recommended: signed fork release
 
-You can download the prebuilt Windows binary from the fork's [Releases tab](https://github.com/geranton93/AyuGramDesktop/releases).
+Download the installer for your architecture from the [latest stable fork release](https://github.com/geranton93/AyuGramDesktop/releases/latest).
+The x64 installer is the right choice for most Windows PCs; use the ARM64 installer on Windows for ARM and the x86 installer only
+for legacy 32-bit Windows. Portable ZIP archives are also available when a release publishes them.
 
-#### Winget
+With the [GitHub CLI](https://cli.github.com/), the current x64 installer can be downloaded with:
 
-```bash
-winget install RadolynLabs.AyuGramDesktop
+```powershell
+gh release download --repo geranton93/AyuGramDesktop --pattern 'td-setup-win-x64-*.exe' --dir "$env:USERPROFILE\Downloads"
 ```
 
-#### Scoop
+Run the downloaded installer manually. For a portable installation, download the matching `td-portable-win-*.zip`, extract it,
+and launch `AyuGram.exe`.
 
-```bash
-scoop bucket add extras
-scoop install ayugram
-```
+Winget and Scoop packages are community-maintained and are not published by this fork. They may install a different AyuGram build,
+so use the fork's Releases when you need the fork-specific updater.
 
 #### Self-built
 
-Follow the [fork build guide](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-win-x64.md) if you want to
+Follow the [fork build guide](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-win.md) if you want to
 build by yourself.
 
 ### macOS
 
-#### Fork release
+#### Recommended: signed fork release
 
-You can download the prebuilt macOS package from the fork's [Releases tab](https://github.com/geranton93/AyuGramDesktop/releases).
+Download the `.dmg` for your architecture from the [latest stable fork release](https://github.com/geranton93/AyuGramDesktop/releases/latest),
+open it, and drag AyuGram to `Applications`. Choose the Apple Silicon package on an arm64 Mac and the Intel package on an x86_64 Mac.
 
-#### Homebrew
+With the [GitHub CLI](https://cli.github.com/), macOS packages can be downloaded with:
 
 ```bash
-brew install --cask ayugram
+gh release download --repo geranton93/AyuGramDesktop --pattern '*.dmg' --dir "$HOME/Downloads"
+open "$HOME/Downloads"/*.dmg
 ```
 
+The Homebrew cask is community-maintained and is not published by this fork. Use the signed DMG from the fork's Releases for the
+fork-specific updater.
+
+Follow the [macOS build guide](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-mac.md) to build from source.
+
+### Linux x64
+
+#### Fork release
+
+When a release contains the Linux x64 archive, download and extract it with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+mkdir -p "$HOME/Downloads" "$HOME/.local/opt/ayugram"
+gh release download --repo geranton93/AyuGramDesktop --pattern 'td-setup-linux-x64-*.tar.xz' --dir "$HOME/Downloads"
+tar -xJf "$HOME"/Downloads/td-setup-linux-x64-*.tar.xz -C "$HOME/.local/opt/ayugram"
+cd "$HOME/.local/opt/ayugram/AyuGram"
+./AyuGram
+```
+
+If the matching asset is not present yet, use the [Linux build guide](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-linux.md)
+or one of the community packages below.
+
 ### Arch Linux
+
+The following Linux packages are community-maintained. They are convenient installation options, but they are not controlled by this
+fork and may not use the fork-specific updater. For the canonical fork build, use the Linux archive from Releases or build from source.
 
 #### From source (recommended)
 

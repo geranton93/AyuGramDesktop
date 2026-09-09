@@ -36,43 +36,75 @@
 
 ## Установка
 
+Канонические сборки этого форка публикуются в [последнем стабильном релизе форка](https://github.com/geranton93/AyuGramDesktop/releases/latest).
+Полный [список релизов](https://github.com/geranton93/AyuGramDesktop/releases) используйте, если намеренно устанавливаете beta или pre-release.
+Обновлятор форка доверяет только релизам из `geranton93/AyuGramDesktop`.
+Если в последнем релизе ещё нет файла для вашей платформы, используйте приведённое ниже руководство по сборке, а не пакет upstream-проекта.
+
 ### Windows
 
-#### Версия форка
+#### Рекомендуемый способ: подписанный релиз форка
 
-Вы можете скачать готовый бинарный файл со вкладки [Releases форка](https://github.com/geranton93/AyuGramDesktop/releases).
+Скачайте установщик для нужной архитектуры из [последнего стабильного релиза форка](https://github.com/geranton93/AyuGramDesktop/releases/latest).
+Для большинства компьютеров с Windows подходит x64; ARM64 используйте на Windows for ARM, а x86 — только для старой 32-разрядной Windows.
+Если релиз их публикует, там также доступны portable ZIP-архивы.
 
-#### Winget
+С помощью [GitHub CLI](https://cli.github.com/) текущий установщик x64 можно скачать командой:
 
-```bash
-winget install RadolynLabs.AyuGramDesktop
+```powershell
+gh release download --repo geranton93/AyuGramDesktop --pattern 'td-setup-win-x64-*.exe' --dir "$env:USERPROFILE\Downloads"
 ```
 
-#### Scoop
+Запустите скачанный установщик вручную. Для portable-версии скачайте соответствующий `td-portable-win-*.zip`, распакуйте его
+и запустите `AyuGram.exe`.
 
-```bash
-scoop bucket add extras
-scoop install ayugram
-```
+Пакеты Winget и Scoop поддерживаются сообществом, а не этим форком. Они могут устанавливать другую сборку AyuGram,
+поэтому для fork-specific updater используйте Releases форка.
 
 #### Сборка вручную
 
-Следуйте [руководству по сборке форка](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-win-x64.md), если
+Следуйте [руководству по сборке форка](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-win.md), если
 вы хотите собрать AyuGram сами.
 
 ### macOS
 
-#### Версия форка
+#### Рекомендуемый способ: подписанный релиз форка
 
-Вы можете скачать подписанный пакет со вкладки [Releases форка](https://github.com/geranton93/AyuGramDesktop/releases).
+Скачайте `.dmg` для своей архитектуры из [последнего стабильного релиза форка](https://github.com/geranton93/AyuGramDesktop/releases/latest),
+откройте его и перетащите AyuGram в `Applications`. Для Mac с arm64 выбирайте Apple Silicon, для x86_64 — Intel.
 
-#### Homebrew
+С помощью [GitHub CLI](https://cli.github.com/) пакет macOS можно скачать командами:
 
 ```bash
-brew install --cask ayugram
+gh release download --repo geranton93/AyuGramDesktop --pattern '*.dmg' --dir "$HOME/Downloads"
+open "$HOME/Downloads"/*.dmg
 ```
 
+Homebrew cask поддерживается сообществом, а не этим форком. Для fork-specific updater используйте подписанный DMG из Releases форка.
+
+Для сборки из исходников используйте [руководство по сборке macOS](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-mac.md).
+
+### Linux x64
+
+#### Релиз форка
+
+Если в релизе уже опубликован архив Linux x64, скачайте и распакуйте его через [GitHub CLI](https://cli.github.com/):
+
+```bash
+mkdir -p "$HOME/Downloads" "$HOME/.local/opt/ayugram"
+gh release download --repo geranton93/AyuGramDesktop --pattern 'td-setup-linux-x64-*.tar.xz' --dir "$HOME/Downloads"
+tar -xJf "$HOME"/Downloads/td-setup-linux-x64-*.tar.xz -C "$HOME/.local/opt/ayugram"
+cd "$HOME/.local/opt/ayugram/AyuGram"
+./AyuGram
+```
+
+Если подходящего файла пока нет, используйте [руководство по сборке Linux](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-linux.md)
+или один из пакетов сообщества ниже.
+
 ### Arch Linux
+
+Следующие Linux-пакеты поддерживаются сообществом. Это удобные варианты установки, но они не контролируются этим форком
+и могут не использовать fork-specific updater. Для канонической сборки форка используйте Linux-архив из Releases или соберите приложение из исходников.
 
 #### Из исходников (рекомендованный способ)
 
