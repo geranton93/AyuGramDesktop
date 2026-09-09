@@ -105,7 +105,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QMimeData>
 
 // AyuGram includes
+#include "ayu/ayu_settings.h"
 #include "ayu/features/forward/ayu_forward.h"
+#include "ayu/premium_promo_policy.h"
 
 
 namespace {
@@ -2308,6 +2310,11 @@ bool MainWidget::preventsCloseSection(
 }
 
 void MainWidget::showNonPremiumLimitToast(bool download) {
+	if (!Ayu::ShouldShowNonPremiumLimitPromo(
+			AyuSettings::getInstance().disableAds(),
+			session().premium())) {
+		return;
+	}
 	const auto parent = _mainSection
 		? ((QWidget*)_mainSection.data())
 		: (_dialogs && _history->isHidden())

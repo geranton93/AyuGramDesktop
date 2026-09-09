@@ -62,6 +62,7 @@ generate_update_keys(Telegram ${res_loc}/update)
 
 if (DESKTOP_APP_TEST_APPS OR DESKTOP_APP_SPECIAL_TARGET)
     include(cmake/test_update_verify.cmake)
+    include(cmake/test_ayu_premium_promo_policy.cmake)
 endif()
 
 set_target_properties(Telegram PROPERTIES AUTOMOC ON)
