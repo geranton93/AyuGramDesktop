@@ -71,7 +71,7 @@ private:
 		void remove(not_null<Task*> task);
 		void resetGeneration();
 		[[nodiscard]] bool empty() const;
-		[[nodiscard]] Task *nextTask(bool onlyHighestPriority) const;
+		[[nodiscard]] Task *nextTask(bool onlyHighestPriority);
 		void removeSession(int index);
 
 	private:
@@ -80,6 +80,7 @@ private:
 			int priority = 0;
 		};
 		std::vector<Enqueued> _tasks;
+		Task *_lastSelected = nullptr;
 
 	};
 	struct DcSessionBalanceData {

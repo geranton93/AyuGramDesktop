@@ -64,6 +64,9 @@ void DownloadManagerMtproto::Queue::enqueue(
 }
 
 void DownloadManagerMtproto::Queue::remove(not_null<Task*> task) {
+	if (_lastSelected == task.get()) {
+		_lastSelected = nullptr;
+	}
 	_tasks.erase(ranges::remove(_tasks, task, &Enqueued::task), end(_tasks));
 }
 
@@ -82,7 +85,7 @@ bool DownloadManagerMtproto::Queue::empty() const {
 	return _tasks.empty();
 }
 
-auto DownloadManagerMtproto::Queue::nextTask(bool onlyHighestPriority) const
+auto DownloadManagerMtproto::Queue::nextTask(bool onlyHighestPriority)
 -> Task* {
 	if (_tasks.empty()) {
 		return nullptr;
@@ -94,13 +97,34 @@ auto DownloadManagerMtproto::Queue::nextTask(bool onlyHighestPriority) const
 	const auto till = (onlyHighestPriority && highestPriority > 0)
 		? ranges::find_if(_tasks, notHighestPriority)
 		: end(_tasks);
-	const auto readyToRequest = [&](const Enqueued &enqueued) {
-		return enqueued.task->readyToRequest();
+	const auto tillIndex = int(till - begin(_tasks));
+	const auto select = [&](int from, int till) -> Task* {
+		if (from == till) {
+			return nullptr;
+		}
+		auto start = from;
+		for (auto i = from; i != till; ++i) {
+			if (_tasks[i].task.get() == _lastSelected) {
+				start = (i + 1 == till) ? from : (i + 1);
+				break;
+			}
+		}
+		const auto count = till - from;
+		for (auto i = 0; i != count; ++i) {
+			const auto index = from + (start - from + i) % count;
+			if (_tasks[index].task->readyToRequest()) {
+				_lastSelected = _tasks[index].task.get();
+				return _lastSelected;
+			}
+		}
+		return nullptr;
 	};
-	const auto first = ranges::find_if(
-		ranges::make_subrange(begin(_tasks), till),
-		readyToRequest);
-	return (first != till) ? first->task.get() : nullptr;
+	if (const auto first = select(0, tillIndex)) {
+		return first;
+	}
+	return (tillIndex != int(_tasks.size()))
+		? select(tillIndex, int(_tasks.size()))
+		: nullptr;
 }
 
 void DownloadManagerMtproto::Queue::removeSession(int index) {

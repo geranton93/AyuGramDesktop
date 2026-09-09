@@ -1696,6 +1696,7 @@ PRIVATE
     media/streaming/media_streaming_loader_local.h
     media/streaming/media_streaming_loader_mtproto.cpp
     media/streaming/media_streaming_loader_mtproto.h
+    media/streaming/media_streaming_prefetch.h
     media/streaming/media_streaming_player.cpp
     media/streaming/media_streaming_player.h
     media/streaming/media_streaming_reader.cpp

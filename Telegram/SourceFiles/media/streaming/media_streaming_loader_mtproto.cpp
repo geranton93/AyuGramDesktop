@@ -193,6 +193,8 @@ void LoaderMtproto::checkStats() {
 	auto durationCountedTill = _stats.front().start;
 	auto duration = crl::time(0);
 	auto received = int64(0);
+	auto latency = crl::time(0);
+	auto latencyCount = int64(0);
 	for (const auto &entry : _stats) {
 		if (entry.start > durationCountedTill) {
 			durationCountedTill = entry.start;
@@ -204,6 +206,8 @@ void LoaderMtproto::checkStats() {
 		}
 		if (entry.end) {
 			received += Storage::kDownloadPartSize;
+			latency += entry.end - entry.start;
+			++latencyCount;
 		}
 	}
 	if (duration) {
@@ -213,6 +217,10 @@ void LoaderMtproto::checkStats() {
 				int64(0),
 				int64(64 * 1024 * 1024))),
 			.unreliable = (received < 3 * Storage::kDownloadPartSize),
+			.latencyMs = int(std::clamp(
+				latencyCount ? latency / latencyCount : crl::time(0),
+				crl::time(0),
+				crl::time(30 * 1000))),
 		});
 	}
 }

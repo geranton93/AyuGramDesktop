@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "media/streaming/media_streaming_common.h"
 #include "media/streaming/media_streaming_loader.h"
+#include "media/streaming/media_streaming_prefetch.h"
 #include "base/bytes.h"
 #include "base/weak_ptr.h"
 #include "base/thread_safe_wrap.h"
@@ -84,7 +85,7 @@ public:
 	~Reader();
 
 private:
-	static constexpr auto kLoadFromRemoteMax = 8;
+	static constexpr auto kLoadFromRemoteMax = Prefetch::kMaxParts;
 
 	struct CacheHelper;
 
@@ -134,7 +135,11 @@ private:
 
 		void processCacheData(PartsMap &&data);
 		void addPart(uint32 offset, QByteArray bytes);
-		PrepareFillResult prepareFill(uint32 from, uint32 till);
+		PrepareFillResult prepareFill(
+			uint32 from,
+			uint32 till,
+			int preloadPartsAhead,
+			uint32 maxOffset);
 
 		// Get up to kLoadFromRemoteMax not loaded parts in from-till range.
 		StackIntVector<kLoadFromRemoteMax> offsetsFromLoader(
@@ -165,7 +170,10 @@ private:
 		void processCachedSizes(const std::vector<int> &sizes);
 		void processPart(uint32 offset, QByteArray &&bytes);
 
-		[[nodiscard]] FillResult fill(uint32 offset, bytes::span buffer);
+		[[nodiscard]] FillResult fill(
+			uint32 offset,
+			bytes::span buffer,
+			int preloadPartsAhead);
 		[[nodiscard]] SerializedSlice unloadToCache();
 
 		[[nodiscard]] QByteArray partForDownloader(uint32 offset) const;
@@ -192,7 +200,8 @@ private:
 		[[nodiscard]] bool computeIsGoodHeader() const;
 		[[nodiscard]] FillResult fillFromHeader(
 			uint32 offset,
-			bytes::span buffer);
+			bytes::span buffer,
+			int preloadPartsAhead);
 		void unloadSlice(Slice &slice) const;
 		void checkSliceFullLoaded(int sliceNumber);
 		[[nodiscard]] bool checkFullInCache() const;
@@ -216,6 +225,7 @@ private:
 	void cancelLoadInRange(uint32 from, uint32 till);
 	void loadAtOffset(uint32 offset);
 	void checkLoadWillBeFirst(uint32 offset);
+	void recordConsumed(int64 bytes);
 	bool processLoadedParts();
 
 	bool checkForSomethingMoreReceived();
@@ -252,6 +262,14 @@ private:
 	PriorityQueue _loadingOffsets;
 
 	Slices _slices;
+	std::atomic<int64> _downloadBytesPerSecond = 0;
+	std::atomic<int64> _consumptionBytesPerSecond = 0;
+	std::atomic<int> _requestLatencyMs = 0;
+	std::atomic<bool> _downloadUnreliable = true;
+	std::atomic<crl::time> _lastDownloadAt = 0;
+	crl::time _consumptionWindowStart = 0;
+	int64 _consumedBytes = 0;
+	std::optional<uint32> _lastFillEnd;
 
 	// Even if streaming had failed, the Reader can work for the downloader.
 	std::optional<Error> _streamingError;

@@ -22,10 +22,9 @@ constexpr auto kMaxPartsInHeader = 64;
 constexpr auto kMaxOnlyInHeader = 80 * kPartSize;
 constexpr auto kPartsOutsideFirstSliceGood = 8;
 constexpr auto kSlicesInMemory = 2;
+constexpr auto kPrefetchStatsStaleAfter = crl::time(3000);
 
-// 1 MB of parts are requested from cloud ahead of reading demand.
-constexpr auto kPreloadPartsAhead = 8;
-constexpr auto kDownloaderRequestsLimit = 4;
+constexpr auto kDownloaderRequestsLimit = 8;
 
 using PartsMap = base::flat_map<uint32, QByteArray>;
 
@@ -270,14 +269,21 @@ void Reader::Slice::addPart(uint32 offset, QByteArray bytes) {
 
 auto Reader::Slice::prepareFill(
 		uint32 from,
-		uint32 till) -> PrepareFillResult {
+		uint32 till,
+		int preloadPartsAhead,
+		uint32 maxOffset) -> PrepareFillResult {
 	auto result = PrepareFillResult();
 
 	result.ready = false;
 	const auto fromOffset = (from / kPartSize) * kPartSize;
-	const auto tillPart = (till + kPartSize - 1) / kPartSize;
-	const auto preloadTillOffset = (tillPart + kPreloadPartsAhead)
-		* kPartSize;
+	const auto tillPart = (uint64(till) + kPartSize - 1) / kPartSize;
+	const auto maxPart = (uint64(maxOffset) + kPartSize - 1) / kPartSize;
+	const auto preloadTillPart = std::min(
+		tillPart + uint64(std::max(preloadPartsAhead, 0)),
+		maxPart);
+	const auto preloadTillOffset = uint32(std::min(
+		preloadTillPart * uint64(kPartSize),
+		uint64(maxOffset)));
 
 	const auto after = ranges::upper_bound(
 		parts,
@@ -327,7 +333,7 @@ auto Reader::Slice::offsetsFromLoader(uint32 from, uint32 till) const
 		&PartsMap::value_type::first);
 	auto check = (after == begin(parts)) ? after : (after - 1);
 	const auto end = parts.end();
-	for (auto offset = from; offset != till; offset += kPartSize) {
+	for (auto offset = from; offset < till; offset += kPartSize) {
 		while (check != end && check->first < offset) {
 			++check;
 		}
@@ -548,7 +554,10 @@ void Reader::Slices::processPart(
 	checkSliceFullLoaded(index + 1);
 }
 
-auto Reader::Slices::fill(uint32 offset, bytes::span buffer) -> FillResult {
+auto Reader::Slices::fill(
+		uint32 offset,
+		bytes::span buffer,
+		int preloadPartsAhead) -> FillResult {
 	Expects(!buffer.empty());
 	Expects(offset < _size);
 	Expects(offset + buffer.size() <= _size);
@@ -562,7 +571,7 @@ auto Reader::Slices::fill(uint32 offset, bytes::span buffer) -> FillResult {
 		Assert(waitingForHeaderCache());
 		return {};
 	} else if (isFullInHeader()) {
-		return fillFromHeader(offset, buffer);
+		return fillFromHeader(offset, buffer, preloadPartsAhead);
 	}
 
 	auto result = FillResult();
@@ -616,9 +625,17 @@ auto Reader::Slices::fill(uint32 offset, bytes::span buffer) -> FillResult {
 	const auto secondTill = (till > (fromSlice + 1) * kInSlice)
 		? (till - (fromSlice + 1) * kInSlice)
 		: 0;
-	const auto first = _data[fromSlice].prepareFill(firstFrom, firstTill);
+	const auto first = _data[fromSlice].prepareFill(
+		firstFrom,
+		firstTill,
+		preloadPartsAhead,
+		maxSliceSize(fromSlice + 1));
 	const auto second = (fromSlice + 1 < tillSlice)
-		? _data[fromSlice + 1].prepareFill(secondFrom, secondTill)
+		? _data[fromSlice + 1].prepareFill(
+			secondFrom,
+			secondTill,
+			preloadPartsAhead,
+			maxSliceSize(fromSlice + 2))
 		: Slice::PrepareFillResult();
 	handlePrepareResult(fromSlice, first);
 	if (fromSlice + 1 < tillSlice) {
@@ -650,13 +667,20 @@ auto Reader::Slices::fill(uint32 offset, bytes::span buffer) -> FillResult {
 	return result;
 }
 
-auto Reader::Slices::fillFromHeader(uint32 offset, bytes::span buffer)
+auto Reader::Slices::fillFromHeader(
+		uint32 offset,
+		bytes::span buffer,
+		int preloadPartsAhead)
 -> FillResult {
 	auto result = FillResult();
 	const auto from = offset;
 	const auto till = uint32(offset + buffer.size());
 
-	const auto prepared = _header.prepareFill(from, till);
+	const auto prepared = _header.prepareFill(
+		from,
+		till,
+		preloadPartsAhead,
+		maxSliceSize(0));
 	for (const auto full : prepared.offsetsFromLoader.values()) {
 		if (full < _size) {
 			result.offsetsFromLoader.add(full);
@@ -858,6 +882,9 @@ Reader::Reader(
 , _slices(_loader->size(), _cacheHelper != nullptr) {
 	_loader->parts(
 	) | rpl::on_next([=](LoadedPart &&part) {
+		if (part.offset != LoadedPart::kFailedOffset) {
+			_lastDownloadAt.store(crl::now(), std::memory_order_release);
+		}
 		if (_attachedDownloader) {
 			const auto weak = base::make_weak(this);
 			_partsForDownloader.fire_copy(part);
@@ -874,6 +901,18 @@ Reader::Reader(
 			_waiting.store(nullptr, std::memory_order_release);
 			waiting->release();
 		}
+	}, _lifetime);
+
+	_loader->speedEstimate() | rpl::on_next([=](SpeedEstimate estimate) {
+		_downloadBytesPerSecond.store(
+			estimate.bytesPerSecond,
+			std::memory_order_release);
+		_requestLatencyMs.store(
+			estimate.latencyMs,
+			std::memory_order_release);
+		_downloadUnreliable.store(
+			estimate.unreliable,
+			std::memory_order_release);
 	}, _lifetime);
 
 	if (_cacheHelper) {
@@ -912,6 +951,11 @@ void Reader::tryRemoveLoaderAsync() {
 
 void Reader::startStreaming() {
 	_streamingActive = true;
+	_consumptionWindowStart = crl::now();
+	_consumedBytes = 0;
+	_lastFillEnd.reset();
+	_lastDownloadAt.store(0, std::memory_order_release);
+	_consumptionBytesPerSecond.store(0, std::memory_order_release);
 	refreshLoaderPriority();
 }
 
@@ -1254,6 +1298,8 @@ Reader::FillState Reader::fill(
 		}
 	};
 	const auto done = [&] {
+	_lastFillEnd = uint32(offset + buffer.size());
+		recordConsumed(int64(buffer.size()));
 		clearWaiting();
 		return FillState::Success;
 	};
@@ -1283,7 +1329,25 @@ Reader::FillState Reader::fill(
 Reader::FillState Reader::fillFromSlices(uint32 offset, bytes::span buffer) {
 	using namespace rpl::mappers;
 
-	auto result = _slices.fill(offset, buffer);
+	const auto firstLoadingOffset = _loadingOffsets.front();
+	const auto seek = (_lastFillEnd && (*_lastFillEnd != offset))
+		|| (firstLoadingOffset && (*firstLoadingOffset != offset));
+	const auto lastDownloadAt = _lastDownloadAt.load(
+		std::memory_order_acquire);
+	const auto downloadStatsStale = !lastDownloadAt
+		|| (crl::now() - lastDownloadAt > kPrefetchStatsStaleAfter);
+	const auto prefetch = ComputePrefetchWindow({
+		.downloadBytesPerSecond = _downloadBytesPerSecond.load(
+			std::memory_order_acquire),
+		.consumptionBytesPerSecond = _consumptionBytesPerSecond.load(
+			std::memory_order_acquire),
+		.requestLatencyMs = _requestLatencyMs.load(
+			std::memory_order_acquire),
+		.unreliable = downloadStatsStale
+			|| _downloadUnreliable.load(std::memory_order_acquire),
+		.seeking = seek,
+	});
+	auto result = _slices.fill(offset, buffer, prefetch.partsAhead);
 	if (result.state != FillState::Success && _slices.headerWontBeFilled()) {
 		_streamingError = Error::NotStreamable;
 		return FillState::Failed;
@@ -1397,6 +1461,32 @@ void Reader::loadAtOffset(uint32 offset) {
 	if (_loadingOffsets.add(offset)) {
 		_loader->load(offset);
 	}
+}
+
+void Reader::recordConsumed(int64 bytes) {
+	Expects(bytes > 0);
+
+	const auto now = crl::now();
+	if (!_consumptionWindowStart) {
+		_consumptionWindowStart = now;
+	}
+	const auto max = std::numeric_limits<int64>::max();
+	_consumedBytes = (_consumedBytes > max - bytes)
+		? max
+		: (_consumedBytes + bytes);
+	const auto elapsed = now - _consumptionWindowStart;
+	if (elapsed < 1000) {
+		return;
+	}
+
+	const auto measured = std::min<int64>(
+		_consumedBytes,
+		64 * 1024 * 1024);
+	_consumptionBytesPerSecond.store(
+		measured * 1000 / elapsed,
+		std::memory_order_release);
+	_consumptionWindowStart = now;
+	_consumedBytes = 0;
 }
 
 void Reader::finalizeCache() {
