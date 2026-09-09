@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include "ui/power_saving.h"
 #include "core/update_checker.h"
+#include "core/update_config.h"
 #include "core/file_location.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -550,18 +551,8 @@ QString autoupdatePrefixFile() {
 const QString &readAutoupdatePrefixRaw() {
 	Expects(!Core::UpdaterDisabled());
 
-	const auto &result = AutoupdatePrefix();
-	if (!result.isEmpty()) {
-		return result;
-	}
-	QFile f(autoupdatePrefixFile());
-	if (f.open(QIODevice::ReadOnly)) {
-		const auto value = QString::fromUtf8(f.readAll());
-		if (!value.isEmpty()) {
-			return AutoupdatePrefix(value);
-		}
-	}
-	return AutoupdatePrefix("https://update.ayugram.one/");
+	return AutoupdatePrefix(QString::fromLatin1(
+		Core::UpdateConfig::kFeedPrefix));
 }
 
 void writeAutoupdatePrefix(const QString &prefix) {
@@ -570,7 +561,8 @@ void writeAutoupdatePrefix(const QString &prefix) {
 	}
 
 	const auto current = readAutoupdatePrefixRaw();
-    const auto fixedPrefix = QString::fromStdString("https://update.ayugram.one/");
+	const auto fixedPrefix = QString::fromLatin1(
+		Core::UpdateConfig::kFeedPrefix);
 	if (current != fixedPrefix) {
 		AutoupdatePrefix(fixedPrefix);
 		QFile f(autoupdatePrefixFile());

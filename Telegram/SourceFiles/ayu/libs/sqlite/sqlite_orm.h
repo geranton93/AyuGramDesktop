@@ -121,7 +121,7 @@ using std::nullptr_t;
 #define SQLITE_ORM_CLASSTYPE_TEMPLATE_ARGS_SUPPORTED
 #endif
 
-#if __cpp_pack_indexing >= 202311L
+#if (__cpp_pack_indexing >= 202311L) && (__cplusplus > 202302L)
 #define SQLITE_ORM_PACK_INDEXING_SUPPORTED
 #endif
 
@@ -2784,7 +2784,7 @@ namespace sqlite_orm {
          *  constexpr orm_table_alias auto z_alias = "z"_alias.for_<User>();
          */
         template<internal::cstring_literal name>
-        [[nodiscard]] consteval auto operator"" _alias() {
+        [[nodiscard]] consteval auto operator""_alias() {
             return internal::explode_into<internal::recordset_alias_builder, name>(
                 std::make_index_sequence<name.size()>{});
         }
@@ -2794,7 +2794,7 @@ namespace sqlite_orm {
          *  E.g. "a"_col, "b"_col
          */
         template<internal::cstring_literal name>
-        [[nodiscard]] consteval auto operator"" _col() {
+        [[nodiscard]] consteval auto operator""_col() {
             return internal::explode_into<internal::column_alias, name>(std::make_index_sequence<name.size()>{});
         }
     }
@@ -2807,7 +2807,7 @@ namespace sqlite_orm {
          *  E.g. 1_colalias, 2_colalias
          */
         template<char... Chars>
-        [[nodiscard]] SQLITE_ORM_CONSTEVAL auto operator"" _colalias() {
+        [[nodiscard]] SQLITE_ORM_CONSTEVAL auto operator""_colalias() {
             // numeric identifiers are used for automatically assigning implicit aliases to unaliased column expressions,
             // which start at "1".
             static_assert(std::array{Chars...}[0] > '0');
@@ -8314,7 +8314,7 @@ namespace sqlite_orm {
          *  E.g. 1_ctealias, 2_ctealias
          */
         template<char... Chars>
-        [[nodiscard]] SQLITE_ORM_CONSTEVAL auto operator"" _ctealias() {
+        [[nodiscard]] SQLITE_ORM_CONSTEVAL auto operator""_ctealias() {
             return internal::cte_moniker<Chars...>{};
         }
 
@@ -8324,7 +8324,7 @@ namespace sqlite_orm {
          *  E.g. "1"_cte, "2"_cte
          */
         template<internal::cstring_literal moniker>
-        [[nodiscard]] consteval auto operator"" _cte() {
+        [[nodiscard]] consteval auto operator""_cte() {
             return internal::explode_into<internal::cte_moniker, moniker>(std::make_index_sequence<moniker.size()>{});
         }
 #endif
@@ -9695,7 +9695,7 @@ namespace sqlite_orm {
 
     inline namespace literals {
         template<internal::cstring_literal tag>
-        [[nodiscard]] consteval auto operator"" _pointer_type() {
+        [[nodiscard]] consteval auto operator""_pointer_type() {
             return internal::explode_into<internal::pointer_type, tag>(std::make_index_sequence<tag.size()>{});
         }
     }
@@ -11260,7 +11260,7 @@ namespace sqlite_orm {
             [[nodiscard]] consteval auto quote(F callable) const {
                 using Sig = function_signature_type_t<decltype(&F::operator())>;
                 // detect whether overloaded call operator can be picked using `Sig`
-                using call_operator_type = decltype(static_cast<Sig F::*>(&F::operator()));
+                static_assert(static_cast<Sig F::*>(&F::operator()) != nullptr);
                 return quoted_scalar_function<F, Sig, N>{this->cstr, std::move(callable)};
             }
 
@@ -11271,7 +11271,7 @@ namespace sqlite_orm {
                 requires ((stateless<F> || std::copy_constructible<F>))
             [[nodiscard]] consteval auto quote(F callable) const {
                 // detect whether overloaded call operator can be picked using `Sig`
-                using call_operator_type = decltype(static_cast<Sig F::*>(&F::operator()));
+                static_assert(static_cast<Sig F::*>(&F::operator()) != nullptr);
                 return quoted_scalar_function<F, Sig, N>{this->cstr, std::move(callable)};
             }
 
@@ -11292,7 +11292,7 @@ namespace sqlite_orm {
                 requires ((stateless<F> || std::copy_constructible<F>))
             [[nodiscard]] consteval auto quote(Args&&... constructorArgs) const {
                 // detect whether overloaded call operator can be picked using `Sig`
-                using call_operator_type = decltype(static_cast<Sig F::*>(&F::operator()));
+                static_assert(static_cast<Sig F::*>(&F::operator()) != nullptr);
                 return quoted_scalar_function<F, Sig, N>{this->cstr, std::forward<Args>(constructorArgs)...};
             }
         };
@@ -11354,7 +11354,7 @@ namespace sqlite_orm {
          *  auto rows = storage.select(equal_to_int_3_f(1, 1));
          */
         template<internal::quoted_function_builder builder>
-        [[nodiscard]] consteval auto operator"" _scalar() {
+        [[nodiscard]] consteval auto operator""_scalar() {
             return builder;
         }
     }
@@ -13560,7 +13560,7 @@ namespace sqlite_orm {
 
         template<class L>
         void perform_step(sqlite3_stmt* stmt, L&& lambda) {
-            switch (int rc = sqlite3_step(stmt)) {
+            switch (sqlite3_step(stmt)) {
                 case SQLITE_ROW: {
                     lambda(stmt);
                 } break;
@@ -21928,7 +21928,6 @@ namespace sqlite_orm {
         // F O::*
         template<typename F, typename ColRef, satisfies<std::is_member_pointer, ColRef> = true>
         static auto make_cte_column(std::string name, const ColRef& finalColRef) {
-            using object_type = table_type_of_t<ColRef>;
             using column_type = column_t<ColRef, empty_setter>;
 
             return column_type{std::move(name), finalColRef, empty_setter{}};

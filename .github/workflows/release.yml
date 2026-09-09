@@ -1,0 +1,681 @@
+name: Fork release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build, for example v7.2.7 or v7.2.7-beta"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ayugram-release
+  cancel-in-progress: false
+
+env:
+  FORK_REPOSITORY: geranton93/AyuGramDesktop
+
+jobs:
+  preflight:
+    name: Validate fork release
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      version: ${{ steps.validate.outputs.version }}
+      version_string: ${{ steps.validate.outputs.version_string }}
+      version_full: ${{ steps.validate.outputs.version_full }}
+      channel: ${{ steps.validate.outputs.channel }}
+      suffix: ${{ steps.validate.outputs.suffix }}
+    env:
+      TAG_INPUT: ${{ inputs.tag }}
+      EVENT_NAME: ${{ github.event_name }}
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
+      AYUGRAM_MACOS_P12_BASE64: ${{ secrets.AYUGRAM_MACOS_P12_BASE64 }}
+      AYUGRAM_MACOS_P12_PASSWORD: ${{ secrets.AYUGRAM_MACOS_P12_PASSWORD }}
+      AYUGRAM_MACOS_SIGNING_IDENTITY: ${{ secrets.AYUGRAM_MACOS_SIGNING_IDENTITY }}
+      AYUGRAM_APPLE_ID: ${{ secrets.AYUGRAM_APPLE_ID }}
+      AYUGRAM_APPLE_TEAM_ID: ${{ secrets.AYUGRAM_APPLE_TEAM_ID }}
+      AYUGRAM_APPLE_APP_PASSWORD: ${{ secrets.AYUGRAM_APPLE_APP_PASSWORD }}
+      AYUGRAM_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_BASE64 }}
+      AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 1
+
+      - name: Validate identity, version, trust material and secrets
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = "$FORK_REPOSITORY"
+          tag="${TAG_INPUT:-$GITHUB_REF_NAME}"
+          [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+          tag_version="${BASH_REMATCH[1]}"
+          tag_suffix="${BASH_REMATCH[2]:-}"
+
+          app_version="$(sed -n 's/^AppVersion //p' Telegram/build/version)"
+          version_string="$(sed -n 's/^AppVersionStr //p' Telegram/build/version)"
+          beta_channel="$(sed -n 's/^BetaChannel //p' Telegram/build/version)"
+          test -n "$app_version"
+          test -n "$version_string"
+          test "$tag_version" = "$version_string"
+          case "$beta_channel" in
+            0)
+              channel=stable
+              suffix=
+              version_full="$version_string"
+              ;;
+            1)
+              test -n "$tag_suffix"
+              channel=beta
+              suffix=-beta
+              version_full="$version_string.beta"
+              ;;
+            *)
+              echo "Unsupported BetaChannel value: $beta_channel" >&2
+              exit 1
+              ;;
+          esac
+
+          [[ "$TDESKTOP_API_ID" =~ ^[0-9]+$ ]]
+          [[ "$TDESKTOP_API_HASH" =~ ^[a-fA-F0-9]{32}$ ]]
+          missing=0
+          for name in \
+            AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY \
+            AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY \
+            AYUGRAM_MACOS_P12_BASE64 \
+            AYUGRAM_MACOS_P12_PASSWORD \
+            AYUGRAM_MACOS_SIGNING_IDENTITY \
+            AYUGRAM_APPLE_ID \
+            AYUGRAM_APPLE_TEAM_ID \
+            AYUGRAM_APPLE_APP_PASSWORD \
+            AYUGRAM_WINDOWS_SIGNING_PFX_BASE64 \
+            AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required repository secret: $name" >&2
+              missing=1
+            fi
+          done
+          test "$missing" = 0
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("Telegram/Resources/update/manifest.min.json")
+          document = json.loads(path.read_text(encoding="utf-8"))
+          assert document["format"] == 1
+          assert {key["id"] for key in document["keys"]} == {
+              "ayugram-release-2026",
+              "ayugram-release-secondary-2026",
+          }
+          assert set(document["channels"]) == {
+              "stable", "beta", "canary-public", "canary-private",
+          }
+          PY
+          openssl pkeyutl -verify -pubin -rawin \
+            -inkey Telegram/Resources/update/root-public.pem \
+            -in Telegram/Resources/update/manifest.min.json \
+            -sigfile Telegram/Resources/update/manifest.sig
+
+          {
+            echo "tag=$tag"
+            echo "version=$app_version"
+            echo "version_string=$version_string"
+            echo "version_full=$version_full"
+            echo "channel=$channel"
+            echo "suffix=$suffix"
+          } >> "$GITHUB_OUTPUT"
+
+  build-macos:
+    name: macOS ${{ matrix.arch }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            feed_platform: armac
+            artifact_arch: arm
+            runner: macos-15
+          - arch: x86_64
+            feed_platform: mac
+            artifact_arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
+      AYUGRAM_MACOS_P12_BASE64: ${{ secrets.AYUGRAM_MACOS_P12_BASE64 }}
+      AYUGRAM_MACOS_P12_PASSWORD: ${{ secrets.AYUGRAM_MACOS_P12_PASSWORD }}
+      AYUGRAM_MACOS_SIGNING_IDENTITY: ${{ secrets.AYUGRAM_MACOS_SIGNING_IDENTITY }}
+      AYUGRAM_APPLE_ID: ${{ secrets.AYUGRAM_APPLE_ID }}
+      AYUGRAM_APPLE_TEAM_ID: ${{ secrets.AYUGRAM_APPLE_TEAM_ID }}
+      AYUGRAM_APPLE_APP_PASSWORD: ${{ secrets.AYUGRAM_APPLE_APP_PASSWORD }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 1
+
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/../Libraries
+            ${{ github.workspace }}/../ThirdParty
+          key: ayugram-macos-${{ matrix.arch }}-${{ hashFiles('Telegram/build/prepare/prepare.py', 'Telegram/build/qt_version.py') }}
+
+      - name: Prepare native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew list automake >/dev/null 2>&1 || brew install automake
+          brew list libtool >/dev/null 2>&1 || brew install libtool
+          brew list meson >/dev/null 2>&1 || brew install meson
+          brew list nasm >/dev/null 2>&1 || brew install nasm
+          brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+          python3 Telegram/build/prepare/prepare.py qt6 silent
+
+      - name: Build AyuGram and Packer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B out -G Xcode \
+            -DDESKTOP_APP_SPECIAL_TARGET=mac \
+            -DDESKTOP_APP_MAC_ARCH="${{ matrix.arch }}" \
+            -DDESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
+            -DDESKTOP_APP_DISABLE_SWIFT6=ON \
+            -DDESKTOP_APP_ENABLE_LTO=ON \
+            -DTDESKTOP_API_ID="$TDESKTOP_API_ID" \
+            -DTDESKTOP_API_HASH="$TDESKTOP_API_HASH"
+          cmake --build out --config Release --target Telegram Packer --parallel
+          test -d out/Release/AyuGram.app
+          test -x out/Release/Packer
+
+      - name: Sign, notarize and package macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.preflight.outputs.version_string }}"
+          suffix="${{ needs.preflight.outputs.suffix }}"
+          arch="${{ matrix.arch }}"
+          platform="${{ matrix.feed_platform }}"
+          release="$GITHUB_WORKSPACE/out/Release"
+          app="$release/AyuGram.app"
+          artifact="$RUNNER_TEMP/ayugram-artifacts"
+          mkdir -p "$artifact"
+
+          p12="$RUNNER_TEMP/ayugram-signing.p12"
+          keychain="$RUNNER_TEMP/ayugram-signing.keychain-db"
+          primary="$RUNNER_TEMP/ayugram-release-private.pem"
+          secondary="$RUNNER_TEMP/ayugram-release-secondary-private.pem"
+          cleanup() {
+            rm -f "$p12" "$primary" "$secondary"
+            if [[ -n "${notarization_zip:-}" ]]; then
+              rm -f "$notarization_zip"
+            fi
+            security delete-keychain "$keychain" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$AYUGRAM_MACOS_P12_BASE64" | base64 -D > "$p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" \
+            -P "$AYUGRAM_MACOS_P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild -T /usr/bin/xcrun
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain"
+          codesign --force --deep --timestamp --options runtime \
+            --sign "$AYUGRAM_MACOS_SIGNING_IDENTITY" \
+            --entitlements Telegram/Telegram/Telegram.entitlements "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          notarization_zip="$artifact/AyuGram-notarization-${platform}-${version}${suffix}.zip"
+          ditto -c -k --keepParent "$app" "$notarization_zip"
+          xcrun notarytool submit "$notarization_zip" \
+            --apple-id "$AYUGRAM_APPLE_ID" \
+            --team-id "$AYUGRAM_APPLE_TEAM_ID" \
+            --password "$AYUGRAM_APPLE_APP_PASSWORD" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+
+          dmg="$artifact/td-setup-mac-${{ matrix.artifact_arch }}-${version}${suffix}.dmg"
+          hdiutil create -volname "AyuGram Desktop" \
+            -srcfolder "$app" -ov -format UDZO "$dmg"
+          portable="$artifact/td-portable-mac-${{ matrix.artifact_arch }}-${version}${suffix}.zip"
+          ditto -c -k --keepParent "$app" "$portable"
+
+          printf '%s\n' "$AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY" > "$primary"
+          printf '%s\n' "$AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY" > "$secondary"
+          chmod 600 "$primary" "$secondary"
+          python3 Telegram/build/package_fork_update.py \
+            --packer "$release/Packer" \
+            --release-dir "$release" \
+            --output-dir "$artifact" \
+            --keys-dir Telegram/Resources/update \
+            --primary-key "$primary" \
+            --secondary-key "$secondary" \
+            --target mac --arch "$arch" \
+            --version "${{ needs.preflight.outputs.version }}" \
+            --channel "${{ needs.preflight.outputs.channel }}"
+          for file in "$artifact"/*; do
+            case "$file" in
+              *.sha256) continue ;;
+            esac
+            printf '%s  %s\n' "$(shasum -a 256 "$file" | awk '{print $1}')" "$(basename "$file")" > "$file.sha256"
+          done
+          find "$artifact" -maxdepth 1 -type f -print
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.feed_platform }}
+          path: ${{ runner.temp }}/ayugram-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    name: Windows ${{ matrix.feed_platform }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win
+            cmake_arch: Win32
+            cmake_generator: Visual Studio 17 2022
+            platform: x86
+            feed_platform: win
+            runner: windows-2022
+          - target: win64
+            cmake_arch: x64
+            cmake_generator: Visual Studio 17 2022
+            platform: x64
+            feed_platform: win64
+            runner: windows-2022
+          - target: winarm
+            cmake_arch: ARM64
+            cmake_generator: Visual Studio 17 2022
+            platform: arm64
+            feed_platform: winarm
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
+      AYUGRAM_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_BASE64 }}
+      AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 1
+
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/../Libraries
+            ${{ github.workspace }}/../ThirdParty
+          key: ayugram-windows-${{ matrix.target }}-${{ hashFiles('Telegram/build/prepare/prepare.py', 'Telegram/build/qt_version.py') }}
+
+      - name: Prepare native dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:Platform = '${{ matrix.platform }}'
+          if ('${{ matrix.target }}' -eq 'winarm') {
+            $env:QT = '6.11.2'
+          } else {
+            $env:QT = '5.15.19'
+          }
+          python Telegram/build/prepare/prepare.py silent
+
+      - name: Build, sign and package Windows artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:Platform = '${{ matrix.platform }}'
+          $env:QT = if ('${{ matrix.target }}' -eq 'winarm') { '6.11.2' } else { '5.15.19' }
+          $version = '${{ needs.preflight.outputs.version_string }}'
+          $versionFull = '${{ needs.preflight.outputs.version_full }}'
+          $suffix = '${{ needs.preflight.outputs.suffix }}'
+          $release = Join-Path $env:GITHUB_WORKSPACE 'out\Release'
+          $artifact = Join-Path $env:RUNNER_TEMP 'ayugram-artifacts'
+          New-Item -ItemType Directory -Force $artifact | Out-Null
+          $pfx = Join-Path $env:RUNNER_TEMP 'ayugram-signing.pfx'
+          $primary = Join-Path $env:RUNNER_TEMP 'ayugram-release-private.pem'
+          $secondary = Join-Path $env:RUNNER_TEMP 'ayugram-release-secondary-private.pem'
+          $cleanup = {
+            Remove-Item $pfx, $primary, $secondary -Force -ErrorAction SilentlyContinue
+          }
+          trap {
+            & $cleanup
+            throw
+          }
+
+          cmake -S . -B out -G '${{ matrix.cmake_generator }}' -A '${{ matrix.cmake_arch }}' `
+            -DDESKTOP_APP_SPECIAL_TARGET='${{ matrix.target }}' `
+            -DDESKTOP_APP_DISABLE_AUTOUPDATE=OFF `
+            -DDESKTOP_APP_ENABLE_LTO=ON `
+            -DTDESKTOP_API_ID=$env:TDESKTOP_API_ID `
+            -DTDESKTOP_API_HASH=$env:TDESKTOP_API_HASH
+          cmake --build out --config Release --target Telegram Packer --parallel
+          if (-not (Test-Path (Join-Path $release 'AyuGram.exe'))) { throw 'AyuGram.exe was not built' }
+          if (-not (Test-Path (Join-Path $release 'Updater.exe'))) { throw 'Updater.exe was not built' }
+
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:AYUGRAM_WINDOWS_SIGNING_PFX_BASE64))
+          $signtool = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin') -Filter signtool.exe -Recurse | Sort-Object FullName | Select-Object -Last 1
+          if (-not $signtool) { throw 'signtool.exe was not found' }
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 (Join-Path $release 'AyuGram.exe') (Join-Path $release 'Updater.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Windows code signing failed' }
+          & $signtool.FullName verify /pa /all (Join-Path $release 'AyuGram.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'AyuGram.exe signature verification failed' }
+
+          $setupBase = 'td-setup-win-${{ matrix.feed_platform }}-' + $version + $suffix
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress --yes
+          }
+          if (-not (Test-Path $iscc)) { throw 'Inno Setup 6 ISCC.exe was not found' }
+          & $iscc /DMyAppVersion=$version /DMyAppVersionFull=$versionFull `
+            "/DReleasePath=$release" /DMyBuildTarget=${{ matrix.target }} "/DMyOutputBaseFilename=$setupBase" `
+            (Join-Path $env:GITHUB_WORKSPACE 'Telegram\build\setup.iss')
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
+          $setup = Join-Path $release ($setupBase + '.exe')
+          if (-not (Test-Path $setup)) { throw "Installer was not created: $setup" }
+          Move-Item $setup (Join-Path $artifact (Split-Path $setup -Leaf))
+
+          $stage = Join-Path $env:RUNNER_TEMP 'ayugram-portable'
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item (Join-Path $release 'AyuGram.exe') $stage
+          Copy-Item (Join-Path $release 'Updater.exe') $stage
+          if ('${{ matrix.target }}' -ne 'winarm') {
+            $module = Join-Path $release ('modules\${{ matrix.platform }}\d3d\d3dcompiler_47.dll')
+            New-Item -ItemType Directory -Force (Join-Path $stage 'modules\${{ matrix.platform }}\d3d') | Out-Null
+            Copy-Item $module (Join-Path $stage 'modules\${{ matrix.platform }}\d3d')
+          }
+          $portableName = 'td-portable-win-${{ matrix.feed_platform }}-' + $version + $suffix + '.zip'
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $artifact $portableName)
+
+          [IO.File]::WriteAllText($primary, $env:AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
+          [IO.File]::WriteAllText($secondary, $env:AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
+          $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
+          if (-not $openssl) {
+            $gitOpenSSL = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
+            if (Test-Path $gitOpenSSL) { $openssl = $gitOpenSSL }
+          }
+          if (-not $openssl) {
+            choco install openssl.light --no-progress --yes
+            $env:Path += ';C:\Program Files\OpenSSL-Win64\bin'
+            $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
+          }
+          if (-not $openssl) { throw 'OpenSSL with Ed25519 support was not found' }
+          python Telegram/build/package_fork_update.py `
+            --packer (Join-Path $release 'Packer.exe') `
+            --release-dir $release --output-dir $artifact `
+            --keys-dir (Join-Path $env:GITHUB_WORKSPACE 'Telegram\Resources\update') `
+            --primary-key $primary --secondary-key $secondary --openssl $openssl `
+            --target '${{ matrix.target }}' --version '${{ needs.preflight.outputs.version }}' `
+            --channel '${{ needs.preflight.outputs.channel }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Signed update package creation failed' }
+
+          Get-ChildItem $artifact -File | ForEach-Object {
+            if ($_.Name.EndsWith('.sha256')) { return }
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $line = "$hash  $($_.Name)"
+            [IO.File]::WriteAllText($_.FullName + '.sha256', $line + "`n", [Text.UTF8Encoding]::new($false))
+          }
+          & $cleanup
+          Get-ChildItem $artifact -File | ForEach-Object { $_.FullName }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-${{ matrix.feed_platform }}
+          path: ${{ runner.temp }}/ayugram-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  build-linux:
+    name: Linux x64
+    needs: preflight
+    runs-on: ubuntu-24.04
+    env:
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 1
+
+      - name: Cache Docker build layers and ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ayugram-ccache
+          key: ayugram-linux-ccache-${{ hashFiles('Telegram/build/docker/centos_env/Dockerfile', 'Telegram/build/docker/centos_env/pyproject.toml') }}
+
+      - name: Build the pinned Linux toolchain image
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --break-system-packages poetry
+          export PATH="$HOME/.local/bin:$PATH"
+          Telegram/build/prepare/linux.sh
+
+      - name: Build Linux binaries in the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ayugram-ccache"
+          docker run --rm \
+            --cpus="$(nproc)" --memory=12g \
+            -u "$(id -u):$(id -g)" \
+            -e TDESKTOP_API_ID -e TDESKTOP_API_HASH \
+            -v "$GITHUB_WORKSPACE:/usr/src/tdesktop" \
+            -v "$RUNNER_TEMP/ayugram-ccache:/var/cache/ccache" \
+            tdesktop:centos_env bash -lc '
+              set -euo pipefail
+              cmake -S /usr/src/tdesktop -B /usr/src/tdesktop/out -G "Ninja Multi-Config" \
+                -DDESKTOP_APP_SPECIAL_TARGET=linux \
+                -DDESKTOP_APP_USE_PACKAGED=ON \
+                -DDESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
+                -DDESKTOP_APP_ENABLE_LTO=ON \
+                -DTDESKTOP_API_ID="$TDESKTOP_API_ID" \
+                -DTDESKTOP_API_HASH="$TDESKTOP_API_HASH"
+              cmake --build /usr/src/tdesktop/out --config Release --target Telegram Packer --parallel
+            '
+          test -x out/Release/AyuGram
+          test -x out/Release/Updater
+          test -x out/Release/Packer
+
+      - name: Package Linux artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.preflight.outputs.version_string }}"
+          suffix="${{ needs.preflight.outputs.suffix }}"
+          artifact="$RUNNER_TEMP/ayugram-artifacts"
+          release="$GITHUB_WORKSPACE/out/Release"
+          mkdir -p "$artifact"
+          primary="$RUNNER_TEMP/ayugram-release-private.pem"
+          secondary="$RUNNER_TEMP/ayugram-release-secondary-private.pem"
+          cleanup() {
+            rm -f "$primary" "$secondary"
+          }
+          trap cleanup EXIT
+          stage="$RUNNER_TEMP/ayugram-linux-portable/AyuGram"
+          rm -rf "${stage%/AyuGram}"
+          mkdir -p "$stage"
+          cp "$release/AyuGram" "$stage/"
+          cp "$release/Updater" "$stage/"
+          setup="$artifact/td-setup-linux-x64-${version}${suffix}.tar.xz"
+          portable="$artifact/td-portable-linux-x64-${version}${suffix}.tar.xz"
+          tar -cJf "$setup" -C "${stage%/AyuGram}" AyuGram
+          cp "$setup" "$portable"
+
+          printf '%s\n' "$AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY" > "$primary"
+          printf '%s\n' "$AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY" > "$secondary"
+          chmod 600 "$primary" "$secondary"
+          python3 Telegram/build/package_fork_update.py \
+            --packer "$release/Packer" \
+            --release-dir "$release" \
+            --output-dir "$artifact" \
+            --keys-dir Telegram/Resources/update \
+            --primary-key "$primary" \
+            --secondary-key "$secondary" \
+            --target linux \
+            --version "${{ needs.preflight.outputs.version }}" \
+            --channel "${{ needs.preflight.outputs.channel }}"
+          for file in "$artifact"/*; do
+            case "$file" in
+              *.sha256) continue ;;
+            esac
+            printf '%s  %s\n' "$(sha256sum "$file" | awk '{print $1}')" "$(basename "$file")" > "$file.sha256"
+          done
+          find "$artifact" -maxdepth 1 -type f -print
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: ${{ runner.temp }}/ayugram-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish fork release and update feeds
+    needs: [preflight, build-macos, build-windows, build-linux]
+    if: ${{ needs.preflight.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-linux.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.preflight.outputs.tag }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      VERSION_STRING: ${{ needs.preflight.outputs.version_string }}
+      VERSION_FULL: ${{ needs.preflight.outputs.version_full }}
+      CHANNEL: ${{ needs.preflight.outputs.channel }}
+      SUFFIX: ${{ needs.preflight.outputs.suffix }}
+    steps:
+      - name: Check out the fork dev branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify the complete artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            "td-update-mac-arm-${VERSION}${SUFFIX}"
+            "td-update-mac-x64-${VERSION}${SUFFIX}"
+            "td-update-win-x86-${VERSION}${SUFFIX}"
+            "td-update-win-x64-${VERSION}${SUFFIX}"
+            "td-update-win-arm-${VERSION}${SUFFIX}"
+            "td-update-linux-x64-${VERSION}${SUFFIX}"
+          )
+          for file in "${expected[@]}"; do
+            test -f "release-assets/$file"
+          done
+          count="$(find release-assets -maxdepth 1 -type f -name 'td-update-*' | wc -l | tr -d ' ')"
+          test "$count" = 6
+          for checksum in release-assets/*.sha256; do
+            file="${checksum%.sha256}"
+            test -f "$file"
+            sha256sum --check "$checksum"
+          done
+
+      - name: Create or update the GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/ayugram-release-notes.md"
+          {
+            echo "## AyuGram Desktop $VERSION_FULL"
+            echo
+            printf "Fork-specific release for \`%s\`. The desktop updater and signed update packages use only \`%s\`.\\n" "$TAG" "$FORK_REPOSITORY"
+            echo
+            echo "This release contains native builds for macOS Intel/Apple Silicon, Windows x86/x64/ARM64, and Linux x64."
+          } > "$notes"
+          if gh release view "$TAG" --repo "$FORK_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading verified artifacts idempotently."
+          else
+            args=(gh release create "$TAG" --repo "$FORK_REPOSITORY" --verify-tag --title "AyuGram Desktop $VERSION_FULL" --notes-file "$notes")
+            if [[ "$CHANNEL" = beta ]]; then
+              args+=(--prerelease)
+            fi
+            "${args[@]}"
+          fi
+          gh release upload "$TAG" --repo "$FORK_REPOSITORY" release-assets/* --clobber
+
+      - name: Advance both fork update feeds atomically in dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Telegram/build/generate_update_feed.py \
+            --existing updates/current6 --output updates/current6 \
+            --repo "$FORK_REPOSITORY" --tag "$TAG" --base "$VERSION" --channel "$CHANNEL" \
+            --asset "armac=td-update-mac-arm-${VERSION}${SUFFIX}" \
+            --asset "linux=td-update-linux-x64-${VERSION}${SUFFIX}" \
+            --asset "mac=td-update-mac-x64-${VERSION}${SUFFIX}" \
+            --asset "win=td-update-win-x86-${VERSION}${SUFFIX}" \
+            --asset "win64=td-update-win-x64-${VERSION}${SUFFIX}" \
+            --asset "winarm=td-update-win-arm-${VERSION}${SUFFIX}"
+          python3 Telegram/build/generate_update_feed.py \
+            --existing updates/current2 --output updates/current2 \
+            --repo "$FORK_REPOSITORY" --tag "$TAG" --base "$VERSION" --channel "$CHANNEL" \
+            --asset "armac=td-update-mac-arm-${VERSION}${SUFFIX}" \
+            --asset "linux=td-update-linux-x64-${VERSION}${SUFFIX}" \
+            --asset "mac=td-update-mac-x64-${VERSION}${SUFFIX}" \
+            --asset "win=td-update-win-x86-${VERSION}${SUFFIX}" \
+            --asset "win64=td-update-win-x64-${VERSION}${SUFFIX}" \
+            --asset "winarm=td-update-win-arm-${VERSION}${SUFFIX}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/$FORK_REPOSITORY.git"
+          git config --get remote.origin.url | grep -q "github.com/$FORK_REPOSITORY.git"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- updates/current6 updates/current2; then
+            git add updates/current6 updates/current2
+            git commit -m "Publish update feed for $TAG"
+            git push origin HEAD:dev
+          fi

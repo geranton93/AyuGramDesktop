@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/changelogs.h"
 #include "core/click_handler_types.h"
 #include "core/update_channel.h"
+#include "core/update_config.h"
 #include "core/update_keys.h"
 #include "core/update_verify.h"
 #include "core/version.h"
@@ -717,20 +718,13 @@ bool UnpackUpdate(const QString &filepath) {
 	input.close();
 
 	if (Updates::IsV2UpdateFile(compressed)) {
-		if (UnpackUpdateV2(filepath, compressed)) {
-			return true;
-		} else if (BuildIsCanary) {
-			return false;
-		}
-		// A v1 file whose RSA signature happens to begin with the magic
-		// bytes lands here too, so a failed v2 parse falls through to the
-		// v1 path below: it accepts nothing without a valid RSA signature
-		// over these same bytes.
-		LOG(("Update Info: trying v1 unpacking for a file with v2 magic."));
-	} else if (BuildIsCanary) {
-		// The channel policy lives in the v2 envelope only, a classical
-		// RSA package has no channel and would let any official v1 file
-		// posted to the canary channel jump a canary off its lane.
+		return UnpackUpdateV2(filepath, compressed);
+	}
+	if constexpr (!UpdateConfig::kAllowLegacyV1) {
+		LOG(("Update Error: fork builds accept only v2 updates."));
+		return false;
+	}
+	if (BuildIsCanary) {
 		LOG(("Update Error: canary builds accept only v2 updates."));
 		return false;
 	}
@@ -1009,9 +1003,12 @@ bool HttpChecker::handleResponse(const QByteArray &response) {
 		done(url.isEmpty() ? nullptr : std::make_shared<HttpLoader>(url));
 		return true;
 	};
-	if (const auto url = parseOldResponse(response)) {
-		return handle(*url);
-	} else if (const auto url = parseResponse(response)) {
+	if constexpr (UpdateConfig::kAllowLegacyV1) {
+		if (const auto url = parseOldResponse(response)) {
+			return handle(*url);
+		}
+	}
+	if (const auto url = parseResponse(response)) {
 		return handle(*url);
 	}
 	return false;
@@ -1079,6 +1076,11 @@ std::optional<QString> HttpChecker::parseResponse(
 			return false;
 		}
 		bestLink = (*link).toString();
+		if (!UpdateConfig::IsForkReleaseUrl(bestLink)) {
+			LOG(("Update Error: Link is not a fork Release URL for version %1."
+				).arg(version));
+			return false;
+		}
 		return true;
 	};
 	const auto result = ParseCommonMap(response, testing(), accumulate);
@@ -1088,7 +1090,7 @@ std::optional<QString> HttpChecker::parseResponse(
 	return validateLatestUrl(
 		bestAvailableVersion,
 		bestIsAvailableAlpha,
-		Local::readAutoupdatePrefix() + bestLink);
+		bestLink);
 }
 
 QString HttpChecker::validateLatestUrl(
@@ -1110,6 +1112,10 @@ QString HttpChecker::validateLatestUrl(
 			"{signature}",
 			countAlphaVersionSignature(availableVersion))
 		: versionUrl;
+	if (!UpdateConfig::IsForkReleaseUrl(finalUrl)) {
+		LOG(("Update Error: refusing non-fork update URL '%1'.").arg(finalUrl));
+		return QString();
+	}
 	return finalUrl;
 }
 
@@ -1969,20 +1975,25 @@ void Updater::start(bool forceWait) {
 		}
 #endif // !Q_OS_WIN && !Q_OS_MAC
 	} else if (sendRequest) {
-		if (BuildIsCanary) {
-			// Canary builds discover updates only through their own MTP
-			// channels, the v1 HTTP feed serves other channels.
-			startImplementation(&_httpImplementation, nullptr);
+		if constexpr (UpdateConfig::kUseMtprotoFallback) {
+			if (BuildIsCanary) {
+				startImplementation(&_httpImplementation, nullptr);
+			} else {
+				startImplementation(
+					&_httpImplementation,
+					std::make_unique<HttpChecker>(_testing));
+			}
+			startImplementation(
+				&_mtpImplementation,
+				std::make_unique<MtpChecker>(
+					LookupCanaryPrivateSession(_session),
+					_testing));
 		} else {
 			startImplementation(
 				&_httpImplementation,
 				std::make_unique<HttpChecker>(_testing));
+			_mtpImplementation.failed = true;
 		}
-		startImplementation(
-			&_mtpImplementation,
-			std::make_unique<MtpChecker>(
-				LookupCanaryPrivateSession(_session),
-				_testing));
 
 		_checking.fire({});
 	} else {
@@ -2380,7 +2391,7 @@ void UpdateApplication() {
 			} else if (KSandbox::isSnap()) {
 				return "https://snapcraft.io/telegram-desktop";
 			}
-			return "https://t.me/AyuGramReleases";
+			return UpdateConfig::kReleasePage;
 #endif // OS_WIN_STORE || OS_MAC_STORE
 		}();
 		UrlClickHandler::Open(url);

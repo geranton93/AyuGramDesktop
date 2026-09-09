@@ -38,10 +38,9 @@
 
 ### Windows
 
-#### Официальная версия
+#### Версия форка
 
-Вы можете скачать готовый бинарный файл со вкладки [Releases](https://github.com/AyuGram/AyuGramDesktop/releases) или из
-[Телеграм канала](https://t.me/AyuGramReleases).
+Вы можете скачать готовый бинарный файл со вкладки [Releases форка](https://github.com/geranton93/AyuGramDesktop/releases).
 
 #### Winget
 
@@ -58,14 +57,14 @@ scoop install ayugram
 
 #### Сборка вручную
 
-Следуйте [официальному руководству](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-win-x64.md), если
+Следуйте [руководству по сборке форка](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-win-x64.md), если
 вы хотите собрать AyuGram сами.
 
 ### macOS
 
-#### Официальная версия
+#### Версия форка
 
-Вы можете скачать подписанный пакет со вкладки [Releases](https://github.com/AyuGram/AyuGramDesktop/releases).
+Вы можете скачать подписанный пакет со вкладки [Releases форка](https://github.com/geranton93/AyuGramDesktop/releases).
 
 #### Homebrew
 
@@ -122,7 +121,7 @@ dnf install ayugram-desktop
 
 Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
 
-Или следуйте [официальному руководству](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
+Или следуйте [руководству по сборке форка](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-linux.md).
 
 ## Пожертвования
 

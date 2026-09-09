@@ -756,6 +756,7 @@ PRIVATE
     core/ui_integration.cpp
     core/ui_integration.h
     core/update_channel.h
+    core/update_config.h
     core/update_checker.cpp
     core/update_checker.h
     core/update_keys.cpp
@@ -2764,6 +2765,7 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
         PRIVATE
             _other/packer.cpp
             _other/packer.h
+            core/update_config.h
             core/update_verify.cpp
             core/update_verify.h
         )
@@ -2781,6 +2783,7 @@ if (NOT DESKTOP_APP_DISABLE_AUTOUPDATE AND NOT build_macstore AND NOT build_wins
         if (DESKTOP_APP_USE_PACKAGED)
             target_compile_definitions(Packer PRIVATE PACKER_USE_PACKAGED)
         endif()
+        target_compile_definitions(Packer PRIVATE PACKER_DISABLE_PRIVATE)
 
         set_target_properties(Packer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${output_folder})
     endif()

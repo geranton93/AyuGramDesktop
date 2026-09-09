@@ -39,10 +39,9 @@ And many more. Check out our [Documentation](https://docs.ayugram.one/desktop/).
 
 ### Windows
 
-#### Official
+#### Fork release
 
-You can download prebuilt Windows binary from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases) or from
-the [Telegram channel](https://t.me/AyuGramReleases).
+You can download the prebuilt Windows binary from the fork's [Releases tab](https://github.com/geranton93/AyuGramDesktop/releases).
 
 #### Winget
 
@@ -59,14 +58,14 @@ scoop install ayugram
 
 #### Self-built
 
-Follow [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-win-x64.md) if you want to
+Follow the [fork build guide](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-win-x64.md) if you want to
 build by yourself.
 
 ### macOS
 
-#### Official
+#### Fork release
 
-You can download prebuilt macOS package from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases).
+You can download the prebuilt macOS package from the fork's [Releases tab](https://github.com/geranton93/AyuGramDesktop/releases).
 
 #### Homebrew
 
@@ -123,7 +122,7 @@ dnf install ayugram-desktop
 
 Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
 
-Or follow the [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
+Or follow the [fork build guide](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-linux.md).
 
 ## Donation
 

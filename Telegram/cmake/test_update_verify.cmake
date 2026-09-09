@@ -18,6 +18,7 @@ nice_target_sources(test_update_verify ${src_loc}
 PRIVATE
     core/update_keys.cpp
     core/update_keys.h
+    core/update_config.h
     core/update_verify.cpp
     core/update_verify.h
     tests/test_update_verify.cpp

@@ -68,7 +68,7 @@ void ImageView::setImage(const QImage &image) {
 	dispatchToMainThread(
 		[=]
 		{
-			if (const auto strong = weak.get()) {
+			if (weak.get()) {
 				set();
 			}
 		},

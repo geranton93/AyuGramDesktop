@@ -1,0 +1,77 @@
+name: Fork updater checks
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  feed-contract:
+    name: Update feed contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Run feed generator tests
+        shell: bash
+        run: python3 -m unittest Telegram/build/tests/test_generate_update_feed.py -v
+
+      - name: Validate committed feed shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          platforms = {"armac", "linux", "mac", "win", "win64", "winarm"}
+          channels = {"stable", "beta"}
+          for name in ("current2", "current6"):
+              document = json.loads(Path("updates", name).read_text())
+              assert set(document) == platforms
+              for value in document.values():
+                  assert set(value) == channels
+                  for entry in value.values():
+                      if entry:
+                          assert set(entry) == {"link", "released"}
+                          assert entry["link"].startswith(
+                              "https://github.com/geranton93/AyuGramDesktop/releases/download/"
+                          )
+                          assert isinstance(entry["released"], int)
+          PY
+
+  trust-material:
+    name: Update trust material
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Verify the signed root manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl pkeyutl -verify -pubin -rawin \
+            -inkey Telegram/Resources/update/root-public.pem \
+            -in Telegram/Resources/update/manifest.min.json \
+            -sigfile Telegram/Resources/update/manifest.sig
+
+      - name: Verify fork-only updater endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          if rg -n 'update\.ayugram\.one|t\.me/AyuGramReleases' \
+            Telegram/SourceFiles/core/update_checker.cpp \
+            Telegram/SourceFiles/storage/localstorage.cpp \
+            Telegram/SourceFiles/core/application.cpp; then
+            echo 'An old updater endpoint is still present in the updater path.' >&2
+            exit 1
+          fi

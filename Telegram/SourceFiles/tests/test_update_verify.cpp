@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // generated in-process with OpenSSL, so no fixture files and no network.
 
 #include "core/update_keys.h"
+#include "core/update_config.h"
 #include "core/update_verify.h"
 
 #include <QtCore/QJsonArray>
@@ -907,6 +908,24 @@ int main(int argc, char *argv[]) {
 				&& *TargetFromPlatformKey("win64") == Target{ Os::Windows, Arch::X64 }
 				&& !TargetFromPlatformKey("amiga"),
 			"platform keys map to targets");
+	}
+
+	{ // Release URLs are pinned to the authenticated fork.
+		const auto release = QString::fromLatin1(
+			Core::UpdateConfig::kReleaseDownloadPrefix)
+			+ "v7.2.7/td-update-linux-x64-7002007";
+		Check(Core::UpdateConfig::IsForkReleaseUrl(release),
+			"fork release URL accepted");
+		Check(!Core::UpdateConfig::IsForkReleaseUrl(
+				"https://github.com/AyuGram/AyuGramDesktop/releases/download/"
+				"v7.2.7/td-update-linux-x64-7002007"),
+			"upstream release URL rejected");
+		Check(!Core::UpdateConfig::IsForkReleaseUrl(release + "?download=1"),
+			"release URL with query rejected");
+		Check(!Core::UpdateConfig::IsForkReleaseUrl(
+				QString::fromLatin1(Core::UpdateConfig::kReleaseDownloadPrefix)
+				+ "v7.2.7/../td-update-linux-x64-7002007"),
+			"release URL traversal rejected");
 	}
 
 	{ // Dormancy rescue also works for beta packages on canary-public.

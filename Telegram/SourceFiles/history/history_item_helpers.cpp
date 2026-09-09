@@ -1469,7 +1469,8 @@ bool CanHoldItemNotification(not_null<const HistoryItem*> item) {
 }
 
 [[nodiscard]] TextWithEntities UnsupportedMessageText() {
-	const auto siteLink = u"https://t.me/AyuGramReleases"_q;
+	const auto siteLink =
+		u"https://github.com/geranton93/AyuGramDesktop/releases"_q;
 	auto result = TextWithEntities{
 		tr::lng_message_unsupported(tr::now, lt_link, siteLink).replace("Telegram", "AyuGram")
 	};
@@ -1488,7 +1489,8 @@ HistoryMessageMarkupData UnsupportedMessageMarkup() {
 		Button::Type::Url,
 		tr::lng_update_telegram(tr::now).replace("Telegram", "AyuGram"),
 		Button::Visual(),
-		QByteArray("https://t.me/AyuGramReleases"));
+		QByteArray(
+			"https://github.com/geranton93/AyuGramDesktop/releases"));
 	markup.rows.push_back(std::move(row));
 	return markup;
 }
