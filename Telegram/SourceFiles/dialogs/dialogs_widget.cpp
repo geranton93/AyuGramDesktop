@@ -529,11 +529,15 @@ Widget::Widget(
 	}, lifetime());
 
 	AyuSettings::getInstance().disableAdsChanges(
-	) | rpl::filter([](bool disabled) {
-		return disabled;
-	}) | rpl::on_next([=] {
-		_peerSearch.disableSponsored();
-		_inner->clearSponsoredPeerSearchResults();
+	) | rpl::on_next([=](bool disabled) {
+		if (disabled) {
+			_peerSearch.disableSponsored();
+			_inner->clearSponsoredPeerSearchResults();
+		} else if (peerSearchRequired()
+			&& !_searchState.query.trimmed().isEmpty()) {
+			_peerSearch.clear();
+			search();
+		}
 		listScrollUpdated();
 		update();
 	}, lifetime());
