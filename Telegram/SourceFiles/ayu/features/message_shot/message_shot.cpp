@@ -236,53 +236,6 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 		messageIds.push_back(message->fullId());
 	}
 
-	auto delegate = std::make_shared<MessageShotDelegate>(
-		box,
-		st.get(),
-		[weakBox]
-		{
-			if (const auto strong = weakBox.get()) {
-				strong->update();
-			}
-		},
-		messages.front()->history());
-
-	auto createdViews = std::make_shared<std::unordered_map<not_null<HistoryItem*>, std::shared_ptr<HistoryView::Element>>>();
-	createdViews->reserve(messages.size());
-	for (const auto &message : messages) {
-		createdViews->emplace(message, message->createView(delegate.get()));
-	}
-
-	auto getView = [createdViews](not_null<HistoryItem*> msg)
-	{
-		return createdViews->at(msg).get();
-	};
-
-	// recalculate blocks
-	if (messages.size() > 1) {
-		auto currentMsg = messages[0].get();
-
-		for (auto i = 1; i != messages.size(); ++i) {
-			const auto nextMsg = messages[i].get();
-			if (getView(nextMsg)->isHidden()) {
-				getView(nextMsg)->setDisplayDate(false);
-			} else {
-				const auto viewDate = getView(currentMsg)->dateTime();
-				const auto nextDate = getView(nextMsg)->dateTime();
-				getView(nextMsg)->setDisplayDate(nextDate.date() != viewDate.date());
-				auto attached = getView(nextMsg)->computeIsAttachToPrevious(getView(currentMsg));
-				getView(nextMsg)->setAttachToPrevious(attached, getView(currentMsg));
-				getView(currentMsg)->setAttachToNext(attached, getView(nextMsg));
-				currentMsg = nextMsg;
-			}
-		}
-
-		getView(messages[messages.size() - 1])->setAttachToNext(false);
-	} else {
-		getView(messages[0])->setAttachToPrevious(false);
-		getView(messages[0])->setAttachToNext(false);
-	}
-
 	struct MediaPreload {
 		std::vector<std::shared_ptr<Data::PhotoMedia>> photos;
 		std::vector<std::shared_ptr<Data::DocumentMedia>> documents;
@@ -316,10 +269,10 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 	const auto showBackground = AyuSettings::getInstance().messageShotSettings().showBackground();
 	auto render = [=,
 		messages = std::move(messages),
-		messageIds = std::move(messageIds),
-		delegate = std::move(delegate)](bool final)
+		messageIds = std::move(messageIds)](bool final)
 	{
-		if (!weakBox) {
+		const auto strongBox = weakBox.get();
+		if (!strongBox) {
 			return;
 		}
 		const auto controller = weakController.get();
@@ -330,6 +283,57 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 			if (controller->session().data().message(messageIds[i]) != messages[i].get()) {
 				return;
 			}
+		}
+
+		auto delegate = std::make_shared<MessageShotDelegate>(
+			strongBox,
+			st.get(),
+			[weakBox]
+			{
+				if (const auto strong = weakBox.get()) {
+					strong->update();
+				}
+			},
+			messages.front()->history());
+		auto createdViews = std::unordered_map<
+			not_null<HistoryItem*>,
+			std::shared_ptr<HistoryView::Element>>();
+		createdViews.reserve(messages.size());
+		for (const auto &message : messages) {
+			createdViews.emplace(message, message->createView(delegate.get()));
+		}
+		auto getView = [&createdViews](not_null<HistoryItem*> message) {
+			return createdViews.at(message).get();
+		};
+
+		if (messages.size() > 1) {
+			auto currentMsg = messages[0].get();
+
+			for (auto i = 1; i != messages.size(); ++i) {
+				const auto nextMsg = messages[i].get();
+				if (getView(nextMsg)->isHidden()) {
+					getView(nextMsg)->setDisplayDate(false);
+				} else {
+					const auto viewDate = getView(currentMsg)->dateTime();
+					const auto nextDate = getView(nextMsg)->dateTime();
+					getView(nextMsg)->setDisplayDate(
+						nextDate.date() != viewDate.date());
+					auto attached = getView(nextMsg)->computeIsAttachToPrevious(
+						getView(currentMsg));
+					getView(nextMsg)->setAttachToPrevious(
+						attached,
+						getView(currentMsg));
+					getView(currentMsg)->setAttachToNext(
+						attached,
+						getView(nextMsg));
+					currentMsg = nextMsg;
+				}
+			}
+
+			getView(messages[messages.size() - 1])->setAttachToNext(false);
+		} else {
+			getView(messages[0])->setAttachToPrevious(false);
+			getView(messages[0])->setAttachToNext(false);
 		}
 
 		takingShot = true;
@@ -415,9 +419,10 @@ void Make(not_null<QWidget*> box, const ShotConfig &config, const Fn<void(QImage
 			y += view->height();
 		}
 
-		takingShot = false;
-
 		auto result = addPadding(removeEmptySpaceAround(image));
+		createdViews.clear();
+		delegate.reset();
+		takingShot = false;
 		if (!showBackground) {
 			callback(result, final);
 			return;
