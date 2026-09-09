@@ -17,6 +17,12 @@ QByteArray RootPublicKeyPem() {
 		sizeof(details::kRootPublicKeyPem));
 }
 
+QByteArray RcConfigPublicKeyPem() {
+	return QByteArray::fromRawData(
+		reinterpret_cast<const char*>(details::kRcConfigPublicKeyPem),
+		sizeof(details::kRcConfigPublicKeyPem));
+}
+
 QByteArray EmbeddedManifest() {
 	return QByteArray::fromRawData(
 		reinterpret_cast<const char*>(details::kEmbeddedManifest),

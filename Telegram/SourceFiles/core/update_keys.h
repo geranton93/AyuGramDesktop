@@ -16,6 +16,7 @@ namespace Core::Updates {
 // Telegram/Resources/update/ through a generated header.
 
 [[nodiscard]] QByteArray RootPublicKeyPem();
+[[nodiscard]] QByteArray RcConfigPublicKeyPem();
 [[nodiscard]] QByteArray EmbeddedManifest();
 [[nodiscard]] QByteArray EmbeddedManifestSignature();
 

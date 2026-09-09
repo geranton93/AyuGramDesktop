@@ -85,12 +85,28 @@ installation of a build containing the new public root; later updates are
 automatic. This is an intentional trust boundary, not a fallback to the
 upstream updater.
 
+## Remote configuration trust
+
+The supporter/developer map and donation display values are a separate signed
+configuration channel. The client accepts only the envelope documented in
+[`docs/remote-config.md`](remote-config.md), verifies it with
+`Telegram/Resources/update/rc-config-public.pem`, validates its time window and
+field limits, and only then updates in-memory state. An HTTPS response alone is
+not sufficient.
+
+Both remote-config endpoints must serve the same signed envelope before a build
+with this contract is published. Until that server migration is complete, an
+old unsigned response is deliberately rejected and the client continues with
+its built-in defaults. The private remote-config signing key is an operational
+secret and must stay outside this repository.
+
 ## Checks before publication
 
 For a local preflight, run:
 
 ```bash
 python3 -m unittest Telegram/build/tests/test_generate_update_feed.py -v
+python3 -m unittest Telegram/build/tests/test_sign_rc_config.py -v
 openssl pkeyutl -verify -pubin -rawin -inkey Telegram/Resources/update/root-public.pem -in Telegram/Resources/update/manifest.min.json -sigfile Telegram/Resources/update/manifest.sig
 ```
 

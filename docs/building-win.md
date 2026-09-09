@@ -51,7 +51,9 @@ In the initialized terminal, go to ***BuildPath*** and run
 
 Go to ***BuildPath*\\tdesktop\\Telegram** and run
 
-    configure.bat x64 -D TDESKTOP_API_ID=2040 -D TDESKTOP_API_HASH=b18441a1ff607e10a989891a5462e627
+    $env:TDESKTOP_API_ID = "YOUR_API_ID"
+    $env:TDESKTOP_API_HASH = "YOUR_API_HASH"
+    configure.bat x64 -D TDESKTOP_API_ID=$env:TDESKTOP_API_ID -D TDESKTOP_API_HASH=$env:TDESKTOP_API_HASH
 
 * Open ***BuildPath*\\tdesktop\\out\\Telegram.slnx** in Visual Studio 2026
 * Select Telegram project and press Build > Build Telegram (Debug and Release configurations)

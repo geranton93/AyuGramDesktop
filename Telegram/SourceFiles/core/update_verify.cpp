@@ -536,13 +536,7 @@ std::optional<Manifest> ParseVerifiedManifest(
 
 	// The signature is checked before the JSON parser ever sees the bytes,
 	// so the parser only runs on root-authenticated input.
-	const auto root = LoadEd25519Pem(rootPublicKeyPem);
-	if (!root) {
-		SetError(error, QStringLiteral("Could not load the root key."));
-		return std::nullopt;
-	}
-	if (!VerifyEd25519(root.get(), json, signature)) {
-		SetError(error, QStringLiteral("Bad manifest root signature."));
+	if (!VerifyEd25519Signature(json, signature, rootPublicKeyPem, error)) {
 		return std::nullopt;
 	}
 
@@ -600,6 +594,27 @@ std::optional<Manifest> ParseVerifiedManifest(
 	result.bytes = json;
 	result.signature = signature;
 	return result;
+}
+
+bool VerifyEd25519Signature(
+		const QByteArray &message,
+		const QByteArray &signature,
+		const QByteArray &publicKeyPem,
+		QString *error) {
+	if (signature.size() != kRawSignatureSize) {
+		SetError(error, QStringLiteral("Bad Ed25519 signature size."));
+		return false;
+	}
+	const auto key = LoadEd25519Pem(publicKeyPem);
+	if (!key) {
+		SetError(error, QStringLiteral("Could not load the Ed25519 public key."));
+		return false;
+	}
+	if (!VerifyEd25519(key.get(), message, signature)) {
+		SetError(error, QStringLiteral("Bad Ed25519 signature."));
+		return false;
+	}
+	return true;
 }
 
 bool IsV2UpdateFile(const QByteArray &data) {

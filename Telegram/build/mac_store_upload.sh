@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -e
 FullExecPath=$PWD
 pushd `dirname $0` > /dev/null
@@ -27,10 +28,10 @@ while IFS='' read -r line || [[ -n "$line" ]]; do
   BuildTarget="$line"
 done < "$FullScriptPath/target"
 
-while IFS='' read -r line || [[ -n "$line" ]]; do
-  set $line
-  eval $1="$2"
-done < "$FullScriptPath/version"
+source "$FullScriptPath/version_parser.sh"
+if ! read_version_file "$FullScriptPath/version"; then
+	Error "Invalid version metadata."
+fi
 
 VersionForPacker="$AppVersion"
 if [ "$AlphaVersion" != "0" ]; then

@@ -75,3 +75,22 @@ jobs:
             echo 'An old updater endpoint is still present in the updater path.' >&2
             exit 1
           fi
+
+  remote-config-contract:
+    name: Remote configuration contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Run signed remote-config tooling tests
+        shell: bash
+        run: python3 -m unittest Telegram/build/tests/test_sign_rc_config.py -v
+
+      - name: Validate the embedded remote-config trust key
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl pkey -pubin \
+            -in Telegram/Resources/update/rc-config-public.pem \
+            -text -noout 2>&1 | grep -q ED25519

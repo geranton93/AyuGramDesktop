@@ -85,6 +85,8 @@ private:
 	void sendRequest();
 	bool tryRetryWithExteraFallback();
 
+	void readResponse();
+	bool checkResponseLength();
 	void gotResponse();
 	void gotFailure(QNetworkReply::NetworkError e);
 	void clearSentRequest();
@@ -108,7 +110,9 @@ private:
 
 	std::unique_ptr<QNetworkAccessManager> _manager = nullptr;
 	QNetworkReply *_reply = nullptr;
+	QByteArray _response;
 	bool _useExteraFallback = false;
 	bool _retryAttempted = false;
+	bool _responseTooLarge = false;
 
 };

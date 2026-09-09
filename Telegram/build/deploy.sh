@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -e
 FullExecPath=$PWD
 pushd `dirname $0` > /dev/null
@@ -29,10 +30,10 @@ while IFS='' read -r line || [[ -n "$line" ]]; do
   BuildTarget="$line"
 done < "$FullScriptPath/target"
 
-while IFS='' read -r line || [[ -n "$line" ]]; do
-  set $line
-  eval $1="$2"
-done < "$FullScriptPath/version"
+source "$FullScriptPath/version_parser.sh"
+if ! read_version_file "$FullScriptPath/version"; then
+	Error "Invalid version metadata."
+fi
 
 if [ "$AppVersion" -lt 7002000 ]; then
   Error "The v2 update format requires version 7.2 or newer."
@@ -248,8 +249,7 @@ if [ "$DeployLinux" == "1" ]; then
   Files+=("$LinuxRemoteFolder/$LinuxUpdateFile" "$LinuxRemoteFolder/$LinuxSetupFile")
 fi
 cd $DeployPath
-rsync -avR --no-g --progress ${Files[@]} "$FullScriptPath/../../../DesktopPrivate/remote/files"
+rsync -avR --no-g --progress "${Files[@]}" "$FullScriptPath/../../../DesktopPrivate/remote/files"
 
 echo "Version $AppVersionStrFull was deployed!"
 cd $FullExecPath
-

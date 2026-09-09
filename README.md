@@ -157,6 +157,20 @@ Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
 
 Or follow the [fork build guide](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-linux.md).
 
+## Development quality gates
+
+Enable the repository-managed pre-commit hook once in this checkout:
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+It checks the exact staged snapshot for credential artifacts, runs Gitleaks,
+validates changed workflows and scripts, parses changed Python/JSON/XML files,
+checks updater trust material, scans changed dependency manifests with OSV-Scanner,
+and runs focused updater tests when those files change. See the [local quality-gate plan](Telegram/build/quality/README.md)
+for installation, optional analyzers, and the full verification mode.
+
 ## Donation
 
 Enjoy using **AyuGram**? Consider sending us a tip!

@@ -17,6 +17,7 @@ function(generate_update_keys target_name update_loc)
     COMMAND
         ${CMAKE_COMMAND}
         -Droot_pem=${update_loc}/root-public.pem
+        -Drc_config_public_pem=${update_loc}/rc-config-public.pem
         -Dmanifest=${update_loc}/manifest.min.json
         -Dmanifest_sig=${update_loc}/manifest.sig
         -Doutput=${gen_files}
@@ -25,6 +26,7 @@ function(generate_update_keys target_name update_loc)
     DEPENDS
         ${gen_script}
         ${update_loc}/root-public.pem
+        ${update_loc}/rc-config-public.pem
         ${update_loc}/manifest.min.json
         ${update_loc}/manifest.sig
     )

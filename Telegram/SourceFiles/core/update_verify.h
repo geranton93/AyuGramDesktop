@@ -117,6 +117,12 @@ struct Manifest {
 	const QByteArray &rootPublicKeyPem,
 	QString *error = nullptr);
 
+[[nodiscard]] bool VerifyEd25519Signature(
+	const QByteArray &message,
+	const QByteArray &signature,
+	const QByteArray &publicKeyPem,
+	QString *error = nullptr);
+
 struct EnvelopeSignature {
 	QByteArray keyId;
 	QByteArray bytes;

@@ -15,13 +15,16 @@ Install [poetry](https://python-poetry.org), [docker](https://www.docker.com/) a
 
 Go to ***BuildPath*/tdesktop** and run
 
+    export TDESKTOP_API_ID=YOUR_API_ID
+    export TDESKTOP_API_HASH=YOUR_API_HASH
+
     docker run --rm -it \
         -u $(id -u) \
         -v "$PWD:/usr/src/tdesktop" \
         ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-        -D TDESKTOP_API_ID=2040 \
-        -D TDESKTOP_API_HASH=b18441a1ff607e10a989891a5462e627
+        -D TDESKTOP_API_ID="${TDESKTOP_API_ID:?Set TDESKTOP_API_ID first}" \
+        -D TDESKTOP_API_HASH="${TDESKTOP_API_HASH:?Set TDESKTOP_API_HASH first}"
 
 Or, to create a debug build, run
 
@@ -31,8 +34,8 @@ Or, to create a debug build, run
         -e CONFIG=Debug \
         ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-        -D TDESKTOP_API_ID=2040 \
-        -D TDESKTOP_API_HASH=b18441a1ff607e10a989891a5462e627
+        -D TDESKTOP_API_ID="${TDESKTOP_API_ID:?Set TDESKTOP_API_ID first}" \
+        -D TDESKTOP_API_HASH="${TDESKTOP_API_HASH:?Set TDESKTOP_API_HASH first}"
 
 The built files will be in the `out` directory.
 

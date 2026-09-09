@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -e
 FullExecPath=$PWD
 pushd `dirname $0` > /dev/null
@@ -53,10 +54,10 @@ if [ "$BuildTarget" != "macstore" ]; then
     || Error "Cloud update signing is not ready, fix the setup above before building."
 fi
 
-while IFS='' read -r line || [[ -n "$line" ]]; do
-  set $line
-  eval $1="$2"
-done < "$FullScriptPath/version"
+source "$FullScriptPath/version_parser.sh"
+if ! read_version_file "$FullScriptPath/version"; then
+	Error "Invalid version metadata."
+fi
 
 if [ "$AppVersion" -lt 7002000 ]; then
   Error "The v2 update format requires version 7.2 or newer."

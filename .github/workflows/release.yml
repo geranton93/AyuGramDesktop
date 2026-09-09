@@ -32,21 +32,6 @@ jobs:
       version_full: ${{ steps.validate.outputs.version_full }}
       channel: ${{ steps.validate.outputs.channel }}
       suffix: ${{ steps.validate.outputs.suffix }}
-    env:
-      TAG_INPUT: ${{ inputs.tag }}
-      EVENT_NAME: ${{ github.event_name }}
-      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
-      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
-      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
-      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
-      AYUGRAM_MACOS_P12_BASE64: ${{ secrets.AYUGRAM_MACOS_P12_BASE64 }}
-      AYUGRAM_MACOS_P12_PASSWORD: ${{ secrets.AYUGRAM_MACOS_P12_PASSWORD }}
-      AYUGRAM_MACOS_SIGNING_IDENTITY: ${{ secrets.AYUGRAM_MACOS_SIGNING_IDENTITY }}
-      AYUGRAM_APPLE_ID: ${{ secrets.AYUGRAM_APPLE_ID }}
-      AYUGRAM_APPLE_TEAM_ID: ${{ secrets.AYUGRAM_APPLE_TEAM_ID }}
-      AYUGRAM_APPLE_APP_PASSWORD: ${{ secrets.AYUGRAM_APPLE_APP_PASSWORD }}
-      AYUGRAM_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_BASE64 }}
-      AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD }}
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
@@ -57,6 +42,20 @@ jobs:
       - name: Validate identity, version, trust material and secrets
         id: validate
         shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+          AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+          AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
+          AYUGRAM_MACOS_P12_BASE64: ${{ secrets.AYUGRAM_MACOS_P12_BASE64 }}
+          AYUGRAM_MACOS_P12_PASSWORD: ${{ secrets.AYUGRAM_MACOS_P12_PASSWORD }}
+          AYUGRAM_MACOS_SIGNING_IDENTITY: ${{ secrets.AYUGRAM_MACOS_SIGNING_IDENTITY }}
+          AYUGRAM_APPLE_ID: ${{ secrets.AYUGRAM_APPLE_ID }}
+          AYUGRAM_APPLE_TEAM_ID: ${{ secrets.AYUGRAM_APPLE_TEAM_ID }}
+          AYUGRAM_APPLE_APP_PASSWORD: ${{ secrets.AYUGRAM_APPLE_APP_PASSWORD }}
+          AYUGRAM_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_BASE64 }}
+          AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -156,17 +155,6 @@ jobs:
             artifact_arch: x64
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
-    env:
-      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
-      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
-      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
-      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
-      AYUGRAM_MACOS_P12_BASE64: ${{ secrets.AYUGRAM_MACOS_P12_BASE64 }}
-      AYUGRAM_MACOS_P12_PASSWORD: ${{ secrets.AYUGRAM_MACOS_P12_PASSWORD }}
-      AYUGRAM_MACOS_SIGNING_IDENTITY: ${{ secrets.AYUGRAM_MACOS_SIGNING_IDENTITY }}
-      AYUGRAM_APPLE_ID: ${{ secrets.AYUGRAM_APPLE_ID }}
-      AYUGRAM_APPLE_TEAM_ID: ${{ secrets.AYUGRAM_APPLE_TEAM_ID }}
-      AYUGRAM_APPLE_APP_PASSWORD: ${{ secrets.AYUGRAM_APPLE_APP_PASSWORD }}
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
@@ -195,6 +183,9 @@ jobs:
 
       - name: Build AyuGram and Packer
         shell: bash
+        env:
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
         run: |
           set -euo pipefail
           cmake -S . -B out -G Xcode \
@@ -211,6 +202,15 @@ jobs:
 
       - name: Sign, notarize and package macOS artifacts
         shell: bash
+        env:
+          AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+          AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
+          AYUGRAM_MACOS_P12_BASE64: ${{ secrets.AYUGRAM_MACOS_P12_BASE64 }}
+          AYUGRAM_MACOS_P12_PASSWORD: ${{ secrets.AYUGRAM_MACOS_P12_PASSWORD }}
+          AYUGRAM_MACOS_SIGNING_IDENTITY: ${{ secrets.AYUGRAM_MACOS_SIGNING_IDENTITY }}
+          AYUGRAM_APPLE_ID: ${{ secrets.AYUGRAM_APPLE_ID }}
+          AYUGRAM_APPLE_TEAM_ID: ${{ secrets.AYUGRAM_APPLE_TEAM_ID }}
+          AYUGRAM_APPLE_APP_PASSWORD: ${{ secrets.AYUGRAM_APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
           version="${{ needs.preflight.outputs.version_string }}"
@@ -322,13 +322,6 @@ jobs:
             feed_platform: winarm
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
-    env:
-      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
-      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
-      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
-      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
-      AYUGRAM_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_BASE64 }}
-      AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD }}
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
@@ -358,6 +351,13 @@ jobs:
 
       - name: Build, sign and package Windows artifacts
         shell: pwsh
+        env:
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+          AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+          AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
+          AYUGRAM_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_BASE64 }}
+          AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.AYUGRAM_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
           $ErrorActionPreference = 'Stop'
           $env:Platform = '${{ matrix.platform }}'
@@ -467,11 +467,6 @@ jobs:
     name: Linux x64
     needs: preflight
     runs-on: ubuntu-24.04
-    env:
-      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
-      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
-      AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
-      AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
@@ -495,6 +490,9 @@ jobs:
 
       - name: Build Linux binaries in the pinned toolchain
         shell: bash
+        env:
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/ayugram-ccache"
@@ -521,6 +519,9 @@ jobs:
 
       - name: Package Linux artifacts
         shell: bash
+        env:
+          AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY }}
+          AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY: ${{ secrets.AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           version="${{ needs.preflight.outputs.version_string }}"
@@ -581,7 +582,6 @@ jobs:
     permissions:
       contents: write
     env:
-      GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.preflight.outputs.tag }}
       VERSION: ${{ needs.preflight.outputs.version }}
       VERSION_STRING: ${{ needs.preflight.outputs.version_string }}
@@ -627,6 +627,8 @@ jobs:
 
       - name: Create or update the GitHub release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/ayugram-release-notes.md"
@@ -670,8 +672,14 @@ jobs:
             --asset "win=td-update-win-x86-${VERSION}${SUFFIX}" \
             --asset "win64=td-update-win-x64-${VERSION}${SUFFIX}" \
             --asset "winarm=td-update-win-arm-${VERSION}${SUFFIX}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/$FORK_REPOSITORY.git"
-          git config --get remote.origin.url | grep -q "github.com/$FORK_REPOSITORY.git"
+          remote="$(git remote get-url origin)"
+          case "$remote" in
+            "https://github.com/$FORK_REPOSITORY"|"https://github.com/$FORK_REPOSITORY.git") ;;
+            *)
+              echo "The checkout remote is not the configured fork: $FORK_REPOSITORY" >&2
+              exit 1
+              ;;
+          esac
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet -- updates/current6 updates/current2; then

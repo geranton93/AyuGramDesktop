@@ -21,6 +21,8 @@ PRIVATE
     core/update_config.h
     core/update_verify.cpp
     core/update_verify.h
+    ayu/utils/rc_config.cpp
+    ayu/utils/rc_config.h
     tests/test_update_verify.cpp
 )
 

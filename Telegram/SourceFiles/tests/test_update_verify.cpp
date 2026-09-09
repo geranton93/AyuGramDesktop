@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // Focused console tests for the v2 update verification: throwaway keys are
 // generated in-process with OpenSSL, so no fixture files and no network.
 
+#include "ayu/utils/rc_config.h"
 #include "core/update_keys.h"
 #include "core/update_config.h"
 #include "core/update_verify.h"
@@ -211,6 +212,59 @@ struct TestKey {
 [[nodiscard]] QByteArray Base64Url(const QByteArray &data) {
 	return data.toBase64(
 		QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+}
+
+[[nodiscard]] QByteArray MakeRemoteConfigPayload(
+		qint64 issued,
+		qint64 expires,
+		const QString &donateAmountUsd = QString("5.00")) {
+	auto developers = QJsonArray();
+	developers.append(QString("139303278"));
+	auto officialChannels = QJsonArray();
+	officialChannels.append(double(1172503281));
+	auto supporters = QJsonArray();
+	supporters.append(QString("5079320635"));
+	auto supporterChannels = QJsonArray();
+	supporterChannels.append(double(3116497667));
+	auto customBadgeData = QJsonObject();
+	customBadgeData.insert("documentId", QString("987654321012345"));
+	customBadgeData.insert("text", "supporter");
+	auto customBadge = QJsonObject();
+	customBadge.insert("id", QString("6007644928"));
+	customBadge.insert("badge", customBadgeData);
+	auto customBadges = QJsonArray();
+	customBadges.append(customBadge);
+
+	auto result = QJsonObject();
+	result.insert("format", 1);
+	result.insert("issued", double(issued));
+	result.insert("expires", double(expires));
+	result.insert("developers", developers);
+	result.insert("officialChannels", officialChannels);
+	result.insert("supporters", supporters);
+	result.insert("supporterChannels", supporterChannels);
+	result.insert("customBadges", customBadges);
+	result.insert("donateUsername", "@ayugramOwner");
+	result.insert("donateAmountUsd", donateAmountUsd);
+	result.insert("donateAmountTon", "3.50");
+	result.insert("donateAmountRub", "386");
+	return QJsonDocument(result).toJson(QJsonDocument::Compact);
+}
+
+[[nodiscard]] QByteArray MakeRemoteConfigResponse(
+		const QByteArray &payload,
+		const QByteArray &signature) {
+	auto envelope = QJsonObject();
+	envelope.insert("format", 1);
+	envelope.insert("payload", QString::fromLatin1(Base64Url(payload)));
+	envelope.insert("signature", QString::fromLatin1(Base64Url(signature)));
+	return QJsonDocument(envelope).toJson(QJsonDocument::Compact);
+}
+
+[[nodiscard]] QByteArray SignRemoteConfig(
+		const TestKey &key,
+		const QByteArray &payload) {
+	return MakeRemoteConfigResponse(payload, SignWith(key, payload));
 }
 
 struct ManifestSpec {
@@ -939,6 +993,85 @@ int main(int argc, char *argv[]) {
 		Check(verify(beta, Channel::CanaryPublic, false, runningCanary)
 				.has_value(),
 			"beta with greater base accepted on canary-public");
+	}
+
+	{ // Remote configuration is authenticated and bounded before parsing.
+		const auto rcKey = MakeTestKey("rc-config", true);
+		const auto rcPublicPem = PublicPem(rcKey.pair.get());
+		const auto configPayload = MakeRemoteConfigPayload(
+			kNow - 60,
+			kNow + 3600);
+		const auto configResponse = SignRemoteConfig(rcKey, configPayload);
+		auto error = QString();
+		const auto parsed = Ayu::RemoteConfig::Parse(
+			configResponse,
+			rcPublicPem,
+			kNow,
+			&error);
+		Check(parsed.has_value(), "signed remote config accepted");
+		Check(parsed
+			&& parsed->developers.contains(139303278)
+			&& parsed->officialChannels.contains(1172503281)
+			&& parsed->supporters.contains(5079320635)
+			&& parsed->supporterChannels.contains(3116497667),
+			"remote config id lists survive parsing");
+		Check(parsed
+			&& parsed->customBadges.contains(6007644928)
+			&& parsed->customBadges.at(6007644928).documentId
+				== 987654321012345,
+			"remote config custom badge survives parsing");
+		Check(parsed
+			&& parsed->donateUsername == "@ayugramOwner"
+			&& parsed->donateAmountUsd == "5.00",
+			"remote config donation values survive parsing");
+
+		Check(!Ayu::RemoteConfig::Parse(
+				configPayload,
+				rcPublicPem,
+				kNow),
+			"legacy unsigned remote config rejected");
+
+		auto tamperedPayload = configPayload;
+		tamperedPayload[tamperedPayload.size() - 1]
+			= tamperedPayload[tamperedPayload.size() - 1] ^ 1;
+		Check(!Ayu::RemoteConfig::Parse(
+				MakeRemoteConfigResponse(
+					tamperedPayload,
+					SignWith(rcKey, configPayload)),
+				rcPublicPem,
+				kNow),
+			"tampered remote config rejected");
+
+		Check(!Ayu::RemoteConfig::Parse(
+				MakeRemoteConfigResponse(configPayload, QByteArray(64, 'x')),
+				rcPublicPem,
+				kNow),
+			"remote config with bad signature rejected");
+
+		const auto expiredPayload = MakeRemoteConfigPayload(
+			kNow - 3600,
+			kNow - 60);
+		Check(!Ayu::RemoteConfig::Parse(
+				SignRemoteConfig(rcKey, expiredPayload),
+				rcPublicPem,
+				kNow),
+			"expired remote config rejected");
+
+		const auto invalidAmountPayload = MakeRemoteConfigPayload(
+			kNow - 60,
+			kNow + 3600,
+			"5\n");
+		Check(!Ayu::RemoteConfig::Parse(
+				SignRemoteConfig(rcKey, invalidAmountPayload),
+				rcPublicPem,
+				kNow),
+			"remote config with invalid donation value rejected");
+
+		Check(!Ayu::RemoteConfig::Parse(
+				QByteArray(Ayu::RemoteConfig::kMaxResponseSize + 1, 'x'),
+				rcPublicPem,
+				kNow),
+			"oversized remote config rejected before parsing");
 	}
 
 	std::cout << (TotalChecks - FailedChecks) << "/" << TotalChecks

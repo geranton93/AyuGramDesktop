@@ -155,6 +155,21 @@ Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
 
 Или следуйте [руководству по сборке форка](https://github.com/geranton93/AyuGramDesktop/blob/dev/docs/building-linux.md).
 
+## Локальные проверки перед коммитом
+
+Один раз включите версионируемый pre-commit hook в этом checkout:
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+Он проверяет именно staged-снимок: ищет файлы и шаблоны учётных данных через
+Gitleaks, проверяет workflow и shell-скрипты, разбирает изменённые Python/JSON/XML,
+проверяет материалы доверия обновлятора, запускает OSV-Scanner для изменённых
+манифестов зависимостей и выполняет целевые тесты обновлятора. Полный [план локальных
+quality-gates](Telegram/build/quality/README.md) описывает установку инструментов,
+дополнительные анализаторы и полный режим проверки.
+
 ## Пожертвования
 
 Вам нравится использовать **AyuGram**? Оставьте нам чаевые!
