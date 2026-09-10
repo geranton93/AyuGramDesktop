@@ -72,6 +72,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "base/random.h"
 #include "base/call_delayed.h"
+#include "base/weak_ptr.h"
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
 #include "boxes/add_contact_box.h"
@@ -1467,7 +1468,9 @@ void ApiWrap::markContentsRead(
 			continue;
 		}
 
-		if (!ghost.sendReadMessages() && !passthrough) {
+		if (!ghost.shouldSendReadMessages(
+				item->history()->peer,
+				passthrough)) {
 			continue;
 		}
 
@@ -1500,7 +1503,9 @@ void ApiWrap::markContentsRead(not_null<HistoryItem*> item) {
 	}
 
 	const auto &ghost = AyuSettings::ghost(&session());
-	if (!ghost.sendReadMessages() && !passthrough) {
+	if (!ghost.shouldSendReadMessages(
+			item->history()->peer,
+			passthrough)) {
 		return;
 	}
 
@@ -3865,18 +3870,54 @@ void ApiWrap::forwardMessages(
 		FnMut<void()> &&successCallback) {
 	Expects(!draft.items.empty());
 
-	const auto fullAyuForward = AyuForward::isFullAyuForwardNeeded(draft.items.front());
+	const auto fullAyuForward = AyuForward::isFullAyuForwardNeeded(draft.items);
+	const auto itemIds = _session->data().itemsToIds(draft.items);
+	if (itemIds.size() != draft.items.size()) {
+		return;
+	}
+	const auto forwardOptions = draft.options;
+	const auto sourceSession = base::make_weak(_session);
+	const auto targetHistory = base::make_weak(action.history);
 	if (fullAyuForward) {
-		crl::async([=] {
-			AyuForward::forwardMessages(_session, action, false, draft);
+		crl::async([
+				sourceSession,
+				action,
+				itemIds,
+				forwardOptions,
+				targetHistory] {
+			const auto session = sourceSession.get();
+			if (!session) {
+				return;
+			}
+			AyuForward::forwardMessages(
+				not_null<Main::Session*>(session),
+				action,
+				false,
+				itemIds,
+				forwardOptions,
+				targetHistory);
 		});
 		return;
 	}
 
 	const auto ayuIntelligentForwardNeeded = AyuForward::isAyuForwardNeeded(draft.items);
 	if (ayuIntelligentForwardNeeded) {
-		crl::async([=] {
-			AyuForward::intelligentForward(_session, action, draft);
+		crl::async([
+				sourceSession,
+				action,
+				itemIds,
+				forwardOptions,
+				targetHistory] {
+			const auto session = sourceSession.get();
+			if (!session) {
+				return;
+			}
+			AyuForward::intelligentForward(
+				not_null<Main::Session*>(session),
+				action,
+				itemIds,
+				forwardOptions,
+				targetHistory);
 		});
 		return;
 	}
@@ -4782,7 +4823,7 @@ void ApiWrap::sendMessage(
 	const auto ephemeral = _session->ephemeralMessages().wouldSend(message);
 	if (!ephemeral
 		&& !canSendTexts
-		&& !AyuForward::isForwarding(peer->id)) {
+		&& !AyuForward::isForwarding(*_session, peer->id)) {
 		return;
 	} else if (_session->ephemeralMessages().trySend(message)) {
 		if (clearCloudDraft) {

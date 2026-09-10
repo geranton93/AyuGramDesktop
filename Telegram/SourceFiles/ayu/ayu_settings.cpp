@@ -13,6 +13,9 @@
 #include "ayu/features/streamer_mode/streamer_mode.h"
 #include "ayu/ui/ayu_logo.h"
 #include "core/application.h"
+#include "data/data_peer.h"
+#include "data/data_peer_id.h"
+#include "data/data_user.h"
 #include "features/filters/filters_cache_controller.h"
 #include "features/translator/ayu_translator.h"
 #include "main/main_domain.h"
@@ -21,8 +24,14 @@
 #include "rpl/combine.h"
 #include "window/window_controller.h"
 
-#include <fstream>
+#include <algorithm>
+#include <charconv>
+#include <optional>
+#include <vector>
 #include <QApplication>
+#include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
 
 using json = nlohmann::json;
 
@@ -38,7 +47,64 @@ void repaintApp() {
 	}
 }
 
-rpl::lifetime lifetime; // idk reactivity dies when placed in `GhostModeAccountSettings` as field
+constexpr auto kMaxGhostAccounts = std::size_t(32);
+constexpr auto kMaxHiddenFolderAccounts = std::size_t(32);
+constexpr auto kMaxHiddenFoldersPerAccount = std::size_t(128);
+constexpr auto kMaxSettingsBytes = qint64(16 * 1024 * 1024);
+
+[[nodiscard]] QString NormalizeSttLanguage(QString value) {
+	value = value.trimmed().toLower();
+	if (value == u"auto"_q) {
+		return value;
+	}
+	if (value.size() != 2) {
+		return u"auto"_q;
+	}
+	for (const auto ch : value) {
+		if (ch < u'a' || ch > u'z') {
+			return u"auto"_q;
+		}
+	}
+	return value;
+}
+
+using TrustedChatExceptions = Ayu::GhostModePeerExceptions;
+
+[[nodiscard]] auto SerializedTrustedChatPeerId(PeerId peerId)
+		-> std::optional<TrustedChatExceptions::SerializedPeerId> {
+	const auto userId = peerToUser(peerId);
+	if (!peerId || !userId || peerFromUser(userId) != peerId) {
+		return std::nullopt;
+	}
+	return SerializePeerId(peerFromUser(userId));
+}
+
+[[nodiscard]] auto SerializedTrustedChatPeerId(not_null<PeerData*> peer)
+		-> std::optional<TrustedChatExceptions::SerializedPeerId> {
+	const auto user = peer->asUser();
+	if (!user || user->isSelf() || user->isBot()) {
+		return std::nullopt;
+	}
+	return SerializedTrustedChatPeerId(peer->id);
+}
+
+[[nodiscard]] auto ValidTrustedChatExceptions(
+		TrustedChatExceptions::Values values) {
+	auto result = TrustedChatExceptions::Values();
+	result.reserve(std::min(
+		values.size(),
+		TrustedChatExceptions::kMaxValues));
+	for (const auto serialized : values) {
+		if (result.size() >= TrustedChatExceptions::kMaxValues) {
+			break;
+		}
+		const auto peerId = DeserializePeerId(serialized);
+		if (const auto normalized = SerializedTrustedChatPeerId(peerId)) {
+			result.emplace(*normalized);
+		}
+	}
+	return result;
+}
 
 } // namespace
 
@@ -65,12 +131,58 @@ GhostModeAccountSettings::GhostModeAccountSettings() {
 			&& (onlineLocked || !online)
 			&& (uploadLocked || !upload)
 			&& (offlineLocked || offline);
-	}, lifetime);
+	}, _lifetime);
+}
+
+bool GhostModeAccountSettings::shouldSendReadMessages(
+		not_null<PeerData*> peer,
+		bool passthrough) const {
+	return _trustedChatExceptions.shouldSend(
+		sendReadMessages() || passthrough,
+		SerializedTrustedChatPeerId(peer));
+}
+
+bool GhostModeAccountSettings::shouldSendChatActivity(
+		not_null<PeerData*> peer) const {
+	return _trustedChatExceptions.shouldSend(
+		sendUploadProgress(),
+		SerializedTrustedChatPeerId(peer));
+}
+
+bool GhostModeAccountSettings::isTrustedChatException(
+		not_null<PeerData*> peer) const {
+	const auto serialized = SerializedTrustedChatPeerId(peer);
+	return serialized && _trustedChatExceptions.contains(*serialized);
+}
+
+auto GhostModeAccountSettings::trustedChatExceptions() const
+		-> const Ayu::GhostModePeerExceptions::Values & {
+	return _trustedChatExceptions.values();
 }
 
 void GhostModeAccountSettings::setSendReadMessages(bool val) {
 	if (_sendReadMessages.current() == val) return;
 	_sendReadMessages = val;
+	AyuSettings::save();
+}
+
+void GhostModeAccountSettings::setTrustedChatException(
+		not_null<PeerData*> peer,
+		bool enabled) {
+	const auto serialized = SerializedTrustedChatPeerId(peer);
+	if (!serialized || !_trustedChatExceptions.set(*serialized, enabled)) {
+		return;
+	}
+	AyuSettings::save();
+}
+
+void GhostModeAccountSettings::setTrustedChatExceptions(
+		Ayu::GhostModePeerExceptions::Values values) {
+	values = ValidTrustedChatExceptions(std::move(values));
+	if (_trustedChatExceptions.values() == values) {
+		return;
+	}
+	_trustedChatExceptions.replace(std::move(values));
 	AyuSettings::save();
 }
 
@@ -183,8 +295,15 @@ void GhostModeAccountSettings::setSendOfflinePacketAfterOnlineLocked(bool val) {
 }
 
 void to_json(nlohmann::json &j, const GhostModeAccountSettings &s) {
+	auto trustedChatExceptions = std::vector<
+		Ayu::GhostModePeerExceptions::SerializedPeerId>(
+		s._trustedChatExceptions.values().begin(),
+		s._trustedChatExceptions.values().end());
+	std::sort(trustedChatExceptions.begin(), trustedChatExceptions.end());
+
 	j = nlohmann::json{
 		{"sendReadMessages", s._sendReadMessages.current()},
+		{"trustedChatExceptions", std::move(trustedChatExceptions)},
 		{"sendReadStories", s._sendReadStories.current()},
 		{"sendOnlinePackets", s._sendOnlinePackets.current()},
 		{"sendUploadProgress", s._sendUploadProgress.current()},
@@ -203,6 +322,46 @@ void to_json(nlohmann::json &j, const GhostModeAccountSettings &s) {
 
 void from_json(const nlohmann::json &j, GhostModeAccountSettings &s) {
 	s._sendReadMessages = j.value("sendReadMessages", true);
+	auto trustedChatExceptions = TrustedChatExceptions::Values();
+	if (const auto current = j.find("trustedChatExceptions");
+		current != j.end() && current->is_array()) {
+		for (const auto &value : *current) {
+			if (trustedChatExceptions.size() >= TrustedChatExceptions::kMaxValues) {
+				break;
+			}
+			if (value.is_number_unsigned()) {
+				trustedChatExceptions.emplace(
+					value.get<TrustedChatExceptions::SerializedPeerId>());
+			} else if (value.is_number_integer()) {
+				const auto serialized = value.get<std::int64_t>();
+				if (serialized >= 0) {
+					trustedChatExceptions.emplace(
+						static_cast<
+							TrustedChatExceptions::SerializedPeerId>(serialized));
+				}
+			}
+		}
+	} else if (const auto legacy = j.find("readReceiptExceptions");
+		legacy != j.end() && legacy->is_array()) {
+		for (const auto &value : *legacy) {
+			if (trustedChatExceptions.size() >= TrustedChatExceptions::kMaxValues) {
+				break;
+			}
+			if (value.is_number_unsigned()) {
+				trustedChatExceptions.emplace(
+					value.get<TrustedChatExceptions::SerializedPeerId>());
+			} else if (value.is_number_integer()) {
+				const auto serialized = value.get<std::int64_t>();
+				if (serialized >= 0) {
+					trustedChatExceptions.emplace(
+						static_cast<
+							TrustedChatExceptions::SerializedPeerId>(serialized));
+				}
+			}
+		}
+	}
+	s._trustedChatExceptions.replace(
+		ValidTrustedChatExceptions(std::move(trustedChatExceptions)));
 	s._sendReadStories = j.value("sendReadStories", true);
 	s._sendOnlinePackets = j.value("sendOnlinePackets", true);
 	s._sendUploadProgress = j.value("sendUploadProgress", true);
@@ -365,17 +524,31 @@ AyuSettings &AyuSettings::getInstance() {
 }
 
 void AyuSettings::load() {
-	std::ifstream file(getSettingsPath());
-	if (!file.good()) {
+	const auto path = QString::fromStdString(getSettingsPath());
+	const auto size = QFileInfo(path).size();
+	if (size <= 0 || size > kMaxSettingsBytes) {
+		if (size > kMaxSettingsBytes) {
+			LOG(("AyuGramSettings: ignoring oversized settings file"));
+		}
 		return;
 	}
 
 	auto &settings = getInstance();
 
 	try {
-		json p;
-		file >> p;
+		QFile file(path);
+		if (!file.open(QIODevice::ReadOnly)) {
+			return;
+		}
+		const auto data = file.read(kMaxSettingsBytes + 1);
 		file.close();
+		if (data.size() > kMaxSettingsBytes) {
+			LOG(("AyuGramSettings: ignoring oversized settings file"));
+			return;
+		}
+		auto p = json::parse(
+			data.constData(),
+			data.constData() + data.size());
 
 		if (!p.contains("ghostModeSettings")) {
 			p["ghostModeSettings"] = nlohmann::json::object({
@@ -417,13 +590,26 @@ void AyuSettings::load() {
 }
 
 void AyuSettings::save() {
-	auto &settings = getInstance();
-	json p = settings;
+	try {
+		auto &settings = getInstance();
+		const auto serialized = json(settings).dump(4);
+		if (serialized.size() > static_cast<std::size_t>(kMaxSettingsBytes)) {
+			LOG(("AyuGramSettings: refusing to save oversized settings"));
+			return;
+		}
 
-	std::ofstream file;
-	file.open(getSettingsPath());
-	file << p.dump(4);
-	file.close();
+		QSaveFile file(QString::fromStdString(getSettingsPath()));
+		if (!file.open(QIODevice::WriteOnly)
+			|| file.write(serialized.data(), serialized.size())
+				!= static_cast<qint64>(serialized.size())
+			|| !file.commit()) {
+			LOG(("AyuGramSettings: failed to atomically save settings"));
+		}
+	} catch (const std::exception &ex) {
+		LOG(("AyuGramSettings: failed to save settings: %1").arg(ex.what()));
+	} catch (...) {
+		LOG(("AyuGramSettings: failed to save settings"));
+	}
 }
 
 void AyuSettings::reset() {
@@ -477,6 +663,51 @@ void AyuSettings::removeShadowBan(int64 id) {
 		FiltersCacheController::fireUpdate();
 		save();
 	}
+}
+
+void AyuSettings::addHiddenFolder(const uint64 accountId, const int64 id) {
+	if (!accountId || id <= 0) {
+		return;
+	}
+
+	auto i = _hiddenFolderIds.find(accountId);
+	if (i == end(_hiddenFolderIds)) {
+		if (_hiddenFolderIds.size() >= kMaxHiddenFolderAccounts) {
+			return;
+		}
+		i = _hiddenFolderIds.emplace(accountId, std::unordered_set<int64>()).first;
+	}
+	if (i->second.size() >= kMaxHiddenFoldersPerAccount) {
+		return;
+	}
+	if (i->second.insert(id).second) {
+		_hiddenFolderIdsChanged.fire({});
+		save();
+	}
+}
+
+void AyuSettings::removeHiddenFolder(const uint64 accountId, const int64 id) {
+	if (!accountId || id <= 0) {
+		return;
+	}
+
+	const auto i = _hiddenFolderIds.find(accountId);
+	if (i == end(_hiddenFolderIds) || !i->second.erase(id)) {
+		return;
+	}
+	if (i->second.empty()) {
+		_hiddenFolderIds.erase(i);
+	}
+	_hiddenFolderIdsChanged.fire({});
+	save();
+}
+
+bool AyuSettings::isFolderHidden(const uint64 accountId, const int64 id) const {
+	if (!accountId || id <= 0) {
+		return false;
+	}
+	const auto i = _hiddenFolderIds.find(accountId);
+	return (i != end(_hiddenFolderIds)) && i->second.contains(id);
 }
 
 void AyuSettings::validate() {
@@ -1062,6 +1293,61 @@ void AyuSettings::setSingleCornerRadius(bool val) {
 	save();
 }
 
+void AyuSettings::setDisableGlobalSearch(bool val) {
+	if (_disableGlobalSearch.current() == val) return;
+	_disableGlobalSearch = val;
+	save();
+}
+
+void AyuSettings::setRevealAllSpoilers(bool val) {
+	if (_revealAllSpoilers.current() == val) return;
+	_revealAllSpoilers = val;
+	repaintApp();
+	save();
+}
+
+void AyuSettings::setSttEnabled(bool val) {
+	if (_sttEnabled.current() == val) {
+		return;
+	}
+	_sttEnabled = val;
+	repaintApp();
+	save();
+}
+
+void AyuSettings::setSttEngine(STTEngine val) {
+#if !defined(Q_OS_MAC)
+	val = STTEngine::Whisper;
+#endif
+	if (_sttEngine.current() == val) {
+		return;
+	}
+	_sttEngine = val;
+	save();
+}
+
+void AyuSettings::setSttLanguage(const QString &val) {
+	const auto normalized = NormalizeSttLanguage(val);
+	if (_sttLanguage.current() == normalized) {
+		return;
+	}
+	_sttLanguage = normalized;
+	save();
+}
+
+void AyuSettings::setWhisperModelType(WhisperModel val) {
+	if (val != WhisperModel::Tiny
+		&& val != WhisperModel::Base
+		&& val != WhisperModel::Small) {
+		val = WhisperModel::Base;
+	}
+	if (_whisperModelType.current() == val) {
+		return;
+	}
+	_whisperModelType = val;
+	save();
+}
+
 void AyuSettings::setStreamerMode(bool val) {
 	if (_streamerMode.current() == val) return;
 	_streamerMode = val;
@@ -1074,6 +1360,12 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 	for (const auto &[key, value] : s._ghostAccounts) {
 		ghostAccounts[std::to_string(key)] = *value;
 	}
+	auto hiddenFolderAccounts = nlohmann::json::object();
+	for (const auto &[accountId, ids] : s._hiddenFolderIds) {
+		auto sortedIds = std::vector<int64>(ids.begin(), ids.end());
+		std::sort(sortedIds.begin(), sortedIds.end());
+		hiddenFolderAccounts[std::to_string(accountId)] = std::move(sortedIds);
+	}
 
 	j = nlohmann::json{
 		{"ghostModeSettings", ghostAccounts},
@@ -1082,6 +1374,7 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"saveMessagesHistory", s._saveMessagesHistory.current()},
 		{"saveForBots", s._saveForBots.current()},
 		{"shadowBanIds", s._shadowBanIds},
+		{"hiddenFolderIds", hiddenFolderAccounts},
 		{"filtersEnabled", s._filtersEnabled.current()},
 		{"filtersEnabledInChats", s._filtersEnabledInChats.current()},
 		{"hideFromBlocked", s._hideFromBlocked.current()},
@@ -1164,7 +1457,13 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"crashReporting", s._crashReporting.current()},
 		{"avatarCorners", s._avatarCorners.current()},
 		{"singleCornerRadius", s._singleCornerRadius.current()},
+		{"disableGlobalSearch", s._disableGlobalSearch.current()},
+		{"revealAllSpoilers", s._revealAllSpoilers.current()},
 		{"streamerMode", s._streamerMode.current()},
+		{"sttEnabled", s._sttEnabled.current()},
+		{"sttEngine", s._sttEngine.current()},
+		{"sttLanguage", s._sttLanguage.current()},
+		{"whisperModelType", s._whisperModelType.current()},
 		{"messageShotSettings", s._messageShotSettings}
 	};
 }
@@ -1174,10 +1473,30 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 
 	if (j.contains("ghostModeSettings") && j["ghostModeSettings"].is_object()) {
 		s._ghostAccounts.clear();
-		for (auto &[key, value] : j["ghostModeSettings"].items()) {
-			auto account = std::make_unique<GhostModeAccountSettings>();
-			value.get_to(*account);
-			s._ghostAccounts[std::stoull(key)] = std::move(account);
+		auto accountCount = std::size_t(0);
+		for (const auto &[key, value] : j["ghostModeSettings"].items()) {
+			if (accountCount >= kMaxGhostAccounts) {
+				break;
+			}
+
+			uint64 accountId = 0;
+			const auto parsed = std::from_chars(
+				key.data(),
+				key.data() + key.size(),
+				accountId);
+			if (parsed.ec != std::errc()
+				|| parsed.ptr != key.data() + key.size()) {
+				continue;
+			}
+
+			try {
+				auto account = std::make_unique<GhostModeAccountSettings>();
+				value.get_to(*account);
+				s._ghostAccounts.emplace(accountId, std::move(account));
+				++accountCount;
+			} catch (const std::exception &) {
+				continue;
+			}
 		}
 	}
 
@@ -1186,6 +1505,49 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._saveMessagesHistory = j.value("saveMessagesHistory", defaults._saveMessagesHistory.current());
 	s._saveForBots = j.value("saveForBots", defaults._saveForBots.current());
 	s._shadowBanIds = j.value("shadowBanIds", defaults._shadowBanIds);
+	s._hiddenFolderIds.clear();
+	if (const auto i = j.find("hiddenFolderIds")
+		; i != j.end() && i->is_object()) {
+		auto accountCount = std::size_t(0);
+		for (const auto &[accountKey, values] : i->items()) {
+			if (accountCount >= kMaxHiddenFolderAccounts) {
+				break;
+			}
+			++accountCount;
+			if (!values.is_array()
+				|| values.size() > kMaxHiddenFoldersPerAccount) {
+				continue;
+			}
+
+			uint64 accountId = 0;
+			try {
+				std::size_t parsed = 0;
+				accountId = std::stoull(accountKey, &parsed);
+				if (!accountId || parsed != accountKey.size()) {
+					continue;
+				}
+			} catch (...) {
+				continue;
+			}
+
+			auto ids = std::unordered_set<int64>();
+			for (const auto &value : values) {
+				if (!value.is_number_integer()) {
+					continue;
+				}
+				try {
+					const auto id = value.get<int64>();
+					if (id > 0) {
+						ids.insert(id);
+					}
+				} catch (...) {
+				}
+			}
+			if (!ids.empty()) {
+				s._hiddenFolderIds.emplace(accountId, std::move(ids));
+			}
+		}
+	}
 	s._filtersEnabled = j.value("filtersEnabled", defaults._filtersEnabled.current());
 	s._filtersEnabledInChats = j.value("filtersEnabledInChats", defaults._filtersEnabledInChats.current());
 	s._hideFromBlocked = j.value("hideFromBlocked", defaults._hideFromBlocked.current());
@@ -1268,7 +1630,42 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._crashReporting = j.value("crashReporting", defaults._crashReporting.current());
 	s._avatarCorners = j.value("avatarCorners", defaults._avatarCorners.current());
 	s._singleCornerRadius = j.value("singleCornerRadius", defaults._singleCornerRadius.current());
+	s._disableGlobalSearch = j.value("disableGlobalSearch", defaults._disableGlobalSearch.current());
+	s._revealAllSpoilers = (j.contains("revealAllSpoilers")
+		&& j["revealAllSpoilers"].is_boolean())
+		? j["revealAllSpoilers"].get<bool>()
+		: defaults._revealAllSpoilers.current();
 	s._streamerMode = j.value("streamerMode", defaults._streamerMode.current());
+	s._sttEnabled = (j.contains("sttEnabled")
+		&& j["sttEnabled"].is_boolean())
+		? j["sttEnabled"].get<bool>()
+		: defaults._sttEnabled.current();
+	s._sttEngine = defaults._sttEngine.current();
+	if (const auto i = j.find("sttEngine"); i != j.end()
+		&& i->is_number_integer()) {
+		const auto value = i->get<int>();
+		if (value == static_cast<int>(STTEngine::AppleSpeech)
+			|| value == static_cast<int>(STTEngine::Whisper)) {
+			s._sttEngine = static_cast<STTEngine>(value);
+		}
+	}
+#if !defined(Q_OS_MAC)
+	s._sttEngine = STTEngine::Whisper;
+#endif
+	s._sttLanguage = defaults._sttLanguage.current();
+	if (const auto i = j.find("sttLanguage"); i != j.end()
+		&& i->is_string()) {
+		s._sttLanguage = NormalizeSttLanguage(i->get<QString>());
+	}
+	s._whisperModelType = defaults._whisperModelType.current();
+	if (const auto i = j.find("whisperModelType"); i != j.end()
+		&& i->is_number_integer()) {
+		const auto value = i->get<int>();
+		if (value >= static_cast<int>(WhisperModel::Tiny)
+			&& value <= static_cast<int>(WhisperModel::Small)) {
+			s._whisperModelType = static_cast<WhisperModel>(value);
+		}
+	}
 
 	if (j.contains("messageShotSettings") && j["messageShotSettings"].is_object()) {
 		j["messageShotSettings"].get_to(s._messageShotSettings);

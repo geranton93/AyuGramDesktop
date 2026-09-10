@@ -6,8 +6,10 @@
 // Copyright @Radolyn, 2026
 #pragma once
 
+#include "ayu/ghost_mode_peer_exceptions.h"
 #include "ayu/libs/json.hpp"
 #include "ayu/libs/json_ext.hpp"
+#include "rpl/event_stream.h"
 #include "rpl/lifetime.h"
 #include "rpl/producer.h"
 #include "rpl/variable.h"
@@ -19,6 +21,8 @@
 namespace Main {
 class Session;
 }
+
+class PeerData;
 
 enum class PeerIdDisplay {
 	Hidden = 0,
@@ -49,6 +53,17 @@ enum class SendWithoutSoundOption {
 	Never = 0,
 	InGhostMode = 1,
 	Always = 2,
+};
+
+enum class STTEngine {
+	AppleSpeech = 0,
+	Whisper = 1,
+};
+
+enum class WhisperModel {
+	Tiny = 0,
+	Base = 1,
+	Small = 2,
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(PeerIdDisplay, {
@@ -82,11 +97,29 @@ NLOHMANN_JSON_SERIALIZE_ENUM(SendWithoutSoundOption, {
 	{SendWithoutSoundOption::Always, 2},
 })
 
+NLOHMANN_JSON_SERIALIZE_ENUM(STTEngine, {
+	{STTEngine::AppleSpeech, 0},
+	{STTEngine::Whisper, 1},
+})
+
+NLOHMANN_JSON_SERIALIZE_ENUM(WhisperModel, {
+	{WhisperModel::Tiny, 0},
+	{WhisperModel::Base, 1},
+	{WhisperModel::Small, 2},
+})
+
 class GhostModeAccountSettings {
 public:
 	GhostModeAccountSettings();
 
 	[[nodiscard]] bool sendReadMessages() const { return _sendReadMessages.current(); }
+	[[nodiscard]] bool shouldSendReadMessages(
+		not_null<PeerData*> peer,
+		bool passthrough = false) const;
+	[[nodiscard]] bool shouldSendChatActivity(not_null<PeerData*> peer) const;
+	[[nodiscard]] bool isTrustedChatException(not_null<PeerData*> peer) const;
+	[[nodiscard]] auto trustedChatExceptions() const
+		-> const Ayu::GhostModePeerExceptions::Values &;
 	[[nodiscard]] bool sendReadStories() const { return _sendReadStories.current(); }
 	[[nodiscard]] bool sendOnlinePackets() const { return _sendOnlinePackets.current(); }
 	[[nodiscard]] bool sendUploadProgress() const { return _sendUploadProgress.current(); }
@@ -106,6 +139,8 @@ public:
 	[[nodiscard]] bool sendOfflinePacketAfterOnlineLocked() const { return _sendOfflinePacketAfterOnlineLocked.current(); }
 
 	void setSendReadMessages(bool val);
+	void setTrustedChatException(not_null<PeerData*> peer, bool enabled);
+	void setTrustedChatExceptions(Ayu::GhostModePeerExceptions::Values values);
 	void setSendReadStories(bool val);
 	void setSendOnlinePackets(bool val);
 	void setSendUploadProgress(bool val);
@@ -161,6 +196,7 @@ private:
 	friend class AyuSettings;
 
 	rpl::variable<bool> _sendReadMessages = true;
+	Ayu::GhostModePeerExceptions _trustedChatExceptions;
 	rpl::variable<bool> _sendReadStories = true;
 	rpl::variable<bool> _sendOnlinePackets = true;
 	rpl::variable<bool> _sendUploadProgress = true;
@@ -176,6 +212,7 @@ private:
 	rpl::variable<bool> _sendOnlinePacketsLocked = false;
 	rpl::variable<bool> _sendUploadProgressLocked = false;
 	rpl::variable<bool> _sendOfflinePacketAfterOnlineLocked = false;
+	rpl::lifetime _lifetime;
 };
 
 void to_json(nlohmann::json &j, const GhostModeAccountSettings &s);
@@ -265,6 +302,13 @@ public:
 	[[nodiscard]] bool isShadowBanned(const int64 id) const { return _shadowBanIds.contains(id); }
 	[[nodiscard]] const std::unordered_set<int64> &shadowBanIds() const { return _shadowBanIds; }
 
+	void addHiddenFolder(uint64 accountId, int64 id);
+	void removeHiddenFolder(uint64 accountId, int64 id);
+	[[nodiscard]] bool isFolderHidden(uint64 accountId, int64 id) const;
+	[[nodiscard]] rpl::producer<> hiddenFolderIdsChanges() const {
+		return _hiddenFolderIdsChanged.events();
+	}
+
 	void validate();
 
 	[[nodiscard]] bool saveDeletedMessages() const { return _saveDeletedMessages.current(); }
@@ -352,6 +396,8 @@ public:
 	[[nodiscard]] bool crashReporting() const { return _crashReporting.current(); }
 	[[nodiscard]] int avatarCorners() const { return _avatarCorners.current(); }
 	[[nodiscard]] bool singleCornerRadius() const { return _singleCornerRadius.current(); }
+	[[nodiscard]] bool disableGlobalSearch() const { return _disableGlobalSearch.current(); }
+	[[nodiscard]] bool revealAllSpoilers() const { return _revealAllSpoilers.current(); }
 	[[nodiscard]] bool streamerMode() const { return _streamerMode.current(); }
 
 	void setSaveDeletedMessages(bool val);
@@ -439,6 +485,8 @@ public:
 	void setCrashReporting(bool val);
 	void setAvatarCorners(int val);
 	void setSingleCornerRadius(bool val);
+	void setDisableGlobalSearch(bool val);
+	void setRevealAllSpoilers(bool val);
 	void setStreamerMode(bool val);
 
 	[[nodiscard]] rpl::producer<bool> useGlobalGhostModeValue() const { return _useGlobalGhostMode.value(); }
@@ -613,8 +661,25 @@ public:
 	[[nodiscard]] rpl::producer<int> avatarCornersChanges() const { return _avatarCorners.changes(); }
 	[[nodiscard]] rpl::producer<bool> singleCornerRadiusValue() const { return _singleCornerRadius.value(); }
 	[[nodiscard]] rpl::producer<bool> singleCornerRadiusChanges() const { return _singleCornerRadius.changes(); }
+	[[nodiscard]] rpl::producer<bool> disableGlobalSearchValue() const { return _disableGlobalSearch.value(); }
+	[[nodiscard]] rpl::producer<bool> disableGlobalSearchChanges() const { return _disableGlobalSearch.changes(); }
+	[[nodiscard]] rpl::producer<bool> revealAllSpoilersValue() const { return _revealAllSpoilers.value(); }
+	[[nodiscard]] rpl::producer<bool> revealAllSpoilersChanges() const { return _revealAllSpoilers.changes(); }
 	[[nodiscard]] rpl::producer<bool> streamerModeValue() const { return _streamerMode.value(); }
 	[[nodiscard]] rpl::producer<bool> streamerModeChanges() const { return _streamerMode.changes(); }
+	[[nodiscard]] bool sttEnabled() const { return _sttEnabled.current(); }
+	[[nodiscard]] STTEngine sttEngine() const { return _sttEngine.current(); }
+	[[nodiscard]] const QString &sttLanguage() const { return _sttLanguage.current(); }
+	[[nodiscard]] WhisperModel whisperModelType() const { return _whisperModelType.current(); }
+	[[nodiscard]] rpl::producer<bool> sttEnabledValue() const { return _sttEnabled.value(); }
+	[[nodiscard]] rpl::producer<STTEngine> sttEngineValue() const { return _sttEngine.value(); }
+	[[nodiscard]] rpl::producer<QString> sttLanguageValue() const { return _sttLanguage.value(); }
+	[[nodiscard]] rpl::producer<WhisperModel> whisperModelTypeValue() const { return _whisperModelType.value(); }
+
+	void setSttEnabled(bool val);
+	void setSttEngine(STTEngine val);
+	void setSttLanguage(const QString &val);
+	void setWhisperModelType(WhisperModel val);
 
 	friend void to_json(nlohmann::json &j, const AyuSettings &s);
 	friend void from_json(const nlohmann::json &j, AyuSettings &s);
@@ -628,6 +693,8 @@ private:
 	rpl::variable<bool> _saveMessagesHistory = true;
 	rpl::variable<bool> _saveForBots = false;
 	std::unordered_set<int64> _shadowBanIds;
+	std::map<uint64, std::unordered_set<int64>> _hiddenFolderIds;
+	rpl::event_stream<> _hiddenFolderIdsChanged;
 	rpl::variable<bool> _filtersEnabled = false;
 	rpl::variable<bool> _filtersEnabledInChats = false;
 	rpl::variable<bool> _hideFromBlocked = false;
@@ -710,7 +777,17 @@ private:
 	rpl::variable<bool> _crashReporting = true;
 	rpl::variable<int> _avatarCorners = 23;
 	rpl::variable<bool> _singleCornerRadius = false;
+	rpl::variable<bool> _disableGlobalSearch = false;
+	rpl::variable<bool> _revealAllSpoilers = false;
 	rpl::variable<bool> _streamerMode = false;
+	rpl::variable<bool> _sttEnabled = false;
+#if defined(Q_OS_MAC)
+	rpl::variable<STTEngine> _sttEngine = STTEngine::AppleSpeech;
+#else
+	rpl::variable<STTEngine> _sttEngine = STTEngine::Whisper;
+#endif
+	rpl::variable<QString> _sttLanguage = u"auto"_q;
+	rpl::variable<WhisperModel> _whisperModelType = WhisperModel::Base;
 
 	rpl::variable<bool> _useGlobalGhostMode = true;
 	std::map<uint64, std::unique_ptr<GhostModeAccountSettings>> _ghostAccounts;

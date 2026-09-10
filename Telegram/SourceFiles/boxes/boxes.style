@@ -632,3 +632,5 @@ translateBoxCopy: IconButton {
 	rippleAreaSize: 32px;
 	ripple: defaultRippleAnimationBgOver;
 }
+
+ayuOperationProgressHeight: 6px;

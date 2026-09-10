@@ -40,6 +40,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
 
+#include "ayu/ayu_settings.h"
+
 namespace HistoryView::Controls {
 namespace {
 
@@ -307,7 +309,7 @@ void ForwardPanel::paint(
 				.options = Images::Option::RoundSmall,
 				.outer = to.size(),
 			}));
-		if (_spoiler) {
+		if (_spoiler && !AyuSettings::getInstance().revealAllSpoilers()) {
 			Ui::FillSpoilerRect(p, to, Ui::DefaultImageSpoiler().frame(
 				_spoiler->index(now, pausedSpoiler)));
 		}

@@ -4144,8 +4144,12 @@ void HistoryItem::setPostAuthor(const QString &postAuthor) {
 }
 
 void HistoryItem::setDeleted() {
+	if (_deleted) {
+		return;
+	}
 	_deleted = true;
 	_deletedAnimated = true;
+	removeFromSharedMediaIndex();
 
 	// cleanup mentions and reactions as they tend to bug with deleted messages (e.g. can't remove mention)
 	if (isUnreadMention()) {

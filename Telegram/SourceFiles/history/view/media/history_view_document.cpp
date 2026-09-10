@@ -47,6 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/stt/stt_manager.h"
 #include "ayu/features/message_shot/message_shot.h"
 
 
@@ -512,9 +513,13 @@ QSize Document::countOptimalSize() {
 			|| _realParent->isScheduled()
 			|| _realParent->isAdminLogEntry()
 			|| (!session->premium()
+				&& !(AyuSettings::getInstance().sttEnabled()
+					&& Ayu::STT::STTManager::localEngineAvailable())
 				&& !transcribes->freeFor(_realParent)
 				&& !transcribes->trialsSupport())
 			|| (!session->premium()
+				&& !(AyuSettings::getInstance().sttEnabled()
+					&& Ayu::STT::STTManager::localEngineAvailable())
 				&& _data->duration() > transcribes->trialsMaxLengthMs())) {
 			voice->transcribe = nullptr;
 			voice->transcribeText = {};

@@ -8,13 +8,16 @@
 
 #include "history/history.h"
 #include "main/main_session.h"
+#include "base/weak_ptr.h"
 
 #include <atomic>
 
 namespace AyuForward {
-bool isForwarding(const PeerId &id);
+bool isForwarding(const Main::Session &session, const PeerId &id);
 void cancelForward(const PeerId &id, const Main::Session &session);
-std::pair<QString, QString> stateName(const PeerId &id);
+std::pair<QString, QString> stateName(
+	const Main::Session &session,
+	const PeerId &id);
 
 class ForwardState
 {
@@ -59,15 +62,20 @@ public:
 
 bool isAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items);
 bool isAyuForwardNeeded(not_null<HistoryItem*> item);
+bool isFullAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items);
 bool isFullAyuForwardNeeded(not_null<HistoryItem*> item);
 void intelligentForward(
 	not_null<Main::Session*> session,
 	const Api::SendAction &action,
-	const Data::ResolvedForwardDraft &draft);
+	const MessageIdsList &itemIds,
+	Data::ForwardOptions options,
+	base::weak_ptr<History> targetHistory);
 void forwardMessages(
 	not_null<Main::Session*> session,
 	const Api::SendAction &action,
 	bool forwardState,
-	const Data::ResolvedForwardDraft &draft);
+	const MessageIdsList &itemIds,
+	Data::ForwardOptions options,
+	base::weak_ptr<History> targetHistory);
 
 }

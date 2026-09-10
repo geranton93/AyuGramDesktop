@@ -6,8 +6,14 @@
 // Copyright @Radolyn, 2026
 #pragma once
 
+#include <QtCore/QJsonDocument>
+#include <QtCore/QPointer>
+#include <QtCore/QSet>
+#include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 #include <QtXml/QDomDocument>
+
+#include "rpl/lifetime.h"
 
 class AyuLanguage : public QObject
 {
@@ -19,24 +25,32 @@ public:
 	static void init();
 	static AyuLanguage *instance;
 
-	void fetchLanguage(const QString &id, const QString &baseId);
-	void applyLanguageJson(QJsonDocument doc);
-
-public Q_SLOTS:
-	void fetchFinished();
-	void fetchError(QNetworkReply::NetworkError e);
+	void applyLanguageJson(const QJsonDocument &doc);
 
 private:
 	AyuLanguage();
 	~AyuLanguage() override = default;
 
 	void loadCachedLanguage();
-	void saveCachedLanguage(const QByteArray &json, const QString &langId);
+	void syncLanguage();
+	void fetchLanguage(
+		const QString &id,
+		quint64 generation,
+		bool mirror = false);
+	void saveCachedLanguage(
+		const QJsonDocument &document,
+		const QString &langId);
+	void clearAppliedLanguage();
 	[[nodiscard]] QString getCacheDir() const;
 	[[nodiscard]] QString getCachePath(const QString &langId) const;
 
 	QNetworkAccessManager networkManager;
-	QNetworkReply *_chkReply = nullptr;
-	bool needFallback = false;
+	QPointer<QNetworkReply> _chkReply;
 	QString _currentLangId;
+	QString _baseLangId;
+	QJsonDocument _document;
+	QSet<QByteArray> _appliedKeys;
+	quint64 _generation = 0;
+	bool _applying = false;
+	rpl::lifetime _lifetime;
 };

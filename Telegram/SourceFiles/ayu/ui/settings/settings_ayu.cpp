@@ -12,6 +12,11 @@
 #include "ayu/ui/settings/ayu_builder.h"
 #include "ayu/ui/settings/settings_ayu_utils.h"
 #include "ayu/ui/settings/settings_main.h"
+#if defined(HAVE_WHISPER)
+#include "ayu/features/stt/download_helper.h"
+#include "ayu/features/stt/stt_manager.h"
+#include "ayu/features/stt/whisper_service.h"
+#endif
 #include "boxes/peer_list_box.h"
 #include "core/application.h"
 #include "data/data_user.h"
@@ -38,6 +43,12 @@
 #include "ui/widgets/menu/menu_item_base.h"
 #include "ui/wrap/vertical_layout.h"
 #include "window/window_session_controller.h"
+
+#include "rpl/combine.h"
+
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace Settings {
 
@@ -321,6 +332,7 @@ void BuildGhostEssentials(SectionBuilder &builder) {
 				auto &src = AyuSettings::ghost(userId);
 				auto &dst = AyuSettings::ghost(0);
 				dst.setSendReadMessages(src.sendReadMessages());
+				dst.setTrustedChatExceptions(src.trustedChatExceptions());
 				dst.setSendReadStories(src.sendReadStories());
 				dst.setSendOnlinePackets(src.sendOnlinePackets());
 				dst.setSendUploadProgress(src.sendUploadProgress());
@@ -661,6 +673,186 @@ void BuildSpyEssentials(SectionBuilder &builder, AyuSectionBuilder &ayu) {
 	});
 }
 
+#if defined(HAVE_WHISPER)
+void BuildSTT(SectionBuilder &builder, AyuSectionBuilder &ayu) {
+	const auto settings = &AyuSettings::getInstance();
+	const auto enabled = settings->sttEnabledValue();
+
+	builder.addSubsectionTitle(tr::ayu_SttSectionTitle());
+	ayu.addToggle({
+		.id = u"ayu/sttEnabled"_q,
+		.title = tr::ayu_SttEnabled(),
+		.getter = [settings] { return settings->sttEnabled(); },
+		.setter = [settings](bool value) {
+			settings->setSttEnabled(value);
+			if (value) {
+				Ayu::STT::STTManager::requestPermission();
+			} else {
+				Ayu::STT::WhisperService::instance().freeContext();
+			}
+		},
+	});
+	builder.addDividerText(tr::ayu_SttSectionDescription());
+
+	builder.scope([&] {
+#if defined(Q_OS_MAC)
+		const auto engineOptions = std::vector<QString>{
+			u"Apple Speech"_q,
+			u"Whisper"_q,
+		};
+		ayu.addChooseButton({
+			.id = u"ayu/sttEngine"_q,
+			.title = tr::ayu_SttEngine(),
+			.boxTitle = tr::ayu_SttEngine(),
+			.initialSelection = static_cast<int>(settings->sttEngine()),
+			.options = engineOptions,
+			.setter = [settings](int index) {
+				if (index < 0 || index >= 2) {
+					return;
+				}
+				const auto engine = static_cast<STTEngine>(index);
+				settings->setSttEngine(engine);
+				Ayu::STT::STTManager::requestPermission();
+				if (engine != STTEngine::Whisper) {
+					Ayu::STT::WhisperService::instance().freeContext();
+				}
+			},
+		});
+#endif
+
+		const auto modelOptions = std::vector<QString>{
+			u"Tiny (74 MiB)"_q,
+			u"Base (141 MiB)"_q,
+			u"Small (465 MiB)"_q,
+		};
+		ayu.addChooseButton({
+			.id = u"ayu/sttWhisperModel"_q,
+			.title = tr::ayu_SttWhisperModel(),
+			.boxTitle = tr::ayu_SttWhisperModel(),
+			.initialSelection = static_cast<int>(
+				settings->whisperModelType()),
+			.options = modelOptions,
+			.setter = [settings](int index) {
+				if (index < static_cast<int>(WhisperModel::Tiny)
+					|| index > static_cast<int>(WhisperModel::Small)) {
+					return;
+				}
+				settings->setWhisperModelType(
+					static_cast<WhisperModel>(index));
+			},
+		});
+
+		const auto languages = std::vector<std::pair<QString, QString>>{
+			{ u"auto"_q, u"Auto detect"_q },
+			{ u"en"_q, u"English"_q },
+			{ u"zh"_q, u"中文"_q },
+			{ u"hi"_q, u"हिन्दी"_q },
+			{ u"es"_q, u"Español"_q },
+			{ u"fr"_q, u"Français"_q },
+			{ u"ar"_q, u"العربية"_q },
+			{ u"ru"_q, u"Русский"_q },
+			{ u"pt"_q, u"Português"_q },
+			{ u"id"_q, u"Bahasa Indonesia"_q },
+			{ u"de"_q, u"Deutsch"_q },
+			{ u"ja"_q, u"日本語"_q },
+			{ u"tr"_q, u"Türkçe"_q },
+			{ u"ko"_q, u"한국어"_q },
+			{ u"vi"_q, u"Tiếng Việt"_q },
+			{ u"it"_q, u"Italiano"_q },
+			{ u"fa"_q, u"فارسی"_q },
+			{ u"uk"_q, u"Українська"_q },
+			{ u"nl"_q, u"Nederlands"_q },
+			{ u"el"_q, u"Ελληνικά"_q },
+			{ u"he"_q, u"עברית"_q },
+		};
+		const auto languageIndex = [settings, languages] {
+			for (auto i = 0; i != static_cast<int>(languages.size()); ++i) {
+				if (languages[i].first == settings->sttLanguage()) {
+					return i;
+				}
+			}
+			return 0;
+		};
+		const auto languageLabels = [languages] {
+			auto result = std::vector<QString>();
+			result.reserve(languages.size());
+			for (const auto &language : languages) {
+				result.push_back(language.second);
+			}
+			return result;
+		}();
+		ayu.addChooseButton({
+			.id = u"ayu/sttLanguage"_q,
+			.title = tr::ayu_SttLanguage(),
+			.boxTitle = tr::ayu_SttLanguage(),
+			.initialSelection = languageIndex(),
+			.options = languageLabels,
+			.setter = [settings, languages](int index) {
+				if (index >= 0
+					&& index < static_cast<int>(languages.size())) {
+					settings->setSttLanguage(languages[index].first);
+				}
+			},
+		});
+
+		const auto progress = std::make_shared<rpl::variable<int>>(-1);
+		const auto modelLabel = rpl::combine(
+			settings->whisperModelTypeValue(),
+			progress->value()
+		) | rpl::map([](WhisperModel model, int percent) {
+			if (percent >= 0) {
+				return QString::number(percent) + u"%..."_q;
+			}
+			return Ayu::STT::STTManager::modelExists(
+				static_cast<int>(model))
+				? tr::ayu_SttModelDownloaded(tr::now)
+				: tr::ayu_SttDownloadModel(tr::now);
+		});
+		builder.addButton({
+			.id = u"ayu/sttModelDownload"_q,
+			.title = tr::ayu_SttModelTitle(),
+			.st = &st::settingsButtonNoIcon,
+			.label = std::move(modelLabel),
+			.onClick = [settings, progress] {
+				if (progress->current() >= 0) {
+					return;
+				}
+				const auto modelType = static_cast<int>(
+					settings->whisperModelType());
+				if (Ayu::STT::STTManager::modelExists(modelType)) {
+					Ui::Toast::Show(
+						tr::ayu_SttModelAlreadyDownloaded(tr::now));
+					return;
+				}
+
+				const auto url = Ayu::STT::STTManager::modelUrl(modelType);
+				const auto path = Ayu::STT::STTManager::modelPath(modelType);
+				const auto sha256 = Ayu::STT::STTManager::modelSha256(modelType);
+				const auto size = Ayu::STT::STTManager::modelSize(modelType);
+				if (url.isEmpty() || path.isEmpty() || sha256.isEmpty()
+					|| size <= 0) {
+					return;
+				}
+
+				*progress = 0;
+				Ayu::STT::DownloadWithProgress(
+					url,
+					path,
+					sha256,
+					size,
+					[progress](int percent) { *progress = percent; },
+					[progress](bool ok) {
+						*progress = -1;
+						Ui::Toast::Show(ok
+							? tr::ayu_SttDownloadComplete(tr::now)
+							: tr::ayu_SttDownloadFailed(tr::now));
+					});
+			},
+		});
+	}, enabled);
+}
+#endif
+
 void BuildOther(SectionBuilder &builder, AyuSectionBuilder &ayu) {
 	builder.addSubsectionTitle(tr::ayu_MessageSavingOtherHeader());
 
@@ -691,6 +883,11 @@ const auto kMeta = BuildHelper({
 
 	builder.addSkip();
 	BuildSpyEssentials(builder, ayu);
+
+	ayu.addSectionDivider();
+#if defined(HAVE_WHISPER)
+	BuildSTT(builder, ayu);
+#endif
 
 	ayu.addSectionDivider();
 	BuildOther(builder, ayu);

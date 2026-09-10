@@ -697,6 +697,14 @@ Widget::Widget(
 	) | rpl::on_next([=] {
 		crl::on_main(this, [=] { applySearchUpdate(); });
 	}, _search->lifetime());
+	AyuSettings::getInstance().disableGlobalSearchChanges(
+	) | rpl::on_next([=] {
+		Ui::PostponeCall(this, [=] {
+			if (_searchState.filterChatsList() && !_openedForum) {
+				search(false, SearchRequestDelay::Instant);
+			}
+		});
+	}, lifetime());
 
 	_search->submits(
 	) | rpl::on_next([=] { submit(); }, _search->lifetime());
@@ -3346,7 +3354,9 @@ bool Widget::search(bool inCache, SearchRequestDelay delay) {
 }
 
 bool Widget::peerSearchRequired() const {
-	return _searchState.filterChatsList() && !_openedForum;
+	return _searchState.filterChatsList()
+		&& !_openedForum
+		&& !AyuSettings::getInstance().disableGlobalSearch();
 }
 
 bool Widget::searchForTopicsRequired(const QString &query) const {

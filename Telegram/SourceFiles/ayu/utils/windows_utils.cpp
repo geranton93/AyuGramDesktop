@@ -35,7 +35,13 @@ void processIcon(QString shortcut, QString iconPath) {
 
 			if (SUCCEEDED(pPersistFile->Load(shortcutPath.c_str(), STGM_READWRITE))) {
 				pShellLink->SetIconLocation(iconPath.toStdWString().c_str(), 0);
-				pPersistFile->Save(shortcutPath.c_str(), TRUE);
+				if (SUCCEEDED(pPersistFile->Save(shortcutPath.c_str(), TRUE))) {
+					SHChangeNotify(
+						SHCNE_UPDATEITEM,
+						SHCNF_PATHW,
+						shortcutPath.c_str(),
+						nullptr);
+				}
 			}
 
 			pPersistFile->Release();
@@ -162,8 +168,6 @@ void reloadAppIconFromTaskBar() {
 	processNewPinned(iconPath);
 	processNewShortcuts(iconPath);
 	processLegacy(iconPath);
-
-	SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
 }
 
 #endif

@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "api/api_text_entities.h"
+#include "ayu/features/stt/stt_transcribe_provider.h"
+#include "base/weak_ptr.h"
 #include "data/data_channel.h"
 #include "data/data_document.h"
 #include "data/data_peer.h"
@@ -26,6 +28,7 @@ namespace Api {
 namespace {
 
 constexpr auto kMaxCachedEntries = 500;
+constexpr mtpRequestId kLocalRequestId = -1;
 
 } // namespace
 
@@ -225,6 +228,36 @@ void Transcribes::load(not_null<HistoryItem*> item) {
 		}
 	};
 	const auto id = item->fullId();
+	if (Ayu::STT::ShouldTranscribeLocally(item)) {
+		auto &entry = mapEntry(id);
+		entry.requestId = kLocalRequestId;
+		entry.shown = true;
+		entry.failed = false;
+		entry.pending = false;
+		toggleRound(item, entry);
+		_session->data().requestItemResize(item);
+
+		const auto weak = base::make_weak(_session);
+		Ayu::STT::RequestLocalTranscribe(item, [=](const QString &text) {
+			if (!weak) {
+				return;
+			}
+			const auto i = _map.find(id);
+			if (i == _map.end() || i->second.requestId != kLocalRequestId) {
+				return;
+			}
+			auto &entry = i->second;
+			entry.requestId = 0;
+			entry.pending = false;
+			entry.failed = text.isEmpty();
+			entry.result = text;
+			if (const auto item = _session->data().message(id)) {
+				toggleRound(item, entry);
+				_session->data().requestItemResize(item);
+			}
+		});
+		return;
+	}
 	const auto requestId = _api.request(MTPmessages_TranscribeAudio(
 		item->history()->peer->input(),
 		MTP_int(item->id)

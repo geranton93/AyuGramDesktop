@@ -10,6 +10,7 @@
 #include "ayu/libs/sqlite/sqlite_orm.h"
 #include "base/unixtime.h"
 
+#include <algorithm>
 #include <mutex>
 #include <optional>
 
@@ -61,6 +62,8 @@ auto storage = make_storage(
 		make_column("mediaPath", &DeletedMessage::mediaPath),
 		make_column("hqThumbPath", &DeletedMessage::hqThumbPath),
 		make_column("documentType", &DeletedMessage::documentType),
+		make_column("mediaDc", &DeletedMessage::mediaDc),
+		make_column("mediaSize", &DeletedMessage::mediaSize),
 		make_column("documentSerialized", &DeletedMessage::documentSerialized),
 		make_column("thumbsSerialized", &DeletedMessage::thumbsSerialized),
 		make_column("documentAttributesSerialized", &DeletedMessage::documentAttributesSerialized),
@@ -97,6 +100,8 @@ auto storage = make_storage(
 		make_column("mediaPath", &EditedMessage::mediaPath),
 		make_column("hqThumbPath", &EditedMessage::hqThumbPath),
 		make_column("documentType", &EditedMessage::documentType),
+		make_column("mediaDc", &EditedMessage::mediaDc),
+		make_column("mediaSize", &EditedMessage::mediaSize),
 		make_column("documentSerialized", &EditedMessage::documentSerialized),
 		make_column("thumbsSerialized", &EditedMessage::thumbsSerialized),
 		make_column("documentAttributesSerialized", &EditedMessage::documentAttributesSerialized),
@@ -160,6 +165,8 @@ std::mutex DatabaseMutex;
 // action. Keep the most recent N rows per table, pruning opportunistically
 // after a write instead of adding a new background timer.
 constexpr auto kMaxArchivedRowsPerTable = 50'000;
+constexpr auto kMaxArchivePageSize = 128;
+constexpr auto kMaxArchiveSearchBytes = std::size_t(4 * 1024);
 
 template<typename Table>
 std::optional<int> &archivedRowCount() {
@@ -236,7 +243,15 @@ void runMigrations(decltype(storage) &storage) {
 		}
 	} catch (...) {
 		LOG(("No SchemaVersion, assuming 0"));
-		storage.insert(SchemaVersion{1, 0});
+		try {
+			storage.insert(SchemaVersion{1, 0});
+		} catch (const std::exception &ex) {
+			LOG(("Failed to create SchemaVersion: %1").arg(ex.what()));
+			return;
+		} catch (...) {
+			LOG(("Failed to create SchemaVersion"));
+			return;
+		}
 	}
 
 	if (currentVersion >= kLatestVersion) {
@@ -258,7 +273,11 @@ void runMigrations(decltype(storage) &storage) {
 				storage.commit();
 				LOG(("Applied migration for version: %1.").arg(v));
 			} catch (...) {
-				storage.rollback();
+				try {
+					storage.rollback();
+				} catch (...) {
+					LOG(("Failed to roll back migration for version: %1.").arg(v));
+				}
 				LOG(("Failed to apply migration for version: %1.").arg(v));
 				AyuDatabase::moveCurrentDatabase();
 
@@ -289,6 +308,18 @@ void moveCurrentDatabase() {
 
 void initialize() {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
+	const auto recover = [&] {
+		try {
+			moveCurrentDatabase();
+			storage.sync_schema(true);
+			if (!storage.get_pointer<SchemaVersion>(1)) {
+				storage.insert(SchemaVersion{1, 0});
+			}
+		} catch (const std::exception &recoveryError) {
+			LOG(("Database recovery failed: %1").arg(recoveryError.what()));
+		} catch (...) {
+		}
+	};
 	try {
 		storage.sync_schema(true);
 
@@ -297,12 +328,10 @@ void initialize() {
 		storage.sync_schema(true);
 	} catch (const std::exception &ex) {
 		LOG(("Database initialization failed: %1").arg(ex.what()));
-		moveCurrentDatabase();
-
-		storage.sync_schema(true);
-		if (!storage.get_pointer<SchemaVersion>(1)) {
-			storage.insert(SchemaVersion{1, 0});
-		}
+		recover();
+	} catch (...) {
+		LOG(("Database initialization failed"));
+		recover();
 	}
 	try {
 		// WAL + synchronous=NORMAL trades a small, well-understood risk
@@ -343,6 +372,7 @@ void addEditedMessage(const EditedMessage &message) {
 std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
+		const auto pageSize = std::clamp(totalLimit, 0, kMaxArchivePageSize);
 		return storage.get_all<EditedMessage>(
 			where(
 				column<EditedMessage>(&EditedMessage::userId) == userId and
@@ -352,7 +382,7 @@ std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageI
 				(column<EditedMessage>(&EditedMessage::fakeId) < maxId or maxId == 0)
 			),
 			order_by(column<EditedMessage>(&EditedMessage::fakeId)).desc(),
-			limit(totalLimit)
+			limit(pageSize)
 		);
 	} catch (const std::exception &ex) {
 		LOG(("Failed to load edited message revisions: %1").arg(ex.what()));
@@ -428,8 +458,12 @@ void addDeletedMessages(const std::vector<DeletedMessage> &messages) {
 }
 
 std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery) {
+	if (searchQuery.size() > kMaxArchiveSearchBytes) {
+		return {};
+	}
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
+		const auto pageSize = std::clamp(totalLimit, 0, kMaxArchivePageSize);
 		if (searchQuery.empty()) {
 			return storage.get_all<DeletedMessage>(
 				where(
@@ -440,7 +474,7 @@ std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicI
 					(column<DeletedMessage>(&DeletedMessage::messageId) < maxId or maxId == 0)
 				),
 				order_by(column<DeletedMessage>(&DeletedMessage::messageId)).desc(),
-				limit(totalLimit)
+				limit(pageSize)
 			);
 		}
 
@@ -463,7 +497,7 @@ std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicI
 				like(column<DeletedMessage>(&DeletedMessage::text), pattern, "\\")
 			),
 			order_by(column<DeletedMessage>(&DeletedMessage::messageId)).desc(),
-			limit(totalLimit)
+			limit(pageSize)
 		);
 	} catch (const std::exception &ex) {
 		LOG(("Failed to load deleted messages: %1").arg(ex.what()));
