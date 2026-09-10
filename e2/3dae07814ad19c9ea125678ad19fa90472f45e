@@ -1,0 +1,19 @@
+Telegram/SourceFiles/core/sandbox.cpp
+  s_ef6173f274c1ad::t_c353364258458d 760
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e23dae07814ad19c9ea125678ad19fa90472f45e",
+  "prompts": {},
+  "sessions": {
+    "s_ef6173f274c1ad": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0865a-618f-7860-a7b5-0bb510244fe6",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
