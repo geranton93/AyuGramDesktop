@@ -31,6 +31,7 @@ namespace {
 
 constexpr qint64 kDefaultMaximumDownloadSize = 512 * 1024 * 1024;
 constexpr qint64 kReadChunkSize = 1024 * 1024;
+constexpr qint64 kModelHashChunkSize = 1024 * 1024;
 constexpr auto kTransferTimeout = std::chrono::seconds(10 * 60);
 constexpr std::size_t kMaxActiveDownloads = 4;
 QSet<QString> ActiveDestinations;
@@ -57,23 +58,6 @@ void ReleaseDestination(const QString &path) {
 		&& url.host() == u"huggingface.co"_q
 		&& url.userInfo().isEmpty()
 		&& url.port(-1) == -1;
-}
-
-[[nodiscard]] bool IsValidSha256(const QString &value) {
-	if (value.isEmpty()) {
-		return true;
-	}
-	if (value.size() != 64) {
-		return false;
-	}
-	for (const auto ch : value) {
-		if (!((ch >= u'0' && ch <= u'9')
-			|| (ch >= u'a' && ch <= u'f')
-			|| (ch >= u'A' && ch <= u'F'))) {
-			return false;
-		}
-	}
-	return true;
 }
 
 class DownloadState final : public QObject {
@@ -106,7 +90,8 @@ public:
 			const auto url = QUrl(_url);
 			if (!IsPinnedDownloadUrl(url)
 				|| _destPath.isEmpty()
-				|| !IsValidSha256(_sha256Expected)
+				|| (!_sha256Expected.isEmpty()
+					&& !IsValidSha256Hex(_sha256Expected))
 				|| (_expectedSize == 0)
 				|| (_expectedSize < kUnknownExpectedDownloadSize)
 				|| (_expectedSize > kDefaultMaximumDownloadSize)) {
@@ -184,10 +169,16 @@ private:
 			}
 			const auto header = _reply->header(
 				QNetworkRequest::ContentLengthHeader);
-			const auto length = header.isValid()
-				? header.toLongLong()
-				: _totalSize;
-			if (length < 0) {
+			auto length = _totalSize;
+			if (header.isValid()) {
+				bool ok = false;
+				length = header.toLongLong(&ok);
+				if (!ok || length <= 0) {
+					Fail(u"invalid content length"_q);
+					return;
+				}
+			}
+			if (length <= 0) {
 				return;
 			}
 			_totalSize = length;
@@ -352,6 +343,82 @@ private:
 };
 
 } // namespace
+
+bool IsValidSha256Hex(const QString &value) {
+	if (value.size() != 64) {
+		return false;
+	}
+	for (const auto ch : value) {
+		if (!((ch >= u'0' && ch <= u'9')
+			|| (ch >= u'a' && ch <= u'f')
+			|| (ch >= u'A' && ch <= u'F'))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void InvokeCallbackSafely(
+		const std::function<void(QString)> &callback,
+		QString text) {
+	if (!callback) {
+		return;
+	}
+	try {
+		callback(std::move(text));
+	} catch (...) {
+		LOG(("STT callback failed"));
+	}
+}
+
+bool VerifyModelFile(
+		const QString &path,
+		const qint64 expectedSize,
+		const QString &expectedSha256) {
+	try {
+		if (expectedSize <= 0 || !IsValidSha256Hex(expectedSha256)) {
+			return false;
+		}
+		const auto expected = QByteArray::fromHex(
+			expectedSha256.toLatin1());
+		if (expected.size() != QCryptographicHash::hashLength(
+				QCryptographicHash::Sha256)) {
+			return false;
+		}
+		const auto initial = QFileInfo(path);
+		if (!initial.isFile() || initial.size() != expectedSize) {
+			return false;
+		}
+		QFile file(path);
+		if (!file.open(QIODevice::ReadOnly)) {
+			return false;
+		}
+
+		auto hash = QCryptographicHash(QCryptographicHash::Sha256);
+		qint64 read = 0;
+		while (!file.atEnd()) {
+			const auto chunk = file.read(kModelHashChunkSize);
+			if (chunk.isEmpty()) {
+				if (file.error() != QFileDevice::NoError) {
+					return false;
+				}
+				break;
+			}
+			if (read > expectedSize - chunk.size()) {
+				return false;
+			}
+			hash.addData(chunk);
+			read += chunk.size();
+		}
+		const auto final = QFileInfo(path);
+		return read == expectedSize
+			&& final.isFile()
+			&& final.size() == expectedSize
+			&& hash.result() == expected;
+	} catch (...) {
+		return false;
+	}
+}
 
 void DownloadWithProgress(
 		const QString &url,

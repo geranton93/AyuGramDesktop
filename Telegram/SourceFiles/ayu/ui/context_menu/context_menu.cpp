@@ -378,6 +378,7 @@ void AddDeleteOwnMessagesAction(PeerData *peerData,
 
 void AddRemoveMediaAction(
 		PeerData *peerData,
+		Data::ForumTopic *topic,
 		not_null<Window::SessionController*> sessionController,
 		const Window::PeerMenuCallback &addCallback) {
 	if (!peerData
@@ -385,6 +386,18 @@ void AddRemoveMediaAction(
 			&& !peerData->isChat()
 			&& !peerData->isChannel())) {
 		return;
+	}
+	if (const auto chat = peerData->asChat()) {
+		if (!chat->amIn()) {
+			return;
+		}
+	} else if (const auto channel = peerData->asChannel()) {
+		const auto isGroup = peerData->isMegagroup();
+		if (!channel->amIn()
+			|| (!channel->canDeleteMessages()
+				&& (!isGroup || channel->isPublic() || channel->isForum()))) {
+			return;
+		}
 	}
 	addCallback({
 		.text = tr::ayu_RemoveMediaMenu(tr::now),
@@ -395,7 +408,8 @@ void AddRemoveMediaAction(
 			sessionController->show(Box(
 				FillRemoveMediaBox,
 				peerData,
-				sessionController));
+				sessionController,
+				topic));
 		},
 		.icon = &st::menuIconClearAttention,
 		.isAttention = true,

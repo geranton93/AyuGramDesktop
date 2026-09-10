@@ -8,11 +8,13 @@
 #include "ayu/features/stt/stt_manager.h"
 
 #include "ayu/ayu_settings.h"
+#include "ayu/features/stt/download_helper.h"
 
 #include <QtCore/QFileInfo>
 #include <QtCore/QStandardPaths>
 
 #include <array>
+#include <mutex>
 
 #if defined(Q_OS_MAC)
 #include "ayu/features/stt/platform/stt_mac.h"
@@ -57,21 +59,21 @@ constexpr std::array<ModelSpec, 3> kModels = {{
 	},
 }};
 
+struct ModelValidation final {
+	QString path;
+	qint64 size = 0;
+	qint64 modified = 0;
+	bool valid = false;
+};
+
+std::array<ModelValidation, kModels.size()> ModelValidationCache;
+std::mutex ModelValidationCacheMutex;
+
 [[nodiscard]] const ModelSpec *Model(int modelType) {
 	return (modelType >= 0
 		&& modelType < static_cast<int>(kModels.size()))
 		? &kModels[modelType]
 		: nullptr;
-}
-
-void InvokeCallbackSafely(const std::function<void(QString)> &callback) {
-	if (!callback) {
-		return;
-	}
-	try {
-		callback(QString());
-	} catch (...) {
-	}
 }
 
 } // namespace
@@ -115,17 +117,44 @@ qint64 STTManager::maxAudioDurationMs() {
 }
 
 bool STTManager::modelExists(const int modelType) {
+	const auto model = Model(modelType);
 	const auto path = modelPath(modelType);
 	const auto expectedSize = modelSize(modelType);
-	if (path.isEmpty() || expectedSize <= 0) {
+	if (!model || path.isEmpty() || expectedSize <= 0) {
 		return false;
 	}
 	const auto info = QFileInfo(path);
-	return info.isFile() && info.size() == expectedSize;
+	if (!info.isFile() || info.size() != expectedSize) {
+		return false;
+	}
+	const auto modified = info.lastModified().toMSecsSinceEpoch();
+	{
+		const auto lock = std::lock_guard(ModelValidationCacheMutex);
+		const auto &cached = ModelValidationCache[modelType];
+		if (cached.path == path
+			&& cached.size == expectedSize
+			&& cached.modified == modified) {
+			return cached.valid;
+		}
+	}
+
+	const auto valid = VerifyModelFile(
+		path,
+		expectedSize,
+		QString::fromUtf8(model->sha256));
+	{
+		const auto lock = std::lock_guard(ModelValidationCacheMutex);
+		auto &cached = ModelValidationCache[modelType];
+		cached.path = path;
+		cached.size = expectedSize;
+		cached.modified = modified;
+		cached.valid = valid;
+	}
+	return valid;
 }
 
 bool STTManager::localEngineAvailable() {
-#if defined(Q_OS_MAC) && defined(HAVE_WHISPER)
+#if defined(Q_OS_MAC)
 	if (AyuSettings::getInstance().sttEngine() == STTEngine::AppleSpeech) {
 		return Mac::isAvailable();
 	}
@@ -138,19 +167,26 @@ bool STTManager::localEngineAvailable() {
 }
 
 void STTManager::requestPermission() {
-#if defined(Q_OS_MAC) && defined(HAVE_WHISPER)
+#if defined(Q_OS_MAC)
 	if (AyuSettings::getInstance().sttEngine() == STTEngine::AppleSpeech) {
 		Mac::requestSpeechPermission();
 	}
 #endif
 }
 
-void STTManager::transcribe(const QString &filePath, std::function<void(QString)> callback) {
+void STTManager::transcribe(
+		const QString &filePath,
+		std::function<void(QString)> callback,
+		std::function<bool()> cancelled) {
 	const auto &settings = AyuSettings::getInstance();
 
-#if defined(Q_OS_MAC) && defined(HAVE_WHISPER)
+#if defined(Q_OS_MAC)
 	if (settings.sttEngine() == STTEngine::AppleSpeech) {
-		Mac::transcribeFile(filePath, settings.sttLanguage(), std::move(callback));
+		Mac::transcribeFile(
+			filePath,
+			settings.sttLanguage(),
+			std::move(callback),
+			std::move(cancelled));
 		return;
 	}
 #endif
@@ -170,7 +206,8 @@ void STTManager::transcribe(const QString &filePath, std::function<void(QString)
 		modelSize(modelType),
 		modelSha256(modelType),
 		language,
-		std::move(callback));
+		std::move(callback),
+		std::move(cancelled));
 	return;
 #endif
 

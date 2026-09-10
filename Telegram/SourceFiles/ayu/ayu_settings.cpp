@@ -68,6 +68,16 @@ constexpr auto kMaxSettingsBytes = qint64(16 * 1024 * 1024);
 	return value;
 }
 
+[[nodiscard]] STTEngine NormalizeSttEngine(STTEngine value) {
+#if defined(Q_OS_MAC)
+	return (value == STTEngine::AppleSpeech || value == STTEngine::Whisper)
+		? value
+		: STTEngine::AppleSpeech;
+#else
+	return STTEngine::Whisper;
+#endif
+}
+
 using TrustedChatExceptions = Ayu::GhostModePeerExceptions;
 
 [[nodiscard]] auto SerializedTrustedChatPeerId(PeerId peerId)
@@ -613,7 +623,12 @@ void AyuSettings::save() {
 }
 
 void AyuSettings::reset() {
-	getInstance() = AyuSettings();
+	auto &settings = getInstance();
+	auto hiddenFolderIdsChanged = std::move(
+		settings._hiddenFolderIdsChanged);
+	settings = AyuSettings();
+	settings._hiddenFolderIdsChanged = std::move(hiddenFolderIdsChanged);
+	settings._hiddenFolderIdsChanged.fire({});
 	save();
 }
 
@@ -1316,9 +1331,7 @@ void AyuSettings::setSttEnabled(bool val) {
 }
 
 void AyuSettings::setSttEngine(STTEngine val) {
-#if !defined(Q_OS_MAC)
-	val = STTEngine::Whisper;
-#endif
+	val = NormalizeSttEngine(val);
 	if (_sttEngine.current() == val) {
 		return;
 	}
@@ -1520,13 +1533,13 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 			}
 
 			uint64 accountId = 0;
-			try {
-				std::size_t parsed = 0;
-				accountId = std::stoull(accountKey, &parsed);
-				if (!accountId || parsed != accountKey.size()) {
-					continue;
-				}
-			} catch (...) {
+			const auto parsed = std::from_chars(
+				accountKey.data(),
+				accountKey.data() + accountKey.size(),
+				accountId);
+			if (parsed.ec != std::errc()
+				|| parsed.ptr != accountKey.data() + accountKey.size()
+				|| !accountId) {
 				continue;
 			}
 
@@ -1643,15 +1656,17 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._sttEngine = defaults._sttEngine.current();
 	if (const auto i = j.find("sttEngine"); i != j.end()
 		&& i->is_number_integer()) {
-		const auto value = i->get<int>();
-		if (value == static_cast<int>(STTEngine::AppleSpeech)
-			|| value == static_cast<int>(STTEngine::Whisper)) {
-			s._sttEngine = static_cast<STTEngine>(value);
+		try {
+			const auto value = i->get<std::int64_t>();
+			if (value == static_cast<int>(STTEngine::AppleSpeech)
+				|| value == static_cast<int>(STTEngine::Whisper)) {
+				s._sttEngine = NormalizeSttEngine(
+					static_cast<STTEngine>(value));
+			}
+		} catch (const std::exception &) {
 		}
 	}
-#if !defined(Q_OS_MAC)
-	s._sttEngine = STTEngine::Whisper;
-#endif
+	s._sttEngine = NormalizeSttEngine(s._sttEngine.current());
 	s._sttLanguage = defaults._sttLanguage.current();
 	if (const auto i = j.find("sttLanguage"); i != j.end()
 		&& i->is_string()) {
@@ -1660,10 +1675,13 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._whisperModelType = defaults._whisperModelType.current();
 	if (const auto i = j.find("whisperModelType"); i != j.end()
 		&& i->is_number_integer()) {
-		const auto value = i->get<int>();
-		if (value >= static_cast<int>(WhisperModel::Tiny)
-			&& value <= static_cast<int>(WhisperModel::Small)) {
-			s._whisperModelType = static_cast<WhisperModel>(value);
+		try {
+			const auto value = i->get<std::int64_t>();
+			if (value >= static_cast<int>(WhisperModel::Tiny)
+				&& value <= static_cast<int>(WhisperModel::Small)) {
+				s._whisperModelType = static_cast<WhisperModel>(value);
+			}
+		} catch (const std::exception &) {
 		}
 	}
 

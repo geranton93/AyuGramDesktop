@@ -244,6 +244,7 @@ void FilterRowButton::updateData(
 	_icon = Ui::ComputeFilterIcon(filter);
 	_colorIndex = filter.colorIndex();
 	_id = filter.id();
+	updateButtonsVisibility();
 	_hidden = AyuFeatures::HiddenFolders::IsHidden(_accountId, _id);
 	applyHiddenIcon();
 	if (!ignoreCount) {

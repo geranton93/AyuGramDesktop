@@ -29,8 +29,8 @@ public:
 		qint64 modelSize,
 		const QString &modelSha256,
 		const QString &language,
-		std::function<void(QString)> callback);
-	static std::vector<float> decodeAudioToPcm(const QString &filePath);
+		std::function<void(QString)> callback,
+		std::function<bool()> cancelled = {});
 	void scheduleFreeContext();
 	void freeContext();
 	bool isQuitPrevent();
@@ -44,7 +44,7 @@ private:
 	QString _cachedModelPath; // guarded by _ctxMutex
 	std::atomic<int> _activeJobs = 0;
 	base::Timer _idleTimer; // main thread only
-	bool _freeInFlight = false; // main thread only
+	std::atomic_bool _freeInFlight = false;
 };
 
 } // namespace Ayu::STT

@@ -26,36 +26,39 @@ add_subdirectory(lib_icu)
 # AyuGram filters
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/whisper.cpp/CMakeLists.txt")
-    set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
-    set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
-    set(WHISPER_COREML OFF CACHE BOOL "" FORCE)
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-    set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
-    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
-    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
-    set(GGML_METAL OFF CACHE BOOL "" FORCE)
-    set(GGML_CCACHE OFF CACHE BOOL "" FORCE)
-    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
-    add_subdirectory(ThirdParty/whisper.cpp whisper_build)
-    if (APPLE AND TARGET ggml-base)
-        target_compile_options(ggml-base PRIVATE
-            $<$<COMPILE_LANGUAGE:CXX>:-include>
-            $<$<COMPILE_LANGUAGE:CXX>:errno.h>)
-    endif()
-    if (APPLE AND TARGET ggml-cpu)
-        target_compile_options(ggml-cpu PRIVATE -Wno-elaborated-enum-base)
-    endif()
-    if (APPLE AND TARGET ggml-blas)
-        target_compile_options(ggml-blas PRIVATE -Wno-elaborated-enum-base)
-    endif()
-    target_link_libraries(Telegram PRIVATE whisper)
-    target_include_directories(Telegram PRIVATE
-        ThirdParty/whisper.cpp/include
-        ThirdParty/whisper.cpp/ggml/include)
-    target_compile_definitions(Telegram PRIVATE HAVE_WHISPER)
+    block(SCOPE_FOR VARIABLES)
+        set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.13)
+        set(WHISPER_BUILD_TESTS OFF)
+        set(WHISPER_BUILD_EXAMPLES OFF)
+        set(WHISPER_BUILD_SERVER OFF)
+        set(WHISPER_CURL OFF)
+        set(WHISPER_COREML OFF)
+        set(BUILD_SHARED_LIBS OFF)
+        set(GGML_BACKEND_DL OFF)
+        set(GGML_CUDA OFF)
+        set(GGML_VULKAN OFF)
+        set(GGML_METAL OFF)
+        set(GGML_CCACHE OFF)
+        set(GGML_NATIVE OFF)
+        add_subdirectory(ThirdParty/whisper.cpp whisper_build)
+        if (APPLE AND TARGET ggml-base)
+            target_compile_options(ggml-base PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:-include>
+                $<$<COMPILE_LANGUAGE:CXX>:errno.h>)
+        endif()
+        if (APPLE AND TARGET ggml-cpu)
+            target_compile_options(ggml-cpu PRIVATE -Wno-elaborated-enum-base)
+        endif()
+        if (APPLE AND TARGET ggml-blas)
+            target_compile_options(ggml-blas PRIVATE -Wno-elaborated-enum-base)
+        endif()
+        target_link_libraries(Telegram PRIVATE whisper)
+        target_include_directories(Telegram PRIVATE
+            ThirdParty/whisper.cpp/include
+            ThirdParty/whisper.cpp/ggml/include)
+        target_compile_definitions(Telegram PRIVATE HAVE_WHISPER)
+    endblock()
 endif()
 
 get_filename_component(src_loc SourceFiles REALPATH)
@@ -287,6 +290,8 @@ set(ayugram_files
         ayu/features/translator/implementations/base.h
         ayu/features/stt/download_helper.cpp
         ayu/features/stt/download_helper.h
+        ayu/features/stt/audio_decoder.cpp
+        ayu/features/stt/audio_decoder.h
         ayu/features/stt/stt_manager.cpp
         ayu/features/stt/stt_manager.h
         ayu/features/stt/stt_transcribe_provider.cpp
@@ -2499,8 +2504,9 @@ elseif (APPLE)
         target_link_libraries(Telegram PRIVATE desktop-app::external_iconv)
     endif()
 
-    target_link_frameworks(Telegram PRIVATE CoreBluetooth)
-    target_link_frameworks_weak(Telegram PRIVATE UserNotifications)
+	target_link_frameworks(Telegram PRIVATE CoreBluetooth)
+	target_link_frameworks(Telegram PRIVATE AVFoundation)
+	target_link_frameworks_weak(Telegram PRIVATE UserNotifications)
     target_link_frameworks_weak(Telegram PRIVATE Speech)
 
     set(icons_path ${CMAKE_CURRENT_SOURCE_DIR}/Telegram/Images.xcassets)

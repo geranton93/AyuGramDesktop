@@ -11,6 +11,7 @@
 #include "data/data_document.h"
 #include "data/data_media_types.h"
 #include "data/data_photo.h"
+#include "data/stickers/data_stickers.h"
 #include "data/stickers/data_stickers_set.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -167,6 +168,9 @@ void AppendUint32(std::vector<char> &result, std::uint32_t value) {
 		not_null<PhotoData*> photo) {
 	auto result = QVector<MTPPhotoSize>();
 	const auto add = [&](Data::PhotoSize size, const char *type) {
+		if (!photo->hasExact(size)) {
+			return;
+		}
 		const auto &location = photo->location(size);
 		const auto width = BoundedMediaDimension(location.width());
 		const auto height = BoundedMediaDimension(location.height());
@@ -276,6 +280,7 @@ void AppendUint32(std::vector<char> &result, std::uint32_t value) {
 			0,
 			std::numeric_limits<int>::max()));
 	};
+	const auto animated = (document->type == AnimatedDocument);
 	const auto filename = document->filename();
 	if (!filename.isEmpty() && IsBoundedMediaText(filename)) {
 		result.push_back(MTP_documentAttributeFilename(MTP_string(filename)));
@@ -283,32 +288,7 @@ void AppendUint32(std::vector<char> &result, std::uint32_t value) {
 
 	const auto width = BoundedMediaDimension(document->dimensions.width());
 	const auto height = BoundedMediaDimension(document->dimensions.height());
-	if (width && height) {
-		if (document->hasDuration()
-			&& !document->hasMimeType(u"image/gif"_q)) {
-			auto flags = MTPDdocumentAttributeVideo::Flags(0);
-			using VideoFlag = MTPDdocumentAttributeVideo::Flag;
-			if (document->isVideoMessage()) {
-				flags |= VideoFlag::f_round_message;
-			}
-			if (document->supportsStreaming()) {
-				flags |= VideoFlag::f_supports_streaming;
-			}
-			result.push_back(MTP_documentAttributeVideo(
-				MTP_flags(flags),
-				MTP_double(std::max(document->duration(), int64(0)) / 1000.),
-				MTP_int(width),
-				MTP_int(height),
-				MTPint(),
-				MTPdouble(),
-				MTPstring()));
-		} else {
-			result.push_back(MTP_documentAttributeImageSize(
-				MTP_int(width),
-				MTP_int(height)));
-		}
-	} else if (document->hasDuration()
-		&& (document->isVideoFile() || document->isVideoMessage())) {
+	const auto addVideoAttribute = [&](int videoWidth, int videoHeight) {
 		auto flags = MTPDdocumentAttributeVideo::Flags(0);
 		using VideoFlag = MTPDdocumentAttributeVideo::Flag;
 		if (document->isVideoMessage()) {
@@ -317,14 +297,35 @@ void AppendUint32(std::vector<char> &result, std::uint32_t value) {
 		if (document->supportsStreaming()) {
 			flags |= VideoFlag::f_supports_streaming;
 		}
+		if (!animated && document->isSilentVideo()) {
+			flags |= VideoFlag::f_nosound;
+		}
+		const auto video = document->video();
+		const auto startTs = video ? video->startTs : crl::time(0);
+		if (startTs > 0) {
+			flags |= VideoFlag::f_video_start_ts;
+		}
 		result.push_back(MTP_documentAttributeVideo(
 			MTP_flags(flags),
 			MTP_double(std::max(document->duration(), int64(0)) / 1000.),
-			MTP_int(0),
-			MTP_int(0),
+			MTP_int(videoWidth),
+			MTP_int(videoHeight),
 			MTPint(),
-			MTPdouble(),
+			MTP_double(startTs / 1000.),
 			MTPstring()));
+	};
+	if (width && height) {
+		if (document->hasDuration()
+			&& !document->hasMimeType(u"image/gif"_q)) {
+			addVideoAttribute(width, height);
+		} else {
+			result.push_back(MTP_documentAttributeImageSize(
+				MTP_int(width),
+				MTP_int(height)));
+		}
+	} else if (document->hasDuration()
+		&& (document->isVideoFile() || document->isVideoMessage())) {
+		addVideoAttribute(0, 0);
 	}
 
 	if (document->type == AnimatedDocument) {
@@ -332,11 +333,25 @@ void AppendUint32(std::vector<char> &result, std::uint32_t value) {
 	} else if (document->type == StickerDocument) {
 		if (const auto sticker = document->sticker()) {
 			if (IsBoundedMediaText(sticker->alt)) {
-				result.push_back(MTP_documentAttributeSticker(
-					MTP_flags(0),
-					MTP_string(sticker->alt),
-					Data::InputStickerSet(sticker->set),
-					MTPMaskCoords()));
+				if (sticker->setType == Data::StickersType::Emoji) {
+					using Flag = MTPDdocumentAttributeCustomEmoji::Flag;
+					const auto flags = (document->isPremiumEmoji()
+						? Flag(0)
+						: Flag::f_free)
+						| (document->emojiUsesTextColor()
+							? Flag::f_text_color
+							: Flag(0));
+					result.push_back(MTP_documentAttributeCustomEmoji(
+						MTP_flags(flags),
+						MTP_string(sticker->alt),
+						Data::InputStickerSet(sticker->set)));
+				} else {
+					result.push_back(MTP_documentAttributeSticker(
+						MTP_flags(0),
+						MTP_string(sticker->alt),
+						Data::InputStickerSet(sticker->set),
+						MTPMaskCoords()));
+				}
 			}
 		}
 	} else if (const auto song = document->song()) {
@@ -352,12 +367,15 @@ void AppendUint32(std::vector<char> &result, std::uint32_t value) {
 				MTPstring()));
 		}
 	} else if (document->voice()) {
+		const auto voice = document->voice();
+		const auto flags = MTPDdocumentAttributeAudio::Flag::f_voice
+			| MTPDdocumentAttributeAudio::Flag::f_waveform;
 		result.push_back(MTP_documentAttributeAudio(
-			MTP_flags(MTPDdocumentAttributeAudio::Flag::f_voice),
+			MTP_flags(flags),
 			MTP_int(toMtpInt(document->duration() / 1000)),
 			MTPstring(),
 			MTPstring(),
-			MTPbytes()));
+			MTP_bytes(documentWaveformEncode5bit(voice->waveform))));
 	}
 	return result;
 }
@@ -689,6 +707,9 @@ void mapMediaToMessage(not_null<HistoryItem*> item, AyuMessageBase &message) {
 
 	const auto media = item->media();
 	if (!media) {
+		return;
+	}
+	if (media->webpage()) {
 		return;
 	}
 

@@ -14,6 +14,8 @@
 
 #include "styles/style_menu_icons.h"
 
+#include <algorithm>
+
 namespace AyuFeatures::HiddenFolders {
 
 bool IsHidden(const uint64 accountId, const FilterId id) {
@@ -56,6 +58,20 @@ std::vector<Data::ChatFilter> VisibleOnly(
 	for (const auto &filter : list) {
 		if (!IsHidden(accountId, filter.id())) {
 			result.push_back(filter);
+		}
+	}
+	return result;
+}
+
+int VisiblePremiumFrom(
+		const uint64 accountId,
+		const std::vector<Data::ChatFilter> &list,
+		const int premiumFrom) {
+	const auto count = std::min(premiumFrom, int(list.size()));
+	auto result = 0;
+	for (auto i = 0; i < count; ++i) {
+		if (!IsHidden(accountId, list[i].id())) {
+			++result;
 		}
 	}
 	return result;

@@ -7,9 +7,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/weak_ptr.h"
+#include "mtproto/sender.h"
+
 #include <deque>
 
-#include "mtproto/sender.h"
 #include "spellcheck/spellcheck_types.h"
 
 class ApiWrap;
@@ -29,9 +31,10 @@ struct SummaryEntry {
 	mtpRequestId requestId = 0;
 };
 
-class Transcribes final {
+class Transcribes final : public base::has_weak_ptr {
 public:
 	explicit Transcribes(not_null<ApiWrap*> api);
+	~Transcribes();
 
 	struct Entry {
 		QString result;
@@ -41,6 +44,7 @@ public:
 		bool pending = false;
 		bool roundview = false;
 		mtpRequestId requestId = 0;
+		uint64 localGeneration = 0;
 	};
 
 	void toggle(not_null<HistoryItem*> item);
@@ -79,6 +83,7 @@ private:
 	base::flat_map<FullMsgId, Entry> _map;
 	base::flat_map<uint64, FullMsgId> _ids;
 	std::deque<FullMsgId> _mapOrder;
+	uint64 _localGeneration = 0;
 
 	base::flat_map<FullMsgId, SummaryEntry> _summaries;
 	std::deque<FullMsgId> _summariesOrder;

@@ -166,8 +166,7 @@ void FiltersMenu::setup() {
 	) | rpl::on_next([=] {
 		refresh();
 	}, _outer.lifetime());
-	AyuSettings::getInstance().hiddenFolderIdsChanges()
-	| rpl::on_next([=] {
+	filters->visibilityChanged() | rpl::on_next([=] {
 		refresh();
 	}, _outer.lifetime());
 
@@ -189,6 +188,16 @@ void FiltersMenu::setup() {
 		if (j != end(_filters)) {
 			j->second->setActive(true);
 			scrollToButton(j->second);
+		} else {
+			const auto visible = AyuFeatures::HiddenFolders::VisibleOnly(
+				_session->session().userId().bare,
+				_session->session().data().chatsFilters().list());
+			const auto fallback = visible.empty()
+				? FilterId()
+				: visible.front().id();
+			if (fallback != id) {
+				_session->setActiveChatsFilter(fallback);
+			}
 		}
 		_reorder->finishReordering();
 	}, _outer.lifetime());
@@ -367,6 +376,17 @@ void FiltersMenu::refresh() {
 	const auto visibleFilters = AyuFeatures::HiddenFolders::VisibleOnly(
 		accountId,
 		filters->list());
+	const auto firstVisibleId = !visibleFilters.empty()
+		? visibleFilters.front().id()
+		: FilterId();
+	const auto currentFilter = _session->activeChatsFilterCurrent();
+	const auto currentIsVisible = ranges::find(
+		visibleFilters,
+		currentFilter,
+		&Data::ChatFilter::id) != end(visibleFilters);
+	if (!currentIsVisible) {
+		_session->setActiveChatsFilter(firstVisibleId);
+	}
 	if (!filters->has() || _ignoreRefresh) {
 		return;
 	}
@@ -380,13 +400,22 @@ void FiltersMenu::refresh() {
 	_reorder->clearPinnedIntervals();
 	const auto maxLimit = (reorderAll ? 1 : 0)
 		+ Data::PremiumLimits(&_session->session()).dialogFiltersCurrent();
-	const auto premiumFrom = (reorderAll ? 0 : 1) + maxLimit;
-	if (!reorderAll && !settings.hideAllChatsFolder()) {
+	const auto hasAll = ranges::find(
+		filters->list(),
+		FilterId(),
+		&Data::ChatFilter::id) != end(filters->list());
+	const auto premiumFrom = (reorderAll || !hasAll ? 0 : 1) + maxLimit;
+	const auto visiblePremiumFrom =
+		AyuFeatures::HiddenFolders::VisiblePremiumFrom(
+			accountId,
+			filters->list(),
+			premiumFrom);
+	if (!reorderAll && hasAll && !settings.hideAllChatsFolder()) {
 		_reorder->addPinnedInterval(0, 1);
 	}
 	_reorder->addPinnedInterval(
-		premiumFrom,
-		std::max(1, int(visibleFilters.size()) - maxLimit));
+		visiblePremiumFrom,
+		std::max(1, int(visibleFilters.size()) - visiblePremiumFrom));
 
 	// Remember which folder holds keyboard focus so the roving Tab-stop can be
 	// re-established on its replacement after the rebuild: the new buttons are
@@ -401,19 +430,16 @@ void FiltersMenu::refresh() {
 	}
 
 	auto now = base::flat_map<int, base::unique_qptr<Ui::SideBarButton>>();
-	const auto &currentFilter = _session->activeChatsFilterCurrent();
-	const auto firstVisibleId = !visibleFilters.empty()
-		? visibleFilters.front().id()
-		: FilterId();
-	if (AyuFeatures::HiddenFolders::IsHidden(
-			accountId,
-			currentFilter)) {
-		_session->setActiveChatsFilter(firstVisibleId);
-	}
-	for (const auto &filter : visibleFilters) {
-		const auto nextIsLocked = (now.size() >= premiumFrom);
-		if (nextIsLocked && (currentFilter == filter.id())) {
-			_session->setActiveChatsFilter(FilterId(0));
+	const auto &currentFilterAfterFallback
+		= _session->activeChatsFilterCurrent();
+	auto visibleIndex = 0;
+	for (const auto &filter : filters->list()) {
+		if (AyuFeatures::HiddenFolders::IsHidden(accountId, filter.id())) {
+			continue;
+		}
+		const auto nextIsLocked = (visibleIndex >= visiblePremiumFrom);
+		if (nextIsLocked && (currentFilterAfterFallback == filter.id())) {
+			_session->setActiveChatsFilter(firstVisibleId);
 		}
 		auto button = prepareButton(
 			_list,
@@ -422,6 +448,7 @@ void FiltersMenu::refresh() {
 			Ui::ComputeFilterIcon(filter),
 			nextIsLocked);
 		now.emplace(filter.id(), std::move(button));
+		++visibleIndex;
 	}
 	_filters = std::move(now);
 	// Re-establish the list's Tab-stop on the folder that was focused (if it
@@ -790,7 +817,7 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 		return;
 	}
 	const auto i = _filters.find(id);
-	if ((i == end(_filters)) && id) {
+	if (i == end(_filters)) {
 		return;
 	}
 	_popupMenu = base::make_unique_q<Ui::PopupMenu>(

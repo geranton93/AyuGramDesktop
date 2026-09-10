@@ -166,6 +166,7 @@ private:
 		UnsentReadGeneration unreadMarkNotSent;
 		bool sentReadDone = false;
 		bool postponedRequestEntry = false;
+		std::uint32_t readRequestGeneration = 0;
 		// Set once a ReadHistory request for this history comes back
 		// with a terminal error (PEER_ID_INVALID); sendReadRequest's
 		// .fail was otherwise treated identically to .done, so an open
@@ -173,6 +174,8 @@ private:
 		// re-issuing (and re-failing) a fresh request on every new
 		// message, forever, with no circuit breaker.
 		bool readRequestsDisabled = false;
+		bool readRequestCooldown = false;
+		std::uint8_t readRequestRetries = 0;
 	};
 	struct ChatListGroupRequest {
 		MsgId aroundId = 0;

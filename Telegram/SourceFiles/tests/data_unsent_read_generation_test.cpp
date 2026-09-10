@@ -39,7 +39,7 @@ int main() {
 
 	debt.sent(second);
 	Require(!debt);
-	Require(debt.generation() == 0);
+	Require(debt.generation() == second);
 
 	debt.add();
 	const auto third = debt.generation();

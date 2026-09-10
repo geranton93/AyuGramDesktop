@@ -186,6 +186,7 @@ private:
 	mutable float64 _voiceHoverProgress = -1;
 
 	bool _transcribedRound = false;
+	rpl::lifetime _sttSettingsLifetime;
 
 };
 

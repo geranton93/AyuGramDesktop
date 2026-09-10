@@ -6,6 +6,7 @@
 // Copyright @Radolyn, 2026
 #include "ayu/features/forward/ayu_forward_rich.h"
 
+#include "ayu/features/forward/ayu_forward.h"
 #include "ayu/features/forward/ayu_sync.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/flat_map.h"
@@ -76,21 +77,6 @@ struct RichTraversalLimits {
 		return true;
 	}
 };
-
-[[nodiscard]] std::optional<PeerId> ResolveTargetPeerId(
-		not_null<Main::Session*> session,
-		const base::weak_ptr<History> &targetHistory) {
-	auto result = std::optional<PeerId>();
-	const auto weakSession = base::make_weak(session);
-	crl::on_main_sync([&] {
-		const auto current = weakSession.get();
-		const auto history = targetHistory.get();
-		if (current && history && &history->session() == current) {
-			result = history->peer->id;
-		}
-	});
-	return result;
-}
 
 [[nodiscard]] PhotoData *resolvePhoto(
 		not_null<Main::Session*> session,
@@ -365,7 +351,7 @@ struct RichTraversalLimits {
 			return result;
 		}
 
-		const auto playable = document.playable;
+		const auto video = document.video;
 		const auto path = AyuSync::loadDocumentSync(
 			session,
 			document,
@@ -381,7 +367,7 @@ struct RichTraversalLimits {
 				peerId,
 				path,
 				SendMediaType::File,
-				!playable,
+				!video,
 				document.name,
 				cancelled);
 		}
@@ -615,10 +601,11 @@ bool forwardRichMessage(
 	if (!source || cancelled()) {
 		return false;
 	}
-	const auto peerId = ResolveTargetPeerId(session, targetHistory);
-	if (!peerId || cancelled()) {
+	const auto target = SnapshotForwardTarget(session, targetHistory);
+	if (!target || cancelled()) {
 		return false;
 	}
+	const auto peerId = target->peerId;
 
 	struct PrepareState
 	{
@@ -661,7 +648,7 @@ bool forwardRichMessage(
 
 	const auto uploaded = reuploadMedia(
 		session,
-		*peerId,
+		peerId,
 		itemId,
 		prepared->media,
 		cancelled);

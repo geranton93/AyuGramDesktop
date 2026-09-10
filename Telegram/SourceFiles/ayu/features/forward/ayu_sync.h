@@ -30,7 +30,6 @@ namespace AyuSync {
 
 struct PhotoSnapshot {
 	PhotoId id = 0;
-	int32 dc = 0;
 	int64 size = 0;
 	QString path;
 };
@@ -43,7 +42,7 @@ struct DocumentSnapshot {
 	bool sticker = false;
 	bool voice = false;
 	bool round = false;
-	bool playable = false;
+	bool video = false;
 };
 
 using DocumentPaths = base::flat_map<DocumentId, QString>;

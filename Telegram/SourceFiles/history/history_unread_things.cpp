@@ -115,6 +115,13 @@ bool Proxy::add(MsgId msgId, AddType type) {
 	if (!_data) {
 		createData();
 	}
+	if (type == AddType::New) {
+		if (_type == Type::Mentions) {
+			_thread->unreadMentionsReadDebt().changed();
+		} else if (_type == Type::Reactions) {
+			_thread->unreadReactionsReadDebt().changed();
+		}
+	}
 	auto &list = resolveList();
 	const auto count = list.count();
 	const auto loaded = list.loadedCount();

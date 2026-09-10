@@ -8,9 +8,9 @@
 #include "ayu/features/stt/stt_transcribe_provider.h"
 
 #include "ayu/ayu_settings.h"
+#include "ayu/features/stt/download_helper.h"
 #include "ayu/features/stt/stt_manager.h"
 #include "base/timer.h"
-#include "base/debug_log.h"
 #include "base/weak_ptr.h"
 #include "data/data_document.h"
 #include "data/data_file_origin.h"
@@ -21,6 +21,7 @@
 
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QSaveFile>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
 
@@ -34,6 +35,19 @@ namespace Ayu::STT {
 namespace {
 
 constexpr crl::time kFileDownloadTimeoutMs = 60000;
+constexpr qint64 kMaxTranscriptionFileBytes = 256 * 1024 * 1024;
+constexpr qint64 kCopyChunkSize = 1024 * 1024;
+
+void RemoveTemporaryFiles(
+		const QString &first,
+		const QString &second = QString()) {
+	if (!first.isEmpty()) {
+		QFile::remove(first);
+	}
+	if (!second.isEmpty() && second != first) {
+		QFile::remove(second);
+	}
+}
 
 struct DownloadWait {
 	rpl::lifetime lifetime;
@@ -41,22 +55,51 @@ struct DownloadWait {
 	bool finished = false;
 };
 
-void InvokeCallbackSafely(
-		const std::function<void(QString)> &callback,
-		QString text) {
-	if (!callback) {
-		return;
-	}
+[[nodiscard]] bool CopyForTranscription(
+		const QString &sourcePath,
+		const QString &destinationPath) {
 	try {
-		callback(std::move(text));
-	} catch (...) {
-		LOG(("RequestLocalTranscribe: completion callback failed"));
+		const auto sourceInfo = QFileInfo(sourcePath);
+		if (!sourceInfo.isFile()
+			|| sourceInfo.size() <= 0
+			|| sourceInfo.size() > kMaxTranscriptionFileBytes) {
+			return false;
+		}
+		QFile source(sourcePath);
+		if (!source.open(QIODevice::ReadOnly)) {
+			return false;
+		}
+		QSaveFile destination(destinationPath);
+		if (!destination.open(QIODevice::WriteOnly)) {
+			return false;
+		}
+
+		qint64 copied = 0;
+		while (!source.atEnd()) {
+			const auto chunk = source.read(kCopyChunkSize);
+			if (chunk.isEmpty()) {
+				return source.error() == QFileDevice::NoError
+					&& copied == sourceInfo.size()
+					&& destination.commit();
+			}
+			if (copied > sourceInfo.size() - chunk.size()
+				|| destination.write(chunk) != chunk.size()) {
+				return false;
+			}
+			copied += chunk.size();
+		}
+		return copied == sourceInfo.size() && destination.commit();
+	} catch (const std::bad_alloc &) {
+		return false;
 	}
 }
 
 } // namespace
 
 bool ShouldTranscribeLocally(const not_null<HistoryItem*> item) {
+	if (!item->isHistoryEntry() || item->isLocal()) {
+		return false;
+	}
 	if (!AyuSettings::getInstance().sttEnabled()) {
 		return false;
 	}
@@ -96,29 +139,29 @@ void RequestLocalTranscribe(
 	}
 
 	const auto weakSession = base::make_weak(session);
-	const auto runEngine = [=](const QString &filePath, bool temporary) {
+	const auto runEngine = [=](
+			QString filePath,
+			QString cleanupPath = QString(),
+			QString sourceCleanupPath = QString()) {
 		if (!QFileInfo(filePath).isFile()) {
-			if (temporary) {
-				QFile::remove(filePath);
-			}
+			RemoveTemporaryFiles(cleanupPath, sourceCleanupPath);
 			if (weakSession) {
 				InvokeCallbackSafely(completion, QString());
 			}
 			return;
 		}
 		try {
-			STTManager::instance().transcribe(filePath, [=](QString text) {
-				if (temporary) {
-					QFile::remove(filePath);
-				}
-				if (weakSession) {
-					InvokeCallbackSafely(completion, std::move(text));
-				}
-			});
+			STTManager::instance().transcribe(
+				filePath,
+				[=](QString text) {
+					RemoveTemporaryFiles(cleanupPath, sourceCleanupPath);
+					if (weakSession) {
+						InvokeCallbackSafely(completion, std::move(text));
+					}
+				},
+				[weakSession] { return !weakSession; });
 		} catch (...) {
-			if (temporary) {
-				QFile::remove(filePath);
-			}
+			RemoveTemporaryFiles(cleanupPath, sourceCleanupPath);
 			if (weakSession) {
 				InvokeCallbackSafely(completion, QString());
 			}
@@ -127,7 +170,7 @@ void RequestLocalTranscribe(
 
 	if (const auto ready = doc->filepath(true);
 		!ready.isEmpty() && QFileInfo(ready).isFile()) {
-		runEngine(ready, false);
+		runEngine(ready);
 		return;
 	}
 
@@ -148,7 +191,38 @@ void RequestLocalTranscribe(
 			current->finished = true;
 			current->timeout.cancel();
 			current->lifetime.destroy();
-			runEngine(path, temporary);
+			if (temporary && path.isEmpty()) {
+				RemoveTemporaryFiles(temporaryPath);
+				if (weakSession) {
+					InvokeCallbackSafely(completion, QString());
+				}
+				return;
+			}
+			if (temporary) {
+				const auto directory = QStandardPaths::writableLocation(
+					QStandardPaths::TempLocation);
+				if (directory.isEmpty()) {
+					RemoveTemporaryFiles(temporaryPath);
+					if (weakSession) {
+						InvokeCallbackSafely(completion, QString());
+					}
+					return;
+				}
+				const auto enginePath = directory
+					+ u"/ayugram_stt_engine_%1_%2.oga"_q.arg(
+						QString::number(id.msg.bare),
+						QUuid::createUuid().toString(QUuid::WithoutBraces));
+				if (CopyForTranscription(path, enginePath)) {
+					runEngine(enginePath, enginePath, temporaryPath);
+				} else {
+					RemoveTemporaryFiles(enginePath, temporaryPath);
+					if (weakSession) {
+						InvokeCallbackSafely(completion, QString());
+						}
+				}
+			} else {
+				runEngine(path);
+			}
 		};
 
 		session->downloaderTaskFinished(
@@ -171,11 +245,13 @@ void RequestLocalTranscribe(
 				current && !current->finished) {
 				current->finished = true;
 				current->lifetime.destroy();
-				if (weakSession && temporary && doc->loading()) {
-					doc->cancel();
-				}
-				if (!temporaryPath.isEmpty()) {
-					QFile::remove(temporaryPath);
+				if (temporary) {
+					if (weakSession
+						&& doc->loading()
+						&& doc->loadingFilePath() == temporaryPath) {
+						doc->cancel();
+					}
+					RemoveTemporaryFiles(temporaryPath);
 				}
 				if (weakSession) {
 					InvokeCallbackSafely(completion, QString());
@@ -206,11 +282,20 @@ void RequestLocalTranscribe(
 	doc->save(id, tempPath);
 	if (const auto ready = doc->filepath(true);
 		!ready.isEmpty() && QFileInfo(ready).isFile()) {
-		runEngine(ready, true);
+		const auto enginePath = tempDirectory
+			+ u"/ayugram_stt_engine_%1_%2.oga"_q.arg(
+				QString::number(id.msg.bare),
+				QUuid::createUuid().toString(QUuid::WithoutBraces));
+		if (CopyForTranscription(ready, enginePath)) {
+			runEngine(enginePath, enginePath, tempPath);
+		} else {
+			RemoveTemporaryFiles(enginePath, tempPath);
+			InvokeCallbackSafely(completion, QString());
+		}
 		return;
 	}
 	if (!doc->loading()) {
-		QFile::remove(tempPath);
+		RemoveTemporaryFiles(tempPath);
 		InvokeCallbackSafely(completion, QString());
 		return;
 	}

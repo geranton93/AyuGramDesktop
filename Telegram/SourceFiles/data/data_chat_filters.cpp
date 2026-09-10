@@ -422,7 +422,7 @@ ChatFilters::ChatFilters(not_null<Session*> owner)
 	AyuSettings::getInstance().hiddenFolderIdsChanges()
 	| rpl::on_next([=] {
 		if (_loaded) {
-			_listChanged.fire({});
+			_visibilityChanged.fire({});
 		}
 	}, _lifetime);
 }
@@ -980,6 +980,10 @@ bool ChatFilters::has() const {
 
 rpl::producer<> ChatFilters::changed() const {
 	return _listChanged.events();
+}
+
+rpl::producer<> ChatFilters::visibilityChanged() const {
+	return _visibilityChanged.events();
 }
 
 rpl::producer<FilterId> ChatFilters::isChatlistChanged() const {

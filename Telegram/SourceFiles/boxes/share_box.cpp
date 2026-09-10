@@ -1886,11 +1886,11 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					targetHistories = std::move(targetHistories),
 					existingIds,
 					forwardOptions] {
-				const auto session = sourceSession.get();
-				if (!session) {
-					return;
-				}
 				for (auto i = 0; i != targetActions.size(); ++i) {
+					const auto session = sourceSession.get();
+					if (!session) {
+						return;
+					}
 					AyuForward::forwardMessages(
 						not_null<Main::Session*>(session),
 						targetActions[i],
@@ -1923,11 +1923,11 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					existingIds,
 					forwardOptions]
 			{
-				const auto session = sourceSession.get();
-				if (!session) {
-					return;
-				}
 				for (auto i = 0; i != targetActions.size(); ++i) {
+					const auto session = sourceSession.get();
+					if (!session) {
+						return;
+					}
 					AyuForward::intelligentForward(
 						not_null<Main::Session*>(session),
 						targetActions[i],

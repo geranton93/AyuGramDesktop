@@ -20,13 +20,15 @@ public:
 	}
 
 	[[nodiscard]] Generation generation() const {
-		return _pending ? _generation : 0;
+		return _generation;
+	}
+
+	void changed() {
+		advance();
 	}
 
 	void add() {
-		if (++_generation == 0) {
-			++_generation;
-		}
+		advance();
 		_pending = true;
 	}
 
@@ -37,6 +39,12 @@ public:
 	}
 
 private:
+	void advance() {
+		if (++_generation == 0) {
+			++_generation;
+		}
+	}
+
 	Generation _generation = 0;
 	bool _pending = false;
 

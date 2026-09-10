@@ -15,7 +15,10 @@ namespace Ayu::STT {
 class STTManager {
 public:
 	static STTManager &instance();
-	void transcribe(const QString &filePath, std::function<void(QString)> callback);
+	void transcribe(
+		const QString &filePath,
+		std::function<void(QString)> callback,
+		std::function<bool()> cancelled = {});
 	static void requestPermission();
 	[[nodiscard]] static QString modelPath(int modelType);
 	[[nodiscard]] static QString modelUrl(int modelType);

@@ -12,6 +12,7 @@
 #include "ayu/features/forward/ayu_sync.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/random.h"
+#include "base/timer.h"
 #include "base/unixtime.h"
 #include "base/weak_ptr.h"
 #include "core/application.h"
@@ -29,11 +30,16 @@
 #include "styles/style_boxes.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "ui/text/text_utilities.h"
+#include "ui/toast/toast.h"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <functional>
+#include <memory>
 #include <mutex>
-#include <new>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace AyuForward {
@@ -69,46 +75,61 @@ std::unordered_map<ForwardStateKey,
 	ForwardStateKeyHash> forwardStates;
 constexpr auto kMaxForwardStates = std::size_t(256);
 constexpr auto kMaxForwardItems = std::size_t(10'000);
+constexpr auto kMaxConcurrentForwardSourceResolutions = std::size_t(4);
+constexpr auto kMaxForwardSourceResolutionTime = std::chrono::minutes(2);
+constexpr auto kMaxSingleForwardSourceResolutionTime
+	= std::chrono::seconds(15);
 
-struct ForwardTargetSnapshot {
-	uint64 sessionUniqueId = 0;
-	PeerId peerId;
-	bool slowmodeApplied = false;
-};
+[[nodiscard]] bool IsForwardStopped(
+		const base::weak_ptr<Main::Session> &weakSession,
+		const ForwardState &state) {
+	return !weakSession || state.stopRequested.load();
+}
 
-[[nodiscard]] std::optional<ForwardTargetSnapshot> SnapshotForwardTarget(
-		not_null<Main::Session*> session,
-		const base::weak_ptr<History> &targetHistory) {
-	auto result = std::optional<ForwardTargetSnapshot>();
-	const auto weakSession = base::make_weak(session);
-	crl::on_main_sync([&] {
-		const auto current = weakSession.get();
-		const auto history = targetHistory.get();
-		if (current && history && &history->session() == current) {
-			result = ForwardTargetSnapshot{
-				.sessionUniqueId = current->uniqueId(),
-				.peerId = history->peer->id,
-				.slowmodeApplied = history->peer->slowmodeApplied(),
-			};
+void FinishForward(
+		const base::weak_ptr<Main::Session> &weakSession,
+		const std::shared_ptr<ForwardState> &state,
+		const PeerId &peerId) {
+	state->state = ForwardState::State::Finished;
+	if (const auto current = weakSession.get()) {
+		state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
+	}
+}
+
+void ShowForwardStartFailure(
+		const base::weak_ptr<Main::Session> &weakSession) {
+	crl::on_main([weakSession] {
+		if (weakSession) {
+			Ui::Toast::Show(tr::ayu_AyuForwardUnavailable(tr::now));
 		}
 	});
-	return result;
 }
 
 [[nodiscard]] std::shared_ptr<ForwardState> FindForwardState(
 		const ForwardStateKey &key) {
 	std::lock_guard<std::mutex> lock(ForwardStatesMutex);
 	const auto it = forwardStates.find(key);
-	return (it != forwardStates.end()) ? it->second : nullptr;
+	if (it == forwardStates.end()) {
+		return nullptr;
+	}
+	const auto owner = it->second->owner.get();
+	if (!owner || owner->uniqueId() != key.sessionUniqueId) {
+		forwardStates.erase(it);
+		return nullptr;
+	}
+	return it->second;
 }
 
 [[nodiscard]] bool SetForwardState(
-			const ForwardStateKey &key,
-			std::shared_ptr<ForwardState> state) {
+		const ForwardStateKey &key,
+		std::shared_ptr<ForwardState> state) {
 	std::lock_guard<std::mutex> lock(ForwardStatesMutex);
 	if (const auto existing = forwardStates.find(key);
-		 existing != forwardStates.end()) {
-		if (existing->second->state.load() != ForwardState::State::Finished) {
+		existing != forwardStates.end()) {
+		const auto owner = existing->second->owner.get();
+		if (owner && owner->uniqueId() == key.sessionUniqueId
+			&& existing->second->state.load()
+				!= ForwardState::State::Finished) {
 			return false;
 		}
 		forwardStates.erase(existing);
@@ -248,137 +269,347 @@ void markUnavailableForwardSource(
 	return source;
 }
 
-[[nodiscard]] FullMsgId resolveForwardSourceId(
-		not_null<Main::Session*> session,
-		FullMsgId itemId) {
-	const auto weakSession = base::make_weak(session);
-	if (!weakSession) {
-		return {};
-	}
-	struct Lookup {
-		FullMsgId immediate;
-		PeerId sourcePeerId;
-		MsgId sourceId = 0;
-		MTPInputPeer historyInput;
-		MsgId historyItemId = 0;
-	};
-	auto lookup = Lookup();
-	crl::on_main_sync([&] {
-		const auto current = weakSession.get();
-		if (!current) {
+struct ForwardSourceLookup {
+	PeerId sourcePeerId;
+	MsgId sourceId = 0;
+	MTPInputPeer historyInput;
+	MsgId historyItemId = 0;
+};
+
+class ForwardSourceResolver final
+	: public std::enable_shared_from_this<ForwardSourceResolver> {
+public:
+	using Callback = std::function<void(MessageIdsList)>;
+
+	static void Start(
+			not_null<Main::Session*> session,
+			MessageIdsList itemIds,
+			Callback callback) {
+		const auto weakSession = base::make_weak(session);
+		std::shared_ptr<Callback> callbackHolder;
+		try {
+			callbackHolder = std::make_shared<Callback>(std::move(callback));
+		} catch (...) {
+			try {
+				callback({});
+			} catch (...) {
+				LOG(("AyuForward: source resolution callback failed"));
+			}
 			return;
 		}
-		const auto item = current->data().message(itemId);
-		if (!item) {
+		const auto fail = [callbackHolder] {
+			if (!callbackHolder || !*callbackHolder) {
+				return;
+			}
+			auto callback = std::move(*callbackHolder);
+			try {
+				callback({});
+			} catch (...) {
+				LOG(("AyuForward: source resolution callback failed"));
+			}
+		};
+		try {
+			crl::on_main([
+					weakSession,
+					itemIds = std::move(itemIds),
+					callbackHolder]() mutable {
+				const auto current = weakSession.get();
+				if (!current) {
+					return;
+				}
+				std::shared_ptr<ForwardSourceResolver> resolver;
+			try {
+				resolver = std::make_shared<ForwardSourceResolver>(
+					weakSession,
+					std::move(itemIds),
+					std::move(*callbackHolder));
+				const auto self = resolver;
+				resolver->_timeout.setCallback([self] {
+					self->finish({});
+				});
+				resolver->_timeout.callOnce(
+					static_cast<crl::time>(
+						std::chrono::duration_cast<std::chrono::milliseconds>(
+							kMaxForwardSourceResolutionTime).count()));
+				resolver->pump();
+			} catch (...) {
+				if (resolver) {
+					resolver->finish({});
+				} else {
+					auto callback = std::move(*callbackHolder);
+					if (!callback) {
+						return;
+					}
+					try {
+						callback({});
+					} catch (...) {
+						LOG(("AyuForward: source resolution callback failed"));
+					}
+				}
+			}
+			});
+		} catch (...) {
+			fail();
+		}
+	}
+
+public:
+	ForwardSourceResolver(
+			base::weak_ptr<Main::Session> session,
+			MessageIdsList itemIds,
+			Callback callback)
+	: _session(std::move(session))
+	, _itemIds(std::move(itemIds))
+	, _resolvedIds(_itemIds.size())
+	, _callback(std::move(callback)) {
+	}
+
+	~ForwardSourceResolver() = default;
+
+private:
+
+	void pump() {
+		if (_finished) {
 			return;
+		}
+		try {
+			if (!_session
+				|| std::chrono::steady_clock::now()
+					>= _deadline) {
+				finish({});
+				return;
+			}
+			const auto maxItemsPerPump = std::size_t(64);
+			auto processed = std::size_t(0);
+			while (_nextIndex < _itemIds.size()
+				&& _inFlight < kMaxConcurrentForwardSourceResolutions
+				&& processed++ < maxItemsPerPump) {
+				const auto index = _nextIndex++;
+				if (!startItem(index)) {
+					finish({});
+					return;
+				}
+			}
+			if (_nextIndex < _itemIds.size()
+				&& _inFlight < kMaxConcurrentForwardSourceResolutions) {
+				schedulePump();
+			} else if (_nextIndex == _itemIds.size() && !_inFlight) {
+				finish(std::move(_resolvedIds));
+			}
+		} catch (...) {
+			finish({});
+		}
+	}
+
+	[[nodiscard]] bool startItem(const std::size_t index) {
+		const auto current = _session.get();
+		if (!current) {
+			return false;
+		}
+		const auto item = current->data().message(_itemIds[index]);
+		if (!item) {
+			return false;
 		}
 		const auto source = forwardSourceData(item);
 		if (!source) {
-			lookup.immediate = item->fullId();
-			return;
+			_resolvedIds[index] = item->fullId();
+			return true;
 		}
 		if (const auto existing = current->data().message(
 				source->peer,
 				source->id)) {
 			clearUnavailableForwardSource(current, *source);
-			lookup.immediate = existing->fullId();
-			return;
+			_resolvedIds[index] = existing->fullId();
+			return true;
 		}
-		lookup.sourcePeerId = source->peer->id;
-		lookup.sourceId = source->id;
-		lookup.historyInput = item->history()->peer->input();
-		lookup.historyItemId = item->id;
-	});
-	if (lookup.immediate || !lookup.sourcePeerId || !lookup.sourceId) {
-		return lookup.immediate;
-	}
 
-	const auto sourcePeerId = lookup.sourcePeerId;
-	const auto sourceId = lookup.sourceId;
-	std::shared_ptr<TimedCountDownLatch> latch;
-	try {
-		latch = std::make_shared<TimedCountDownLatch>(1);
-	} catch (const std::bad_alloc &) {
-		return {};
-	}
+		const auto lookup = ForwardSourceLookup{
+			.sourcePeerId = source->peer->id,
+			.sourceId = source->id,
+			.historyInput = item->history()->peer->input(),
+			.historyItemId = item->id,
+		};
+		if (!current->data().peer(lookup.sourcePeerId)->asChannel()) {
+			return false;
+		}
 
-	crl::on_main([=] {
-		const auto current = weakSession.get();
-		if (!current) {
-			latch->countDown();
-			return;
-		}
-		if (!current->data().peer(sourcePeerId)->asChannel()) {
-			latch->countDown();
-			return;
-		}
-		current->api().request(MTPchannels_GetMessages(
-			MTP_inputChannelFromMessage(
-				lookup.historyInput,
-				MTP_int(lookup.historyItemId),
-				MTP_long(peerToChannel(sourcePeerId).bare)),
-			MTP_vector<MTPInputMessage>(
-				1,
-				MTP_inputMessageID(MTP_int(sourceId)))
-		)).done([=](const MTPmessages_Messages &result) {
-			if (const auto current = weakSession.get()) {
-				if (const auto sourcePeer = current->data().peer(
-						sourcePeerId)->asChannel()) {
-					current->data().processExistingMessages(sourcePeer, result);
-					if (current->data().message(sourcePeerId, sourceId)) {
-						clearUnavailableForwardSource(
-							current,
-							ForwardSource{ sourcePeer, sourceId });
-					} else {
-						markUnavailableForwardSource(
-							current,
-							ForwardSource{ sourcePeer, sourceId });
-					}
-				}
+		const auto self = shared_from_this();
+		++_inFlight;
+		auto requestId = mtpRequestId(0);
+		try {
+			requestId = current->api().request(MTPchannels_GetMessages(
+				MTP_inputChannelFromMessage(
+					lookup.historyInput,
+					MTP_int(lookup.historyItemId),
+					MTP_long(peerToChannel(lookup.sourcePeerId).bare)),
+				MTP_vector<MTPInputMessage>(
+					1,
+					MTP_inputMessageID(MTP_int(lookup.sourceId)))
+			)).done([
+					self,
+					index,
+					sourcePeerId = lookup.sourcePeerId,
+					sourceId = lookup.sourceId](
+						const MTPmessages_Messages &result,
+						mtpRequestId requestId) {
+				self->handleSuccess(
+					index,
+					sourcePeerId,
+					sourceId,
+					requestId,
+					result);
+			}).fail([
+					self](const MTP::Error &, mtpRequestId requestId) {
+				self->handleFailure(requestId);
+			}).send();
+			const auto timeoutId = _requestTimeouts.call(
+				static_cast<crl::time>(
+					std::chrono::duration_cast<std::chrono::milliseconds>(
+						kMaxSingleForwardSourceResolutionTime).count()),
+				[self, requestId] {
+					self->handleTimeout(requestId);
+				});
+			_requests.emplace(requestId, timeoutId);
+		} catch (...) {
+			if (requestId) {
+				current->api().request(requestId).cancel();
 			}
-			latch->countDown();
-		}).fail([=](const MTP::Error &) {
-			latch->countDown();
-	}).send();
-	});
+			--_inFlight;
+			return false;
+		}
+		return true;
+	}
 
-	if (!latch->await(std::chrono::seconds(15))) {
-		if (const auto current = weakSession.get()) {
-			if (const auto original = current->data().message(itemId)) {
-				return original->fullId();
+	void schedulePump() {
+		try {
+			const auto self = shared_from_this();
+			crl::on_main([self] {
+				self->pump();
+			});
+		} catch (...) {
+			finish({});
+		}
+	}
+
+	[[nodiscard]] bool takeRequest(mtpRequestId requestId) {
+		const auto i = _requests.find(requestId);
+		if (i == _requests.end()) {
+			return false;
+		}
+		_requestTimeouts.cancel(i->second);
+		_requests.erase(i);
+		return true;
+	}
+
+	void handleSuccess(
+			std::size_t index,
+			PeerId sourcePeerId,
+			MsgId sourceId,
+			mtpRequestId requestId,
+			const MTPmessages_Messages &result) {
+		if (!takeRequest(requestId)) {
+			return;
+		}
+		if (_inFlight) {
+			--_inFlight;
+		}
+		if (_finished) {
+			return;
+		}
+		try {
+			const auto current = _session.get();
+			if (!current) {
+				finish({});
+				return;
+			}
+			const auto sourcePeer = current->data().peer(
+				sourcePeerId)->asChannel();
+			if (!sourcePeer) {
+				finish({});
+				return;
+			}
+			current->data().processExistingMessages(sourcePeer, result);
+			if (const auto resolved = current->data().message(
+					sourcePeerId,
+					sourceId)) {
+				clearUnavailableForwardSource(
+					current,
+					ForwardSource{ sourcePeer, sourceId });
+				_resolvedIds[index] = resolved->fullId();
+				pump();
+			} else {
+				markUnavailableForwardSource(
+					current,
+					ForwardSource{ sourcePeer, sourceId });
+				finish({});
+			}
+		} catch (...) {
+			finish({});
+		}
+	}
+
+	void handleFailure(mtpRequestId requestId) {
+		if (!takeRequest(requestId)) {
+			return;
+		}
+		if (_inFlight) {
+			--_inFlight;
+		}
+		finish({});
+	}
+
+	void handleTimeout(mtpRequestId requestId) {
+		if (!takeRequest(requestId)) {
+			return;
+		}
+		if (const auto current = _session.get()) {
+			current->api().request(requestId).cancel();
+		}
+		if (_inFlight) {
+			--_inFlight;
+		}
+		finish({});
+	}
+
+	void finish(MessageIdsList result) {
+		if (_finished) {
+			return;
+		}
+		_finished = true;
+		_timeout.cancel();
+		_timeout.setCallback(nullptr);
+		const auto requests = std::move(_requests);
+		_requests.clear();
+		for (const auto &[requestId, timeoutId] : requests) {
+			_requestTimeouts.cancel(timeoutId);
+			if (const auto current = _session.get()) {
+				current->api().request(requestId).cancel();
 			}
 		}
-		return {};
-	}
-	if (const auto current = weakSession.get()) {
-		if (const auto resolved = current->data().message(sourcePeerId, sourceId)) {
-			return resolved->fullId();
+		auto callback = std::move(_callback);
+		if (callback) {
+			try {
+				callback(std::move(result));
+			} catch (...) {
+				LOG(("AyuForward: source resolution callback failed"));
+			}
 		}
-		if (const auto original = current->data().message(itemId)) {
-			return original->fullId();
-		}
 	}
-	return {};
-}
 
-[[nodiscard]] MessageIdsList resolveForwardSources(
-	not_null<Main::Session*> session,
-	const MessageIdsList &itemIds) {
-	auto result = MessageIdsList();
-	result.reserve(itemIds.size());
-	const auto weakSession = base::make_weak(session);
-	for (const auto itemId : itemIds) {
-		if (!weakSession) {
-			break;
-		}
-		if (const auto resolved = resolveForwardSourceId(session, itemId)) {
-			result.push_back(resolved);
-		} else {
-			break;
-		}
-	}
-	return result;
-}
+	base::weak_ptr<Main::Session> _session;
+	MessageIdsList _itemIds;
+	MessageIdsList _resolvedIds;
+	Callback _callback;
+	base::Timer _timeout;
+	base::DelayedCallTimer _requestTimeouts;
+	std::unordered_map<mtpRequestId, int> _requests;
+	const std::chrono::steady_clock::time_point _deadline
+		= std::chrono::steady_clock::now()
+		+ kMaxForwardSourceResolutionTime;
+	std::size_t _nextIndex = 0;
+	std::size_t _inFlight = 0;
+	bool _finished = false;
+};
 
 struct ForwardMedia {
 	std::optional<AyuSync::PhotoSnapshot> photo;
@@ -456,6 +687,25 @@ struct ForwardItem {
 }
 
 } // namespace
+
+std::optional<ForwardTargetSnapshot> SnapshotForwardTarget(
+	not_null<Main::Session*> session,
+	const base::weak_ptr<History> &targetHistory) {
+	auto result = std::optional<ForwardTargetSnapshot>();
+	const auto weakSession = base::make_weak(session);
+	crl::on_main_sync([&] {
+		const auto current = weakSession.get();
+		const auto history = targetHistory.get();
+		if (current && history && &history->session() == current) {
+			result = ForwardTargetSnapshot{
+				.sessionUniqueId = current->uniqueId(),
+				.peerId = history->peer->id,
+				.slowmodeApplied = history->peer->slowmodeApplied(),
+			};
+		}
+	});
+	return result;
+}
 
 bool isForwarding(const Main::Session &session, const PeerId &id) {
 	if (!id.value) {
@@ -616,7 +866,7 @@ void sendMedia(
 				return SendMediaType::Audio;
 			} else if (document->round) {
 				return SendMediaType::Round;
-			} else if (document->playable) {
+			} else if (document->video) {
 				// to send video as video need to pass it as 'photo'
 				// ref: `void HistoryWidget::sendingFilesConfirmed`
 				return SendMediaType::Photo;
@@ -712,18 +962,19 @@ struct ForwardChunk
 	MessageIdsList itemIds;
 };
 
-void intelligentForward(
-	not_null<Main::Session*> session,
-	const Api::SendAction &action,
-	const MessageIdsList &itemIds,
-	Data::ForwardOptions options,
-	base::weak_ptr<History> targetHistory) {
+void ContinueIntelligentForward(
+		not_null<Main::Session*> session,
+		const Api::SendAction &action,
+		MessageIdsList resolvedIds,
+		Data::ForwardOptions options,
+		base::weak_ptr<History> targetHistory) {
 	const auto weakSession = base::make_weak(session);
 	if (!weakSession) {
 		return;
 	}
 	const auto target = SnapshotForwardTarget(session, targetHistory);
-	if (!target) {
+	if (!target || resolvedIds.empty()
+		|| resolvedIds.size() > kMaxForwardItems) {
 		return;
 	}
 	const auto peerId = target->peerId;
@@ -731,28 +982,6 @@ void intelligentForward(
 		.sessionUniqueId = target->sessionUniqueId,
 		.peerId = peerId,
 	};
-	if (itemIds.empty() || itemIds.size() > kMaxForwardItems) {
-		LOG(("AyuForward: refusing an invalid or oversized selection"));
-		return;
-	}
-	const auto topicRootId = action.replyTo.topicRootId;
-	const auto monoforumPeerId = action.replyTo.monoforumPeerId;
-	crl::on_main([weakSession, targetHistory, topicRootId, monoforumPeerId]
-	{
-		if (weakSession && targetHistory) {
-			targetHistory.get()->setForwardDraft(
-				topicRootId,
-				monoforumPeerId,
-				{});
-		}
-	});
-
-	const auto resolvedIds = resolveForwardSources(session, itemIds);
-	if (resolvedIds.empty() || !weakSession
-		|| resolvedIds.size() != itemIds.size()
-		|| resolvedIds.size() > kMaxForwardItems) {
-		return;
-	}
 	const auto items = SnapshotForwardItems(session, resolvedIds);
 	if (items.empty() || items.size() != resolvedIds.size() || !weakSession) {
 		return;
@@ -784,18 +1013,16 @@ void intelligentForward(
 	currentChunk.itemIds = currentArray;
 	chunks.push_back(currentChunk);
 
-	auto state = std::make_shared<ForwardState>(chunks.size());
+	auto state = std::make_shared<ForwardState>(chunks.size(), session);
 	if (!SetForwardState(stateKey, state)) {
 		LOG(("AyuForward: forward state capacity reached"));
+		ShowForwardStartFailure(weakSession);
 		return;
 	}
 
 	for (const auto &chunk : chunks) {
-		if (!weakSession || state->stopRequested) {
-			state->state = ForwardState::State::Finished;
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-			}
+		if (IsForwardStopped(weakSession, *state)) {
+			FinishForward(weakSession, state, peerId);
 			return;
 		}
 		if (chunk.isAyuForwardNeeded) {
@@ -806,11 +1033,8 @@ void intelligentForward(
 				chunk.itemIds,
 				options,
 				targetHistory);
-			if (!weakSession || state->stopRequested) {
-				state->state = ForwardState::State::Finished;
-				if (const auto current = weakSession.get()) {
-					state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-				}
+			if (IsForwardStopped(weakSession, *state)) {
+				FinishForward(weakSession, state, peerId);
 				return;
 			}
 		} else {
@@ -826,11 +1050,8 @@ void intelligentForward(
 				action,
 				options,
 				targetHistory);
-			if (!weakSession || state->stopRequested) {
-				state->state = ForwardState::State::Finished;
-				if (const auto current = weakSession.get()) {
-					state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-				}
+			if (IsForwardStopped(weakSession, *state)) {
+				FinishForward(weakSession, state, peerId);
 				return;
 			}
 
@@ -843,9 +1064,76 @@ void intelligentForward(
 		state->currentChunk++;
 	}
 
-	state->state = ForwardState::State::Finished;
-	if (const auto current = weakSession.get()) {
-		state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
+	FinishForward(weakSession, state, peerId);
+}
+
+void intelligentForward(
+		not_null<Main::Session*> session,
+		const Api::SendAction &action,
+		const MessageIdsList &itemIds,
+		Data::ForwardOptions options,
+		base::weak_ptr<History> targetHistory) {
+	const auto weakSession = base::make_weak(session);
+	if (!weakSession) {
+		return;
+	}
+	if (itemIds.empty() || itemIds.size() > kMaxForwardItems) {
+		LOG(("AyuForward: refusing an invalid or oversized selection"));
+		return;
+	}
+	if (!SnapshotForwardTarget(session, targetHistory)) {
+		return;
+	}
+	const auto topicRootId = action.replyTo.topicRootId;
+	const auto monoforumPeerId = action.replyTo.monoforumPeerId;
+	crl::on_main([weakSession, targetHistory, topicRootId, monoforumPeerId]
+	{
+		if (weakSession && targetHistory) {
+			targetHistory.get()->setForwardDraft(
+				topicRootId,
+				monoforumPeerId,
+				{});
+		}
+	});
+
+	try {
+		ForwardSourceResolver::Start(
+			session,
+			MessageIdsList(itemIds),
+			[weakSession, action, options, targetHistory](
+					MessageIdsList resolvedIds) mutable {
+				if (resolvedIds.empty()) {
+					if (weakSession) {
+						ShowForwardStartFailure(weakSession);
+					}
+					return;
+				}
+				try {
+					crl::on_main([
+							weakSession,
+							action,
+							resolvedIds = std::move(resolvedIds),
+							options,
+							targetHistory]() mutable {
+						if (const auto current = weakSession.get()) {
+							ContinueIntelligentForward(
+								not_null<Main::Session*>(current),
+								action,
+								std::move(resolvedIds),
+								options,
+								targetHistory);
+						}
+					});
+				} catch (...) {
+					if (weakSession) {
+						ShowForwardStartFailure(weakSession);
+					}
+				}
+			});
+	} catch (...) {
+		if (weakSession) {
+			ShowForwardStartFailure(weakSession);
+		}
 	}
 }
 
@@ -895,18 +1183,20 @@ void forwardMessages(
 	if (forwardState) {
 		state = FindForwardState(stateKey);
 		if (!state) {
-			state = std::make_shared<ForwardState>(1);
+			state = std::make_shared<ForwardState>(1, session);
 			if (!SetForwardState(stateKey, state)) {
 				LOG(("AyuForward: forward state capacity reached"));
+				ShowForwardStartFailure(weakSession);
 				return;
 			}
 		} else {
 			keepState = true;
 		}
 	} else {
-		state = std::make_shared<ForwardState>(1);
+		state = std::make_shared<ForwardState>(1, session);
 		if (!SetForwardState(stateKey, state)) {
 			LOG(("AyuForward: forward state capacity reached"));
+			ShowForwardStartFailure(weakSession);
 			return;
 		}
 	}
@@ -948,11 +1238,8 @@ void forwardMessages(
 			toBeDownloaded,
 			[state] { return state->stopRequested.load(); });
 	}
-	if (state->stopRequested || !weakSession) {
-		state->state = ForwardState::State::Finished;
-		if (const auto current = weakSession.get()) {
-			state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-		}
+	if (IsForwardStopped(weakSession, *state)) {
+		FinishForward(weakSession, state, peerId);
 		return;
 	}
 
@@ -968,11 +1255,8 @@ void forwardMessages(
 		}
 		const auto &item = items[i];
 
-		if (state->stopRequested || !weakSession) {
-			state->state = ForwardState::State::Finished;
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-			}
+		if (IsForwardStopped(weakSession, *state)) {
+			FinishForward(weakSession, state, peerId);
 			return;
 		}
 		const auto updateProgress = gsl::finally([&] {
@@ -1003,11 +1287,8 @@ void forwardMessages(
 				return state->stopRequested.load();
 			});
 
-			if (state->stopRequested || !weakSession) {
-				state->state = ForwardState::State::Finished;
-				if (const auto current = weakSession.get()) {
-					state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-				}
+			if (IsForwardStopped(weakSession, *state)) {
+				FinishForward(weakSession, state, peerId);
 				return;
 			}
 
@@ -1120,10 +1401,7 @@ void forwardMessages(
 		// "i" is incremented in prepareMedia
 	}
 	if (!keepState) {
-		state->state = ForwardState::State::Finished;
-		if (const auto current = weakSession.get()) {
-			state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-		}
+		FinishForward(weakSession, state, peerId);
 	}
 }
 

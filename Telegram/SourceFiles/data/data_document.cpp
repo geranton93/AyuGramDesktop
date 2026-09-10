@@ -1264,6 +1264,7 @@ void DocumentData::save(
 						if (!source.open(QIODevice::ReadOnly)) {
 							destination->close();
 							destination->remove();
+							l.accessDisable();
 							return;
 						}
 						auto copied = true;
@@ -1282,6 +1283,7 @@ void DocumentData::save(
 						if (!copied) {
 							destination->close();
 							destination->remove();
+							l.accessDisable();
 							return;
 						}
 						destination->close();
@@ -1289,6 +1291,8 @@ void DocumentData::save(
 						QFile(toFile).remove();
 						QFile(alreadyName).copy(toFile);
 					}
+				} else if (destination) {
+					destination->close();
 				}
 				l.accessDisable();
 			} else if (destination) {
@@ -1299,6 +1303,7 @@ void DocumentData::save(
 		return;
 	}
 
+	auto createdLoader = false;
 	if (_loader) {
 		if (!_loader->setFileName(toFile)) {
 			cancel();
@@ -1367,14 +1372,19 @@ void DocumentData::save(
 				autoLoading,
 				cacheTag());
 		}
+		createdLoader = true;
 	}
 	if (destination) {
 		if (!_loader->setDestinationFile(std::move(destination))) {
-			cancel();
+			if (createdLoader) {
+				cancel();
+			}
 			return;
 		}
 	}
-	handleLoaderUpdates();
+	if (createdLoader) {
+		handleLoaderUpdates();
+	}
 	if (loading()) {
 		_loader->start();
 	}

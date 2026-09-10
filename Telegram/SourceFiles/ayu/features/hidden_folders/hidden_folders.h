@@ -35,6 +35,10 @@ namespace AyuFeatures::HiddenFolders {
 [[nodiscard]] std::vector<Data::ChatFilter> VisibleOnly(
 	uint64 accountId,
 	const std::vector<Data::ChatFilter> &list);
+[[nodiscard]] int VisiblePremiumFrom(
+	uint64 accountId,
+	const std::vector<Data::ChatFilter> &list,
+	int premiumFrom);
 void AddToggleAction(
 	const Ui::Menu::MenuCallback &addAction,
 	uint64 accountId,

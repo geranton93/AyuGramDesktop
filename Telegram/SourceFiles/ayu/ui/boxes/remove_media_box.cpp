@@ -10,11 +10,14 @@
 #include "lang_auto.h"
 #include "base/call_delayed.h"
 #include "base/random.h"
+#include "base/unixtime.h"
 #include "base/weak_ptr.h"
 #include "base/weak_qptr.h"
 #include "data/data_channel.h"
+#include "data/data_forum_topic.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
+#include "history/history_item.h"
 #include "main/main_session.h"
 #include "mtproto/sender.h"
 #include "styles/style_boxes.h"
@@ -41,8 +44,8 @@ constexpr auto kMaxSearchPages = 1'000;
 constexpr auto kMaxDeleteRetries = 3;
 constexpr auto kBatchDelayMin = crl::time(500);
 constexpr auto kBatchDelayJitter = 500;
-constexpr auto kRetryDelay = crl::time(1'000);
 constexpr auto kDoneCloseDelay = crl::time(1200);
+constexpr auto kMaxFloodWaitSeconds = 24 * 60 * 60;
 
 enum class Phase {
 	Selecting,
@@ -65,6 +68,24 @@ struct State {
 
 [[nodiscard]] bool IsAlive(const State &state) {
 	return state.box.get() != nullptr;
+}
+
+[[nodiscard]] std::optional<crl::time> FloodWaitDelay(const QString &type) {
+	const auto parse = [&](QStringView prefix) {
+		if (!type.startsWith(prefix)) {
+			return std::optional<crl::time>();
+		}
+		bool ok = false;
+		const auto seconds = type.mid(prefix.size()).toInt(&ok);
+		if (!ok || seconds <= 0 || seconds > kMaxFloodWaitSeconds) {
+			return std::optional<crl::time>();
+		}
+		return std::optional<crl::time>(crl::time(seconds) * 1000);
+	};
+	if (const auto result = parse(u"FLOOD_WAIT_")) {
+		return result;
+	}
+	return parse(u"FLOOD_PREMIUM_WAIT_");
 }
 
 void ShowRemoveResult(const State &state) {
@@ -317,10 +338,9 @@ void RunDelete(
 				return;
 			}
 			const auto type = error.type();
-			const auto retryable = type.startsWith(u"FLOOD_WAIT_"_q)
-				|| type.startsWith(u"FLOOD_PREMIUM_WAIT_"_q);
-			if (retryable && retries < kMaxDeleteRetries) {
-				base::call_delayed(kRetryDelay * (retries + 1), [=] {
+			if (const auto delay = FloodWaitDelay(type);
+				delay && retries < kMaxDeleteRetries) {
+				base::call_delayed(*delay, [=] {
 					if (IsAlive(*state)) {
 						(*keepAlive)(index, retries + 1);
 					} else {
@@ -372,6 +392,7 @@ void SearchAndDelete(
 		bool deleteMine,
 		bool deleteTheirs,
 		bool revoke,
+		MsgId topicRootId,
 		std::shared_ptr<State> state) {
 	if (!IsAlive(*state)) {
 		return;
@@ -407,6 +428,19 @@ void SearchAndDelete(
 				Ui::Toast::Show(*searchError);
 			} else {
 				if (const auto current = weakSession.get()) {
+					const auto peer = current->data().peer(peerId);
+					const auto now = base::unixtime::now();
+					auto permitted = base::flat_set<MsgId>();
+					for (const auto id : *collected) {
+						const auto item = current->data().message(peerId, id);
+						if (item && item->canDelete()
+							&& (!revoke
+								|| peer->isChannel()
+								|| item->canDeleteForEveryone(now))) {
+							permitted.emplace(id);
+						}
+					}
+					*collected = std::move(permitted);
 					RunDelete(
 						current,
 						peerId,
@@ -461,14 +495,15 @@ void SearchAndDelete(
 				finishOne();
 				return;
 			}
+			using Flag = MTPmessages_Search::Flag;
 			api->request(MTPmessages_Search(
-				MTP_flags(0),
+				MTP_flags(topicRootId ? Flag::f_top_msg_id : Flag(0)),
 				currentPeer->input(),
 				MTP_string(),
 				MTPInputPeer(),
 				MTPInputPeer(),
 				MTPVector<MTPReaction>(),
-				MTP_int(0),
+				MTP_int(topicRootId.bare),
 				filter,
 				MTP_int(0),
 				MTP_int(0),
@@ -484,11 +519,21 @@ void SearchAndDelete(
 						finishOne();
 						return;
 					}
+					const auto current = weakSession.get();
+					if (!current) {
+						*keepAlive = nullptr;
+						finishOne();
+						return;
+					}
 					if (*stopSearch) {
 						*keepAlive = nullptr;
 						finishOne();
 						return;
 					}
+					const auto peer = current->data().peer(peerId);
+					current->data().processExistingMessages(
+						peer->asChannel(),
+						result);
 					auto reachedLimit = false;
 					WalkMessageIds(
 							result,
@@ -520,7 +565,9 @@ void SearchAndDelete(
 					}
 					const auto rawCount = RawMessagesCount(result);
 					const auto minId = MinMessageId(result);
-					if (rawCount == kBatchLimit && minId) {
+					if (rawCount == kBatchLimit
+						&& minId > MsgId(1)
+						&& minId > offsetId) {
 						(*keepAlive)(minId - MsgId(1));
 					} else {
 						*keepAlive = nullptr;
@@ -529,6 +576,11 @@ void SearchAndDelete(
 				})
 				.fail([=](const MTP::Error &error) {
 					DEBUG_LOG(("RemoveMedia: search failed: %1").arg(error.type()));
+					if (*stopSearch && state->limitReached) {
+						*keepAlive = nullptr;
+						finishOne();
+						return;
+					}
 					*searchFailed = true;
 					*stopSearch = true;
 					*searchError = error.type();
@@ -545,9 +597,10 @@ void SearchAndDelete(
 } // namespace
 
 void FillRemoveMediaBox(
-		not_null<Ui::GenericBox*> box,
-		not_null<PeerData*> peer,
-		not_null<Window::SessionController*>) {
+			not_null<Ui::GenericBox*> box,
+			not_null<PeerData*> peer,
+			not_null<Window::SessionController*>,
+			Data::ForumTopic *topic) {
 	box->setTitle(tr::ayu_RemoveMediaTitle());
 
 	const auto state = std::make_shared<State>();
@@ -741,6 +794,7 @@ void FillRemoveMediaBox(
 					deleteMine,
 					deleteTheirs,
 					revokeChecked,
+					topic ? topic->rootId() : MsgId(),
 					state);
 			} else {
 				state->phase = Phase::Done;

@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 #include "core/application.h"
 #include "apiwrap.h"
+#include "mtproto/mtproto_response.h"
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
@@ -46,7 +47,9 @@ namespace Data {
 namespace {
 
 constexpr auto kReadRequestTimeout = 3 * crl::time(1000);
+constexpr auto kReadRequestRetryBackoff = 60 * crl::time(1000);
 constexpr auto kReportDeliveriesPerRequest = 50;
+constexpr auto kMaxReadRequestRetries = 3;
 
 } // namespace
 
@@ -190,8 +193,13 @@ void Histories::readInbox(not_null<History*> history) {
 }
 
 void Histories::readInboxLocally(not_null<History*> history) {
+	auto &state = _states[history];
+	if (++state.readRequestGeneration == 0) {
+		++state.readRequestGeneration;
+	}
 	cancelPendingReadInbox(history);
 	readInbox(history, true);
+	checkEmptyState(history);
 }
 
 void Histories::readInbox(not_null<History*> history, bool locally) {
@@ -215,7 +223,15 @@ void Histories::readInbox(not_null<History*> history, bool locally) {
 		}
 		DEBUG_LOG(("Reading: loaded at bottom, but requesting entry."));
 	}
+	const auto state = lookup(history);
+	const auto readRequestGeneration = state
+		? state->readRequestGeneration
+		: 0;
 	requestDialogEntry(history, [=] {
+		if (const auto state = lookup(history);
+			state && state->readRequestGeneration != readRequestGeneration) {
+			return;
+		}
 		Expects(history->lastServerMessageKnown());
 
 		const auto last = history->lastServerMessage();
@@ -341,6 +357,9 @@ void Histories::readInboxTill(
 	}
 	const auto hasReadTillNotSent = maybeState
 		&& static_cast<bool>(maybeState->readTillNotSent);
+	const auto readRetryCooldown = maybeState
+		&& maybeState->readRequestCooldown
+		&& maybeState->willReadWhen > crl::now();
 	const auto readTill = maybeState
 		? maybeState->readTillNotSent.with(tillId)
 		: tillId;
@@ -393,7 +412,16 @@ void Histories::readInboxTill(
 	}
 	auto &state = maybeState ? *maybeState : _states[history];
 	state.willReadTill = readTill;
-	if (force || !stillUnread || !*stillUnread) {
+	if (readRetryCooldown) {
+		DEBUG_LOG(("Reading: postponing read request during retry cooldown."));
+		scheduleReadRequests();
+		if (!stillUnread) {
+			requestDialogEntry(history);
+			history->setInboxReadTill(readTill);
+			history->updateChatListEntry();
+			return;
+		}
+	} else if (force || !stillUnread || !*stillUnread) {
 		DEBUG_LOG(("Reading: will read till %1 with still unread %2"
 			).arg(readTill.bare
 			).arg(stillUnread.value_or(-666)));
@@ -723,6 +751,10 @@ void Histories::sendPendingReadInbox(not_null<History*> history) {
 		DEBUG_LOG(("Reading: send pending now with till %1 and when %2"
 			).arg(state->willReadTill.bare
 			).arg(state->willReadWhen));
+		if (state->readRequestCooldown
+			&& state->willReadWhen > crl::now()) {
+			return;
+		}
 		if (state->willReadTill && state->willReadWhen) {
 			state->willReadWhen = 0;
 			sendReadRequests();
@@ -842,6 +874,10 @@ void Histories::sendReadRequests() {
 			DEBUG_LOG(("Reading: skipping zero till."));
 			continue;
 		} else if (state.willReadWhen <= now) {
+			if (state.readRequestCooldown) {
+				state.readRequestCooldown = false;
+				state.readRequestRetries = 0;
+			}
 			DEBUG_LOG(("Reading: sending with till %1."
 				).arg(state.willReadTill.bare));
 			sendReadRequest(history, state);
@@ -857,6 +893,7 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 	Expects(state.willReadTill > state.sentReadTill);
 
 	const auto tillId = state.sentReadTill = base::take(state.willReadTill);
+	const auto requestGeneration = state.readRequestGeneration;
 	state.willReadWhen = 0;
 	state.sentReadDone = false;
 	const auto weakHistory = base::make_weak(history);
@@ -876,14 +913,31 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 				finish();
 				return;
 			}
-			auto state = lookup(current);
-			if (state == nullptr) {
-				state = &_states[current];
+			const auto state = lookup(current);
+			if (!state || state->readRequestGeneration != requestGeneration) {
+				finish();
+				return;
 			}
 			if (success) {
 				state->readTillNotSent.sent(tillId);
+				state->readRequestCooldown = false;
+				state->readRequestRetries = 0;
 			} else if (retry) {
 				state->readTillNotSent.add(tillId);
+				if (state->readRequestRetries < kMaxReadRequestRetries) {
+					++state->readRequestRetries;
+					state->willReadTill = state->readTillNotSent.with(
+						state->willReadTill);
+					state->willReadWhen = crl::now() + kReadRequestTimeout;
+				} else {
+					state->readRequestCooldown = true;
+					state->willReadTill = state->readTillNotSent.with(
+						state->willReadTill);
+					state->willReadWhen = crl::now()
+						+ kReadRequestRetryBackoff;
+					LOG(("Reading: stopped retrying read request after %1 retries.")
+						.arg(kMaxReadRequestRetries));
+				}
 			}
 
 			if (state->sentReadTill == tillId) {
@@ -905,7 +959,13 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 			finish();
 		};
 		const auto failed = [=](const MTP::Error &error) {
-			if (!weakHistory) {
+			const auto current = weakHistory.get();
+			if (!current) {
+				finish();
+				return;
+			}
+			const auto state = lookup(current);
+			if (!state || state->readRequestGeneration != requestGeneration) {
 				finish();
 				return;
 			}
@@ -915,13 +975,16 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 				// same continuation as .done, so a chat that's open and
 				// receiving new messages kept re-issuing a fresh,
 				// re-failing ReadHistory request forever.
-				if (const auto state = lookup(weakHistory.get())) {
-					state->readRequestsDisabled = true;
-					state->willReadTill = 0;
-					state->willReadWhen = 0;
-				}
+				state->readRequestsDisabled = true;
+				state->willReadTill = 0;
+				state->willReadWhen = 0;
 				LOG(("Reading: disabling read requests for a peer "
 					"after PEER_ID_INVALID."));
+				finished(false, false);
+				return;
+			}
+			if (!MTP::IsTemporaryError(error)
+				|| MTP::IsFloodError(error)) {
 				finished(false, false);
 				return;
 			}
@@ -940,9 +1003,18 @@ void Histories::sendReadRequest(not_null<History*> history, State &state) {
 				MTP_int(tillId)
 			)).done([=](const MTPmessages_AffectedMessages &result) {
 				if (const auto current = weakHistory.get()) {
+					const auto state = lookup(current);
+					if (!state
+						|| state->readRequestGeneration != requestGeneration) {
+						finish();
+						return;
+					}
 					current->session().api().applyAffectedMessages(
 						current->peer,
 						result);
+				} else {
+					finish();
+					return;
 				}
 				finished(true, false);
 			}).fail(failed).send();
@@ -962,7 +1034,10 @@ void Histories::checkEmptyState(not_null<History*> history) {
 			&& !state.readRequestsDisabled;
 	};
 	const auto i = _states.find(history);
-	if (i != end(_states) && empty(i->second)) {
+	if (i != end(_states)
+		&& empty(i->second)
+		&& !_dialogRequests.contains(history)
+		&& !_dialogRequestsPending.contains(history)) {
 		_states.erase(i);
 	}
 }

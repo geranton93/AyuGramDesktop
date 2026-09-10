@@ -137,7 +137,8 @@ Main::Session &FileLoader::session() const {
 void FileLoader::finishWithBytes(const QByteArray &data) {
 	_data = OwningBytes(data);
 	_localStatus = LocalStatus::Loaded;
-	if (!_filename.isEmpty() && _toCache == LoadToCacheAsWell) {
+	if (_fileIsOpen
+		|| (!_filename.isEmpty() && _toCache == LoadToCacheAsWell)) {
 		if (!_fileIsOpen) _fileIsOpen = file().open(QIODevice::WriteOnly);
 		if (!_fileIsOpen) {
 			cancel(FailureReason::FileWriteFailure);
@@ -205,7 +206,8 @@ bool FileLoader::setDestinationFile(std::unique_ptr<QFile> file) {
 	if (!file
 		|| !file->isOpen()
 		|| _fileIsOpen
-		|| !setFileName(file->fileName())) {
+		|| (_toCache == LoadToCacheAsWell
+			&& !setFileName(file->fileName()))) {
 		if (file) {
 			file->close();
 			file->remove();

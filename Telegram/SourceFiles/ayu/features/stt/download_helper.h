@@ -14,6 +14,17 @@ namespace Ayu::STT {
 
 inline constexpr qint64 kUnknownExpectedDownloadSize = -1;
 
+[[nodiscard]] bool IsValidSha256Hex(const QString &value);
+
+void InvokeCallbackSafely(
+	const std::function<void(QString)> &callback,
+	QString text = {});
+
+[[nodiscard]] bool VerifyModelFile(
+	const QString &path,
+	qint64 expectedSize,
+	const QString &expectedSha256);
+
 void DownloadWithProgress(
 	const QString &url,
 	const QString &destPath,

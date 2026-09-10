@@ -8,6 +8,10 @@
 
 class PeerData;
 
+namespace Data {
+class ForumTopic;
+} // namespace Data
+
 namespace Window {
 class SessionController;
 } // namespace Window
@@ -21,6 +25,7 @@ namespace AyuUi {
 void FillRemoveMediaBox(
 	not_null<Ui::GenericBox*> box,
 	not_null<PeerData*> peer,
-	not_null<Window::SessionController*> controller);
+	not_null<Window::SessionController*> controller,
+	Data::ForumTopic *topic);
 
 } // namespace AyuUi

@@ -9168,6 +9168,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_AyuForwardStatusLoadingMedia" = "Loading media";
 "ayu_AyuForwardStatusForwarding" = "Forwarding messages";
 "ayu_AyuForwardStatusFinished" = "Done";
+"ayu_AyuForwardUnavailable" = "Forwarding is currently busy. Please try again later.";
 "ayu_AyuForwardStatusSentCount" = "sent {count1} of {count2}";
 "ayu_AyuForwardStatusChunkCount" = "chunk {count1} of {count2}";
 "ayu_CreationDateUserApproximately" = "**{item1}** created their account approximately on **{item2}**.";

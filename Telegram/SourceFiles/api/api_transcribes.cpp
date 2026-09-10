@@ -37,6 +37,10 @@ Transcribes::Transcribes(not_null<ApiWrap*> api)
 , _api(&api->instance()) {
 }
 
+Transcribes::~Transcribes() {
+	invalidate_weak_ptrs(this);
+}
+
 bool Transcribes::isRated(not_null<HistoryItem*> item) const {
 	const auto fullId = item->fullId();
 	for (const auto &[transcribeId, id] : _ids) {
@@ -230,7 +234,12 @@ void Transcribes::load(not_null<HistoryItem*> item) {
 	const auto id = item->fullId();
 	if (Ayu::STT::ShouldTranscribeLocally(item)) {
 		auto &entry = mapEntry(id);
+		if (++_localGeneration == 0) {
+			++_localGeneration;
+		}
+		const auto localGeneration = _localGeneration;
 		entry.requestId = kLocalRequestId;
+		entry.localGeneration = localGeneration;
 		entry.shown = true;
 		entry.failed = false;
 		entry.pending = false;
@@ -238,22 +247,27 @@ void Transcribes::load(not_null<HistoryItem*> item) {
 		_session->data().requestItemResize(item);
 
 		const auto weak = base::make_weak(_session);
+		const auto weakTranscribes = base::make_weak(this);
 		Ayu::STT::RequestLocalTranscribe(item, [=](const QString &text) {
-			if (!weak) {
+			const auto current = weakTranscribes.get();
+			if (!current || !weak) {
 				return;
 			}
-			const auto i = _map.find(id);
-			if (i == _map.end() || i->second.requestId != kLocalRequestId) {
+			const auto i = current->_map.find(id);
+			if (i == current->_map.end()
+				|| i->second.requestId != kLocalRequestId
+				|| i->second.localGeneration != localGeneration) {
 				return;
 			}
 			auto &entry = i->second;
 			entry.requestId = 0;
+			entry.localGeneration = 0;
 			entry.pending = false;
 			entry.failed = text.isEmpty();
 			entry.result = text;
-			if (const auto item = _session->data().message(id)) {
+			if (const auto item = current->_session->data().message(id)) {
 				toggleRound(item, entry);
-				_session->data().requestItemResize(item);
+				current->_session->data().requestItemResize(item);
 			}
 		});
 		return;

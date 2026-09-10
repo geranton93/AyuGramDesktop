@@ -39,8 +39,8 @@ constexpr auto kMaxSearchPages = 1'000;
 constexpr auto kMaxDeleteRetries = 3;
 constexpr auto kBatchDelayMin = crl::time(500);
 constexpr auto kBatchDelayJitter = 500;
-constexpr auto kRetryDelay = crl::time(1'000);
 constexpr auto kDoneCloseDelay = crl::time(1200);
+constexpr auto kMaxFloodWaitSeconds = 24 * 60 * 60;
 
 enum class Phase {
 	Confirm,
@@ -62,6 +62,24 @@ struct State {
 
 [[nodiscard]] bool IsAlive(const State &state) {
 	return state.box.get() != nullptr;
+}
+
+[[nodiscard]] std::optional<crl::time> FloodWaitDelay(const QString &type) {
+	const auto parse = [&](QStringView prefix) {
+		if (!type.startsWith(prefix)) {
+			return std::optional<crl::time>();
+		}
+		bool ok = false;
+		const auto seconds = type.mid(prefix.size()).toInt(&ok);
+		if (!ok || seconds <= 0 || seconds > kMaxFloodWaitSeconds) {
+			return std::optional<crl::time>();
+		}
+		return std::optional<crl::time>(crl::time(seconds) * 1000);
+	};
+	if (const auto result = parse(u"FLOOD_WAIT_")) {
+		return result;
+	}
+	return parse(u"FLOOD_PREMIUM_WAIT_");
 }
 
 void ShowDeleteResult(const State &state) {
@@ -214,10 +232,9 @@ void RunDelete(
 				return;
 			}
 			const auto type = error.type();
-			const auto retryable = type.startsWith(u"FLOOD_WAIT_"_q)
-				|| type.startsWith(u"FLOOD_PREMIUM_WAIT_"_q);
-			if (retryable && retries < kMaxDeleteRetries) {
-				base::call_delayed(kRetryDelay * (retries + 1), [=] {
+			if (const auto delay = FloodWaitDelay(type);
+				delay && retries < kMaxDeleteRetries) {
+				base::call_delayed(*delay, [=] {
 					if (IsAlive(*state)) {
 						(*keepAlive)(index, retries + 1);
 					} else {
@@ -329,6 +346,12 @@ void SearchOwn(
 						*keepAlive = nullptr;
 						return;
 					}
+					const auto current = weakSession.get();
+					if (!current) {
+						state->phase = Phase::Done;
+						*keepAlive = nullptr;
+						return;
+					}
 					MsgId minId;
 					auto batchCount = 0;
 					const auto handle = [&](const QVector<MTPMessage> &messages) {
@@ -379,7 +402,9 @@ void SearchOwn(
 						} else {
 							state->phase = Phase::Done;
 						}
-					} else if (batchCount == kBatchLimit && minId) {
+					} else if (batchCount == kBatchLimit
+						&& minId > MsgId(1)
+						&& minId > offsetId) {
 						(*keepAlive)(minId - MsgId(1));
 					} else {
 						*keepAlive = nullptr;

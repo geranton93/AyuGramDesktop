@@ -385,6 +385,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			fillImageShadow(p, rthumb, *rounding, context);
 		}
 		const auto protectedSpoiler = _sensitiveSpoiler
+			|| _ttlCover
 			|| _data->extendedMediaPreview();
 		const auto revealed = (_spoiler
 			&& (!AyuSettings::getInstance().revealAllSpoilers()
@@ -785,12 +786,15 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 	if (QRect(paintx, painty, paintw, painth).contains(point)) {
 		ensureDataMediaCreated();
 		const auto protectedSpoiler = _sensitiveSpoiler
+			|| _ttlCover
 			|| _data->extendedMediaPreview();
 		result.link = (_spoiler
 			&& !_spoiler->revealed
 			&& (!AyuSettings::getInstance().revealAllSpoilers()
 				|| protectedSpoiler))
-			? ((_data->extendedMediaPreview() || _sensitiveSpoiler)
+			? ((_data->extendedMediaPreview()
+				|| _sensitiveSpoiler
+				|| _ttlCover)
 				? spoilerTagLink()
 				: _spoiler->link)
 			: _data->uploading()
@@ -869,6 +873,7 @@ void Photo::drawGrouped(
 	const auto radial = isRadialAnimation();
 
 	const auto protectedSpoiler = _sensitiveSpoiler
+		|| _ttlCover
 		|| _data->extendedMediaPreview();
 	const auto revealed = (_spoiler
 		&& (!AyuSettings::getInstance().revealAllSpoilers()
@@ -997,12 +1002,15 @@ TextState Photo::getStateGrouped(
 	}
 	ensureDataMediaCreated();
 	const auto protectedSpoiler = _sensitiveSpoiler
+		|| _ttlCover
 		|| _data->extendedMediaPreview();
 	auto link = (_spoiler
 		&& !_spoiler->revealed
 		&& (!AyuSettings::getInstance().revealAllSpoilers()
 			|| protectedSpoiler))
-		? ((_data->extendedMediaPreview() || _sensitiveSpoiler)
+		? ((_data->extendedMediaPreview()
+			|| _sensitiveSpoiler
+			|| _ttlCover)
 			? spoilerTagLink()
 			: _spoiler->link)
 		: _data->uploading()

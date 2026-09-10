@@ -358,17 +358,17 @@ void readMentions(
 					passthrough,
 					requests + 1);
 			} else {
-					LOG(("AyuGram: stopped reading mentions after %1 requests")
-						.arg(kMaxReadThingsRequests));
-				}
-			} else {
-				const auto pendingGeneration = current
-					->unreadMentionsReadDebt().generation();
-				current->unreadMentionsReadDebt().sent(generation);
-				if (!pendingGeneration || pendingGeneration == generation) {
-					currentPeer->owner().history(currentPeer)->clearUnreadMentionsFor(
-						current->asTopic() ? current->asTopic()->rootId() : 0);
-				}
+				LOG(("AyuGram: stopped reading mentions after %1 requests")
+					.arg(kMaxReadThingsRequests));
+			}
+		} else {
+			const auto pendingGeneration = current
+				->unreadMentionsReadDebt().generation();
+			current->unreadMentionsReadDebt().sent(generation);
+			if (pendingGeneration == generation) {
+				currentPeer->owner().history(currentPeer)->clearUnreadMentionsFor(
+					current->asTopic() ? current->asTopic()->rootId() : 0);
+			}
 		}
 	}).send();
 }
@@ -415,18 +415,18 @@ void readReactions(
 					passthrough,
 					requests + 1);
 			} else {
-					LOG(("AyuGram: stopped reading reactions after %1 requests")
-						.arg(kMaxReadThingsRequests));
-				}
-			} else {
-				const auto pendingGeneration = current
-					->unreadReactionsReadDebt().generation();
-				current->unreadReactionsReadDebt().sent(generation);
-				if (!pendingGeneration || pendingGeneration == generation) {
-					currentPeer->owner().history(currentPeer)->clearUnreadReactionsFor(
-						current->asTopic() ? current->asTopic()->rootId() : 0,
-						current->asSublist());
-				}
+				LOG(("AyuGram: stopped reading reactions after %1 requests")
+					.arg(kMaxReadThingsRequests));
+			}
+		} else {
+			const auto pendingGeneration = current
+				->unreadReactionsReadDebt().generation();
+			current->unreadReactionsReadDebt().sent(generation);
+			if (pendingGeneration == generation) {
+				currentPeer->owner().history(currentPeer)->clearUnreadReactionsFor(
+					current->asTopic() ? current->asTopic()->rootId() : 0,
+					current->asSublist());
+			}
 		}
 	}).send();
 }
@@ -446,14 +446,16 @@ void MarkAsReadThread(not_null<Data::Thread*> thread, bool locally) {
 	{
 		readMentions(
 			base::make_weak(threadInner),
-			threadInner->unreadMentionsReadDebt().generation());
+			threadInner->unreadMentionsReadDebt().generation(),
+			true);
 	};
 	const auto sendReadReactions = [=](
 		const not_null<Data::Thread*> threadInner)
 	{
 		readReactions(
 			base::make_weak(threadInner),
-			threadInner->unreadReactionsReadDebt().generation());
+			threadInner->unreadReactionsReadDebt().generation(),
+			true);
 	};
 	const auto clearReadMentions = [](
 		const not_null<Data::Thread*> threadInner)

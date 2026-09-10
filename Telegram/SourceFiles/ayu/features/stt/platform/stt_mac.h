@@ -13,7 +13,11 @@
 namespace Ayu::STT::Mac {
 
 [[nodiscard]] bool isAvailable();
-void transcribeFile(const QString &filePath, const QString &language, std::function<void(QString)> callback);
+void transcribeFile(
+	const QString &filePath,
+	const QString &language,
+	std::function<void(QString)> callback,
+	std::function<bool()> cancelled = {});
 void requestSpeechPermission();
 
 } // namespace Ayu::STT::Mac

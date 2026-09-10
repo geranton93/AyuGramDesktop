@@ -45,6 +45,7 @@ void AddDeleteOwnMessagesAction(PeerData *peerData,
 								const Window::PeerMenuCallback &addCallback);
 void AddRemoveMediaAction(
 	PeerData *peerData,
+	Data::ForumTopic *topic,
 	not_null<Window::SessionController*> sessionController,
 	const Window::PeerMenuCallback &addCallback);
 

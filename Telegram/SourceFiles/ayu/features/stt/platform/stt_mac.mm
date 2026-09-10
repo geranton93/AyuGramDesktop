@@ -7,12 +7,9 @@
 
 #include "ayu/features/stt/platform/stt_mac.h"
 
+#include "ayu/features/stt/audio_decoder.h"
 #include "base/debug_log.h"
 #include "crl/crl_on_main.h"
-
-#if defined(HAVE_WHISPER)
-#include "ayu/features/stt/whisper_service.h"
-#endif
 
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
@@ -22,8 +19,11 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <vector>
 
@@ -34,7 +34,16 @@ constexpr int kMaxActiveJobs = 2;
 constexpr qsizetype kMaxResultCharacters = 1024 * 1024;
 constexpr auto kAuthorizationTimeoutSeconds = 30;
 constexpr auto kRecognitionTimeoutSeconds = 90;
+constexpr auto kCancellationPollSeconds = 1;
+constexpr std::size_t kMaxQueuedJobs = 16;
 std::atomic<int> ActiveJobs = 0;
+struct PendingJob {
+	std::function<void()> start;
+	std::function<bool()> cancelled;
+	std::function<void()> reject;
+};
+std::deque<PendingJob> PendingJobs;
+std::mutex PendingJobsMutex;
 
 template <typename T>
 [[nodiscard]] std::shared_ptr<T> MakeOwnedObject(T *object) {
@@ -70,13 +79,157 @@ void InvokeCallbackSafely(
 	return false;
 }
 
+void StartNextJob();
+
+void InvokePendingRejections(
+		std::vector<std::function<void()>> rejections) {
+	for (auto &reject : rejections) {
+		if (!reject) {
+			continue;
+		}
+		try {
+			reject();
+		} catch (...) {
+			LOG(("SFSpeech queued job rejection failed"));
+		}
+	}
+}
+
+void PruneCancelledJobs(
+		std::vector<std::function<void()>> &rejections) {
+	for (auto i = PendingJobs.begin(); i != PendingJobs.end();) {
+		auto cancelled = false;
+		try {
+			cancelled = i->cancelled && i->cancelled();
+		} catch (...) {
+			cancelled = true;
+		}
+		if (!cancelled) {
+			++i;
+			continue;
+		}
+		if (i->reject) {
+			rejections.push_back(std::move(i->reject));
+		}
+		i = PendingJobs.erase(i);
+	}
+}
+
+void FinishJob() {
+	const auto previous = ActiveJobs.fetch_sub(
+		1,
+		std::memory_order_acq_rel);
+	if (previous <= 0) {
+		ActiveJobs.store(0, std::memory_order_release);
+		return;
+	}
+	StartNextJob();
+}
+
+void StartNextJob() {
+	std::function<void()> next;
+	std::vector<std::function<void()>> rejections;
+	{
+		const auto lock = std::lock_guard(PendingJobsMutex);
+		PruneCancelledJobs(rejections);
+		if (!PendingJobs.empty() && ReserveJob()) {
+			next = std::move(PendingJobs.front().start);
+			PendingJobs.pop_front();
+		}
+	}
+	InvokePendingRejections(std::move(rejections));
+	if (!next) {
+		return;
+	}
+	try {
+		crl::on_main([next = std::move(next)]() mutable {
+			try {
+				next();
+			} catch (...) {
+				LOG(("SFSpeech queued job failed to start"));
+				FinishJob();
+			}
+		});
+	} catch (...) {
+		FinishJob();
+	}
+}
+
+[[nodiscard]] bool ScheduleJob(
+		std::function<void()> job,
+		std::function<bool()> cancelled,
+		std::function<void()> reject) {
+	auto reserved = false;
+	auto scheduled = false;
+	std::vector<std::function<void()>> rejections;
+	try {
+		{
+			const auto lock = std::lock_guard(PendingJobsMutex);
+			PruneCancelledJobs(rejections);
+			if (!ReserveJob()) {
+				if (PendingJobs.size() < kMaxQueuedJobs) {
+					PendingJobs.push_back({
+						.start = std::move(job),
+						.cancelled = std::move(cancelled),
+						.reject = std::move(reject),
+					});
+					scheduled = true;
+				}
+			} else {
+				reserved = true;
+				scheduled = true;
+			}
+		}
+		InvokePendingRejections(std::move(rejections));
+		if (!scheduled) {
+			if (reject) {
+				try {
+					reject();
+				} catch (...) {
+					LOG(("SFSpeech queued job rejection failed"));
+				}
+			}
+			return false;
+		}
+		if (!reserved) {
+			return true;
+		}
+		crl::on_main([job = std::move(job)]() mutable {
+			try {
+				job();
+			} catch (...) {
+				LOG(("SFSpeech job failed to start"));
+				FinishJob();
+			}
+		});
+		return true;
+	} catch (...) {
+		if (reserved) {
+			FinishJob();
+		}
+		if (!scheduled && reject) {
+			try {
+				reject();
+			} catch (...) {
+				LOG(("SFSpeech queued job rejection failed"));
+			}
+		}
+		return false;
+	}
+}
+
 API_AVAILABLE(macos(10.15))
 void RunRecognitionPass(
-			std::shared_ptr<SFSpeechRecognizer> recognizer,
-			std::shared_ptr<std::vector<float>> pcm,
-			std::function<void(QString)> complete) {
+		std::shared_ptr<SFSpeechRecognizer> recognizer,
+		std::shared_ptr<std::vector<float>> pcm,
+		std::function<void(QString)> complete,
+		std::function<bool()> cancelled) {
 	if (!recognizer || !pcm || pcm->empty()
 		|| pcm->size() > std::numeric_limits<AVAudioFrameCount>::max()) {
+		complete(QString());
+		return;
+	}
+	if (cancelled && cancelled()) {
 		complete(QString());
 		return;
 	}
@@ -130,12 +283,18 @@ void RunRecognitionPass(
 	}
 
 	std::shared_ptr<std::atomic_bool> passFinished;
+	struct PollState {
+		std::function<void()> callback;
+	};
+	std::shared_ptr<PollState> poll;
 	try {
 		passFinished = std::make_shared<std::atomic_bool>(false);
+		poll = std::make_shared<PollState>();
 	} catch (const std::bad_alloc &) {
 		complete(QString());
 		return;
 	}
+	const auto weakPoll = std::weak_ptr<PollState>(poll);
 	__block SFSpeechRecognitionTask *task = nil;
 	void (^finish)(QString) = ^(QString text) {
 		if (passFinished->exchange(true, std::memory_order_acq_rel)) {
@@ -152,7 +311,9 @@ void RunRecognitionPass(
 	task = [[recognizerObject recognitionTaskWithRequest:requestObject
 		resultHandler:^(SFSpeechRecognitionResult *result, NSError *error) {
 			try {
-				if (!recognizer || !request) {
+				if ((cancelled && cancelled())
+					|| !recognizer
+					|| !request) {
 					finish(QString());
 					return;
 				}
@@ -184,6 +345,31 @@ void RunRecognitionPass(
 
 	[requestObject appendAudioPCMBuffer:bufferObject];
 	[requestObject endAudio];
+	poll->callback = [weakPoll, passFinished, cancelled, finish] {
+		if (passFinished->load(std::memory_order_acquire)) {
+			return;
+		}
+		if (cancelled && cancelled()) {
+			finish(QString());
+			return;
+		}
+		const auto keepAlive = weakPoll.lock();
+		if (!keepAlive) {
+			return;
+		}
+		dispatch_after(
+			dispatch_time(
+				DISPATCH_TIME_NOW,
+				static_cast<int64_t>(kCancellationPollSeconds)
+					* NSEC_PER_SEC),
+			dispatch_get_main_queue(),
+			^{
+				if (!passFinished->load(std::memory_order_acquire)) {
+					keepAlive->callback();
+				}
+			});
+	};
+	poll->callback();
 	dispatch_after(
 		dispatch_time(
 			DISPATCH_TIME_NOW,
@@ -207,7 +393,8 @@ bool isAvailable() {
 void transcribeFile(
 		const QString &filePath,
 		const QString &language,
-		std::function<void(QString)> callback) {
+		std::function<void(QString)> callback,
+		std::function<bool()> externalCancelled) {
 	if (!isAvailable()) {
 		InvokeCallbackSafely(callback, QString());
 		return;
@@ -236,23 +423,29 @@ void transcribeFile(
 			if (completeOnce->exchange(true, std::memory_order_acq_rel)) {
 				return;
 			}
-			ActiveJobs.fetch_sub(1, std::memory_order_acq_rel);
+			FinishJob();
 			if (*sharedCallback) {
 				auto callback = std::move(*sharedCallback);
 				InvokeCallbackSafely(callback, std::move(text));
 			}
 		});
 	};
-
-	if (!ReserveJob()) {
-		crl::on_main([sharedCallback] {
+	const auto rejectBeforeStart = [completeOnce, sharedCallback] {
+		const auto deliver = [completeOnce, sharedCallback] {
+			if (completeOnce->exchange(true, std::memory_order_acq_rel)) {
+				return;
+			}
 			if (*sharedCallback) {
 				auto callback = std::move(*sharedCallback);
 				InvokeCallbackSafely(callback, QString());
 			}
-		});
-		return;
-	}
+		};
+		try {
+			crl::on_main(deliver);
+		} catch (...) {
+			deliver();
+		}
+	};
 
 	std::shared_ptr<QString> sharedPath;
 	std::shared_ptr<QString> sharedLanguage;
@@ -264,7 +457,6 @@ void transcribeFile(
 		cancelled = std::make_shared<std::atomic_bool>(false);
 		authorizationFinished = std::make_shared<std::atomic_bool>(false);
 	} catch (const std::bad_alloc &) {
-		ActiveJobs.fetch_sub(1, std::memory_order_acq_rel);
 		crl::on_main([sharedCallback] {
 			if (*sharedCallback) {
 				auto callback = std::move(*sharedCallback);
@@ -280,87 +472,109 @@ void transcribeFile(
 		}
 		complete(std::move(text));
 	};
-	dispatch_after(
-		dispatch_time(
-			DISPATCH_TIME_NOW,
-			static_cast<int64_t>(kAuthorizationTimeoutSeconds)
-				* NSEC_PER_SEC),
-		dispatch_get_main_queue(),
+	const auto start = [=] {
+		if (externalCancelled && externalCancelled()) {
+			finish(QString());
+			return;
+		}
+		dispatch_after(
+			dispatch_time(
+				DISPATCH_TIME_NOW,
+				static_cast<int64_t>(kAuthorizationTimeoutSeconds)
+					* NSEC_PER_SEC),
+			dispatch_get_main_queue(),
 		^{
 			if (!authorizationFinished->load(std::memory_order_acquire)) {
 				finish(QString());
 			}
 		});
-	if (@available(macOS 10.15, *)) {
-		[SFSpeechRecognizer requestAuthorization:^(
-				SFSpeechRecognizerAuthorizationStatus status) {
-			authorizationFinished->store(true, std::memory_order_release);
-			if (cancelled->load(std::memory_order_acquire)) {
-				return;
-			}
-			if (status != SFSpeechRecognizerAuthorizationStatusAuthorized) {
-				finish(QString());
-				return;
-			}
-			dispatch_async(
-				dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
-				^{
-				@autoreleasepool {
-					try {
-						if (cancelled->load(std::memory_order_acquire)) {
-							return;
-						}
-#if defined(HAVE_WHISPER)
-						auto pcm = Ayu::STT::WhisperService::decodeAudioToPcm(
-							*sharedPath);
-						if (pcm.empty()) {
-							finish(QString());
-							return;
-						}
-						std::shared_ptr<std::vector<float>> sharedPcm;
-						try {
-							sharedPcm = std::make_shared<std::vector<float>>(
-								std::move(pcm));
-						} catch (const std::bad_alloc &) {
-							finish(QString());
-							return;
-						}
-						if (cancelled->load(std::memory_order_acquire)) {
-							return;
-						}
-						NSString *localeId = nil;
-						if (sharedLanguage->isEmpty()
-							|| *sharedLanguage == u"auto"_q) {
-							localeId = [[NSLocale preferredLanguages] firstObject]
-								?: @"en-US";
-						} else {
-							localeId = sharedLanguage->toNSString();
-						}
-						const auto locale = MakeOwnedObject(
-							[[NSLocale alloc]
-								initWithLocaleIdentifier:localeId]);
-						const auto recognizer = MakeOwnedObject(
-							[[SFSpeechRecognizer alloc]
-								initWithLocale:locale.get()]);
-						if (!recognizer || ![recognizer.get() isAvailable]) {
-							finish(QString());
-							return;
-						}
-						RunRecognitionPass(
-							std::move(recognizer),
-							sharedPcm,
-							finish);
-#else
-						finish(QString());
-#endif
-					} catch (...) {
-						finish(QString());
-					}
+		if (@available(macOS 10.15, *)) {
+			[SFSpeechRecognizer requestAuthorization:^(
+					SFSpeechRecognizerAuthorizationStatus status) {
+				authorizationFinished->store(true, std::memory_order_release);
+				if (cancelled->load(std::memory_order_acquire)
+					|| (externalCancelled && externalCancelled())) {
+					finish(QString());
+					return;
 				}
-				});
-		}];
-	} else {
-		finish(QString());
+				if (status != SFSpeechRecognizerAuthorizationStatusAuthorized) {
+					finish(QString());
+					return;
+				}
+				dispatch_async(
+					dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+					^{
+					@autoreleasepool {
+						try {
+							if (cancelled->load(std::memory_order_acquire)
+								|| (externalCancelled && externalCancelled())) {
+								finish(QString());
+								return;
+							}
+							auto pcm = Ayu::STT::decodeAudioToPcm(
+								*sharedPath);
+							if (pcm.empty()) {
+								finish(QString());
+								return;
+							}
+							std::shared_ptr<std::vector<float>> sharedPcm;
+							try {
+								sharedPcm = std::make_shared<std::vector<float>>(
+									std::move(pcm));
+							} catch (const std::bad_alloc &) {
+								finish(QString());
+								return;
+							}
+							if (cancelled->load(std::memory_order_acquire)
+								|| (externalCancelled && externalCancelled())) {
+								finish(QString());
+								return;
+							}
+							NSString *localeId = nil;
+							if (sharedLanguage->isEmpty()
+								|| *sharedLanguage == u"auto"_q) {
+								localeId = [[NSLocale preferredLanguages] firstObject]
+									?: @"en-US";
+							} else {
+								localeId = sharedLanguage->toNSString();
+							}
+							const auto locale = MakeOwnedObject(
+								[[NSLocale alloc]
+									initWithLocaleIdentifier:localeId]);
+							const auto recognizer = MakeOwnedObject(
+								[[SFSpeechRecognizer alloc]
+									initWithLocale:locale.get()]);
+							if (!recognizer || ![recognizer.get() isAvailable]) {
+								finish(QString());
+								return;
+							}
+							RunRecognitionPass(
+								std::move(recognizer),
+								sharedPcm,
+								finish,
+								externalCancelled);
+						} catch (...) {
+							finish(QString());
+						}
+					}
+					});
+			}];
+		} else {
+			finish(QString());
+		}
+	};
+	const auto isCancelled = [externalCancelled] {
+		if (!externalCancelled) {
+			return false;
+		}
+		try {
+			return externalCancelled();
+		} catch (...) {
+			return true;
+		}
+	};
+	if (!ScheduleJob(start, isCancelled, rejectBeforeStart)) {
+		return;
 	}
 }
 
