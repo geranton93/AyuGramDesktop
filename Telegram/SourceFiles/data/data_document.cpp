@@ -52,6 +52,7 @@ constexpr auto kDefaultCoverThumbnailSize = 100;
 constexpr auto kMaxAllowedPreloadPrefix = 6 * 1024 * 1024;
 constexpr auto kDefaultWebmEmojiSize = 100;
 constexpr auto kDefaultWebmStickerLargerSize = kStickerSideSize;
+constexpr auto kFileCopyChunkSize = 64 * 1024;
 
 const auto kLottieStickerDimensions = QSize(
 	kStickerSideSize,
@@ -1227,16 +1228,28 @@ void DocumentData::save(
 		Data::FileOrigin origin,
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud,
-		bool autoLoading) {
+		bool autoLoading,
+		std::unique_ptr<QFile> destination) {
 	Test::NotifyDocumentSave(this, toFile, autoLoading);
 	if (const auto media = activeMediaView(); media && media->loaded(true)) {
 		const auto &l = location(true);
 		if (!toFile.isEmpty()) {
 			if (!media->bytes().isEmpty()) {
-				QFile f(toFile);
-				if (f.open(QIODevice::WriteOnly)) {
-					f.write(media->bytes());
-					f.close();
+				if (destination) {
+					if (!destination->isOpen()
+						|| destination->write(media->bytes())
+							!= qint64(media->bytes().size())) {
+						destination->close();
+						destination->remove();
+						return;
+					}
+					destination->close();
+				} else {
+					QFile f(toFile);
+					if (f.open(QIODevice::WriteOnly)) {
+						f.write(media->bytes());
+						f.close();
+					}
 				}
 
 				setLocation(Core::FileLocation(toFile));
@@ -1246,10 +1259,41 @@ void DocumentData::save(
 			} else if (l.accessEnable()) {
 				const auto &alreadyName = l.name();
 				if (alreadyName != toFile) {
-					QFile(toFile).remove();
-					QFile(alreadyName).copy(toFile);
+					if (destination) {
+						QFile source(alreadyName);
+						if (!source.open(QIODevice::ReadOnly)) {
+							destination->close();
+							destination->remove();
+							return;
+						}
+						auto copied = true;
+						while (!source.atEnd()) {
+							const auto chunk = source.read(kFileCopyChunkSize);
+							if (chunk.isEmpty()) {
+								copied = false;
+								break;
+							}
+							if (destination->write(chunk)
+								!= qint64(chunk.size())) {
+								copied = false;
+								break;
+							}
+						}
+						if (!copied) {
+							destination->close();
+							destination->remove();
+							return;
+						}
+						destination->close();
+					} else {
+						QFile(toFile).remove();
+						QFile(alreadyName).copy(toFile);
+					}
 				}
 				l.accessDisable();
+			} else if (destination) {
+				destination->close();
+				destination->remove();
 			}
 		}
 		return;
@@ -1323,8 +1367,14 @@ void DocumentData::save(
 				autoLoading,
 				cacheTag());
 		}
-		handleLoaderUpdates();
 	}
+	if (destination) {
+		if (!_loader->setDestinationFile(std::move(destination))) {
+			cancel();
+			return;
+		}
+	}
+	handleLoaderUpdates();
 	if (loading()) {
 		_loader->start();
 	}

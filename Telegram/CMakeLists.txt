@@ -2501,6 +2501,7 @@ elseif (APPLE)
 
     target_link_frameworks(Telegram PRIVATE CoreBluetooth)
     target_link_frameworks_weak(Telegram PRIVATE UserNotifications)
+    target_link_frameworks_weak(Telegram PRIVATE Speech)
 
     set(icons_path ${CMAKE_CURRENT_SOURCE_DIR}/Telegram/Images.xcassets)
     if (CMAKE_GENERATOR STREQUAL Xcode)

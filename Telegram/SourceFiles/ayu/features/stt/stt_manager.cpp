@@ -127,7 +127,7 @@ bool STTManager::modelExists(const int modelType) {
 bool STTManager::localEngineAvailable() {
 #if defined(Q_OS_MAC) && defined(HAVE_WHISPER)
 	if (AyuSettings::getInstance().sttEngine() == STTEngine::AppleSpeech) {
-		return true;
+		return Mac::isAvailable();
 	}
 #endif
 #if defined(HAVE_WHISPER)

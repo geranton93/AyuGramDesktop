@@ -138,13 +138,13 @@ void FileLoader::finishWithBytes(const QByteArray &data) {
 	_data = OwningBytes(data);
 	_localStatus = LocalStatus::Loaded;
 	if (!_filename.isEmpty() && _toCache == LoadToCacheAsWell) {
-		if (!_fileIsOpen) _fileIsOpen = _file.open(QIODevice::WriteOnly);
+		if (!_fileIsOpen) _fileIsOpen = file().open(QIODevice::WriteOnly);
 		if (!_fileIsOpen) {
 			cancel(FailureReason::FileWriteFailure);
 			return;
 		}
-		_file.seek(0);
-		if (_file.write(_data) != qint64(_data.size())) {
+		file().seek(0);
+		if (file().write(_data) != qint64(_data.size())) {
 			cancel(FailureReason::FileWriteFailure);
 			return;
 		}
@@ -152,10 +152,10 @@ void FileLoader::finishWithBytes(const QByteArray &data) {
 
 	_finished = true;
 	if (_fileIsOpen) {
-		_file.close();
+		file().close();
 		_fileIsOpen = false;
 		Platform::File::PostprocessDownloaded(
-			QFileInfo(_file).absoluteFilePath());
+			QFileInfo(file()).absoluteFilePath());
 	}
 	const auto session = _session;
 	_updates.fire_done();
@@ -199,6 +199,30 @@ bool FileLoader::setFileName(const QString &fileName) {
 	_filename = fileName;
 	_file.setFileName(_filename);
 	return true;
+}
+
+bool FileLoader::setDestinationFile(std::unique_ptr<QFile> file) {
+	if (!file
+		|| !file->isOpen()
+		|| _fileIsOpen
+		|| !setFileName(file->fileName())) {
+		if (file) {
+			file->close();
+			file->remove();
+		}
+		return false;
+	}
+	_externalFile = std::move(file);
+	_fileIsOpen = true;
+	return true;
+}
+
+QFile &FileLoader::file() {
+	return _externalFile ? *_externalFile : _file;
+}
+
+const QFile &FileLoader::file() const {
+	return _externalFile ? *_externalFile : _file;
 }
 
 void FileLoader::permitLoadFromCloud() {
@@ -266,7 +290,7 @@ bool FileLoader::checkForOpen() {
 		|| _fileIsOpen) {
 		return true;
 	}
-	_fileIsOpen = _file.open(QIODevice::WriteOnly);
+	_fileIsOpen = file().open(QIODevice::WriteOnly);
 	if (_fileIsOpen) {
 		return true;
 	}
@@ -352,9 +376,9 @@ void FileLoader::cancel(FailureReason fail) {
 	_cancelled = true;
 	_finished = true;
 	if (_fileIsOpen) {
-		_file.close();
+		file().close();
 		_fileIsOpen = false;
-		_file.remove();
+		file().remove();
 	}
 	_data = QByteArray();
 
@@ -366,12 +390,12 @@ void FileLoader::cancel(FailureReason fail) {
 	}
 	if (weak) {
 		_filename = QString();
-		_file.setFileName(_filename);
+		file().setFileName(_filename);
 	}
 }
 
 int64 FileLoader::currentOffset() const {
-	return (_fileIsOpen ? _file.size() : _data.size()) - _skippedBytes;
+	return (_fileIsOpen ? file().size() : _data.size()) - _skippedBytes;
 }
 
 bool FileLoader::writeResultPart(int64 offset, bytes::const_span buffer) {
@@ -381,14 +405,14 @@ bool FileLoader::writeResultPart(int64 offset, bytes::const_span buffer) {
 		return true;
 	}
 	if (_fileIsOpen) {
-		auto fsize = _file.size();
+		auto fsize = file().size();
 		if (offset < fsize) {
 			_skippedBytes -= buffer.size();
 		} else if (offset > fsize) {
 			_skippedBytes += offset - fsize;
 		}
-		_file.seek(offset);
-		if (_file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size()) != qint64(buffer.size())) {
+		file().seek(offset);
+		if (file().write(reinterpret_cast<const char*>(buffer.data()), buffer.size()) != qint64(buffer.size())) {
 			cancel(FailureReason::FileWriteFailure);
 			return false;
 		}
@@ -418,18 +442,18 @@ QByteArray FileLoader::readLoadedPartBack(int64 offset, int size) {
 	Expects(offset >= 0 && size > 0);
 
 	if (_fileIsOpen) {
-		if (_file.openMode() == QIODevice::WriteOnly) {
-			_file.close();
-			_fileIsOpen = _file.open(QIODevice::ReadWrite);
+		if (file().openMode() == QIODevice::WriteOnly) {
+			file().close();
+			_fileIsOpen = file().open(QIODevice::ReadWrite);
 			if (!_fileIsOpen) {
 				cancel(FailureReason::FileWriteFailure);
 				return QByteArray();
 			}
 		}
-		if (!_file.seek(offset)) {
+		if (!file().seek(offset)) {
 			return QByteArray();
 		}
-		auto result = _file.read(size);
+		auto result = file().read(size);
 		return (result.size() == size) ? result : QByteArray();
 	}
 	return (offset + size <= _data.size())
@@ -442,10 +466,10 @@ bool FileLoader::finalizeResult() {
 
 	if (!_filename.isEmpty() && (_toCache == LoadToCacheAsWell)) {
 		if (!_fileIsOpen) {
-			_fileIsOpen = _file.open(QIODevice::WriteOnly);
+			_fileIsOpen = file().open(QIODevice::WriteOnly);
 		}
-		_file.seek(0);
-		if (!_fileIsOpen || _file.write(_data) != qint64(_data.size())) {
+		file().seek(0);
+		if (!_fileIsOpen || file().write(_data) != qint64(_data.size())) {
 			cancel(FailureReason::FileWriteFailure);
 			return false;
 		}
@@ -453,10 +477,10 @@ bool FileLoader::finalizeResult() {
 
 	_finished = true;
 	if (_fileIsOpen) {
-		_file.close();
+		file().close();
 		_fileIsOpen = false;
 		Platform::File::PostprocessDownloaded(
-			QFileInfo(_file).absoluteFilePath());
+			QFileInfo(file()).absoluteFilePath());
 	}
 	if (_localStatus == LocalStatus::NotFound) {
 		if (const auto key = fileLocationKey()) {

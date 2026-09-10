@@ -13,6 +13,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_cloud_file.h"
 #include "core/file_location.h"
 
+#include <QtCore/QFile>
+
+#include <memory>
+
 class HistoryItem;
 class PhotoData;
 enum class ChatRestriction;
@@ -145,7 +149,8 @@ public:
 		Data::FileOrigin origin,
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud = LoadFromCloudOrLocal,
-		bool autoLoading = false);
+		bool autoLoading = false,
+		std::unique_ptr<QFile> destination = nullptr);
 	void cancel();
 	[[nodiscard]] bool cancelled() const;
 	void resetCancelled();

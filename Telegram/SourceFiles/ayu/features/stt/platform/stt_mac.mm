@@ -36,6 +36,13 @@ constexpr auto kAuthorizationTimeoutSeconds = 30;
 constexpr auto kRecognitionTimeoutSeconds = 90;
 std::atomic<int> ActiveJobs = 0;
 
+template <typename T>
+[[nodiscard]] std::shared_ptr<T> MakeOwnedObject(T *object) {
+	return object
+		? std::shared_ptr<T>(object, [](T *value) { [value release]; })
+		: nullptr;
+}
+
 void InvokeCallbackSafely(
 		const std::function<void(QString)> &callback,
 		QString text) {
@@ -65,7 +72,7 @@ void InvokeCallbackSafely(
 
 API_AVAILABLE(macos(10.15))
 void RunRecognitionPass(
-			SFSpeechRecognizer *recognizer,
+			std::shared_ptr<SFSpeechRecognizer> recognizer,
 			std::shared_ptr<std::vector<float>> pcm,
 			std::function<void(QString)> complete) {
 	if (!recognizer || !pcm || pcm->empty()
@@ -73,8 +80,9 @@ void RunRecognitionPass(
 		complete(QString());
 		return;
 	}
+	auto *recognizerObject = recognizer.get();
 	if (@available(macOS 10.15, *)) {
-		if (!recognizer.supportsOnDeviceRecognition) {
+		if (![recognizerObject supportsOnDeviceRecognition]) {
 			complete(QString());
 			return;
 		}
@@ -83,40 +91,42 @@ void RunRecognitionPass(
 		return;
 	}
 
-	AVAudioFormat *format = [[AVAudioFormat alloc]
+	const auto format = MakeOwnedObject([[AVAudioFormat alloc]
 		initWithCommonFormat:AVAudioPCMFormatFloat32
 		sampleRate:kTargetSampleRate
 		channels:1
-		interleaved:NO];
+		interleaved:NO]);
 	if (!format) {
 		complete(QString());
 		return;
 	}
 
 	const auto frameCount = static_cast<AVAudioFrameCount>(pcm->size());
-	AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc]
-		initWithPCMFormat:format
-		frameCapacity:frameCount];
-	if (!buffer || !buffer.floatChannelData
-		|| !buffer.floatChannelData[0]) {
+	const auto buffer = MakeOwnedObject([[AVAudioPCMBuffer alloc]
+		initWithPCMFormat:format.get()
+		frameCapacity:frameCount]);
+	auto *bufferObject = buffer.get();
+	if (!bufferObject || !bufferObject.floatChannelData
+		|| !bufferObject.floatChannelData[0]) {
 		complete(QString());
 		return;
 	}
-	buffer.frameLength = frameCount;
+	bufferObject.frameLength = frameCount;
 	memcpy(
-		buffer.floatChannelData[0],
+		bufferObject.floatChannelData[0],
 		pcm->data(),
 		pcm->size() * sizeof(float));
 
-	SFSpeechAudioBufferRecognitionRequest *request =
-		[[SFSpeechAudioBufferRecognitionRequest alloc] init];
-	if (!request) {
+	const auto request = MakeOwnedObject(
+		[[SFSpeechAudioBufferRecognitionRequest alloc] init]);
+	auto *requestObject = request.get();
+	if (!requestObject) {
 		complete(QString());
 		return;
 	}
-	request.shouldReportPartialResults = NO;
+	requestObject.shouldReportPartialResults = NO;
 	if (@available(macOS 10.15, *)) {
-		request.requiresOnDeviceRecognition = YES;
+		requestObject.requiresOnDeviceRecognition = YES;
 	}
 
 	std::shared_ptr<std::atomic_bool> passFinished;
@@ -133,15 +143,16 @@ void RunRecognitionPass(
 		}
 		if (task) {
 			[task cancel];
+			[task release];
 			task = nil;
 		}
 		complete(std::move(text));
 	};
 
-	task = [recognizer recognitionTaskWithRequest:request
+	task = [[recognizerObject recognitionTaskWithRequest:requestObject
 		resultHandler:^(SFSpeechRecognitionResult *result, NSError *error) {
 			try {
-				if (!request) {
+				if (!recognizer || !request) {
 					finish(QString());
 					return;
 				}
@@ -164,14 +175,15 @@ void RunRecognitionPass(
 			} catch (...) {
 				finish(QString());
 			}
-		}];
+		}]
+		retain];
 	if (!task) {
 		finish(QString());
 		return;
 	}
 
-	[request appendAudioPCMBuffer:buffer];
-	[request endAudio];
+	[requestObject appendAudioPCMBuffer:bufferObject];
+	[requestObject endAudio];
 	dispatch_after(
 		dispatch_time(
 			DISPATCH_TIME_NOW,
@@ -185,10 +197,21 @@ void RunRecognitionPass(
 
 namespace Ayu::STT::Mac {
 
+bool isAvailable() {
+	if (@available(macOS 10.15, *)) {
+		return true;
+	}
+	return false;
+}
+
 void transcribeFile(
 		const QString &filePath,
 		const QString &language,
 		std::function<void(QString)> callback) {
+	if (!isAvailable()) {
+		InvokeCallbackSafely(callback, QString());
+		return;
+	}
 	std::shared_ptr<std::function<void(QString)>> sharedCallback;
 	try {
 		sharedCallback = std::make_shared<
@@ -282,50 +305,57 @@ void transcribeFile(
 			dispatch_async(
 				dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
 				^{
-				try {
-					if (cancelled->load(std::memory_order_acquire)) {
-						return;
-					}
-#if defined(HAVE_WHISPER)
-					auto pcm = Ayu::STT::WhisperService::decodeAudioToPcm(
-						*sharedPath);
-					if (pcm.empty()) {
-						finish(QString());
-						return;
-					}
-					std::shared_ptr<std::vector<float>> sharedPcm;
+				@autoreleasepool {
 					try {
-						sharedPcm = std::make_shared<std::vector<float>>(
-							std::move(pcm));
-					} catch (const std::bad_alloc &) {
-						finish(QString());
-						return;
-					}
-					if (cancelled->load(std::memory_order_acquire)) {
-						return;
-					}
-					NSString *localeId = nil;
-					if (sharedLanguage->isEmpty()
-						|| *sharedLanguage == u"auto"_q) {
-						localeId = [[NSLocale preferredLanguages] firstObject]
-							?: @"en-US";
-					} else {
-						localeId = sharedLanguage->toNSString();
-					}
-					auto *locale = [[NSLocale alloc]
-						initWithLocaleIdentifier:localeId];
-					auto *recognizer = [[SFSpeechRecognizer alloc]
-						initWithLocale:locale];
-					if (!recognizer || !recognizer.available) {
-						finish(QString());
-						return;
-					}
-					RunRecognitionPass(recognizer, sharedPcm, finish);
+						if (cancelled->load(std::memory_order_acquire)) {
+							return;
+						}
+#if defined(HAVE_WHISPER)
+						auto pcm = Ayu::STT::WhisperService::decodeAudioToPcm(
+							*sharedPath);
+						if (pcm.empty()) {
+							finish(QString());
+							return;
+						}
+						std::shared_ptr<std::vector<float>> sharedPcm;
+						try {
+							sharedPcm = std::make_shared<std::vector<float>>(
+								std::move(pcm));
+						} catch (const std::bad_alloc &) {
+							finish(QString());
+							return;
+						}
+						if (cancelled->load(std::memory_order_acquire)) {
+							return;
+						}
+						NSString *localeId = nil;
+						if (sharedLanguage->isEmpty()
+							|| *sharedLanguage == u"auto"_q) {
+							localeId = [[NSLocale preferredLanguages] firstObject]
+								?: @"en-US";
+						} else {
+							localeId = sharedLanguage->toNSString();
+						}
+						const auto locale = MakeOwnedObject(
+							[[NSLocale alloc]
+								initWithLocaleIdentifier:localeId]);
+						const auto recognizer = MakeOwnedObject(
+							[[SFSpeechRecognizer alloc]
+								initWithLocale:locale.get()]);
+						if (!recognizer || ![recognizer.get() isAvailable]) {
+							finish(QString());
+							return;
+						}
+						RunRecognitionPass(
+							std::move(recognizer),
+							sharedPcm,
+							finish);
 #else
-					finish(QString());
+						finish(QString());
 #endif
-				} catch (...) {
-					finish(QString());
+					} catch (...) {
+						finish(QString());
+					}
 				}
 				});
 		}];

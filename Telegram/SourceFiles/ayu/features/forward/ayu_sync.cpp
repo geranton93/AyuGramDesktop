@@ -31,6 +31,8 @@
 #include "mtproto/sender.h"
 #include "storage/localimageloader.h"
 
+#include <QtCore/QFile>
+
 #include <algorithm>
 #include <atomic>
 #include <memory>
@@ -43,6 +45,7 @@ namespace {
 
 constexpr auto kDocumentDownloadTimeout = std::chrono::minutes(15);
 constexpr auto kDownloadWaitStep = std::chrono::milliseconds(100);
+constexpr auto kMaxDocumentPathAttempts = 128;
 constexpr auto kMaxDocumentNameChars = int(AyuMapper::kMaxMediaPathBytes);
 
 [[nodiscard]] bool IsBoundedMediaSize(int64 size) {
@@ -134,7 +137,8 @@ using ActiveDocumentDownloads = base::flat_map<
 [[nodiscard]] bool FinishDocumentDownload(
 		DocumentDownloadKey key,
 		const std::shared_ptr<ActiveDocumentDownload> &state,
-		bool ready) {
+		bool ready,
+		bool removePath = true) {
 	auto path = QString();
 	{
 		const auto stateLock = std::lock_guard(state->mutex);
@@ -150,7 +154,7 @@ using ActiveDocumentDownloads = base::flat_map<
 			state->readyPath.clear();
 		}
 	}
-	if (!ready && !path.isEmpty()) {
+	if (!ready && removePath && !path.isEmpty()) {
 		QFile::remove(path);
 	}
 	{
@@ -165,11 +169,35 @@ using ActiveDocumentDownloads = base::flat_map<
 	return true;
 }
 
+[[nodiscard]] bool SameFilePath(const QString &left, const QString &right);
+
 void CancelDocumentDownload(
 		DocumentDownloadKey key,
-		const std::shared_ptr<ActiveDocumentDownload> &state) {
-	if (FinishDocumentDownload(key, state, false)) {
-		crl::on_main_sync([state] {
+		const std::shared_ptr<ActiveDocumentDownload> &state,
+		const base::weak_ptr<Main::Session> &weakSession) {
+	auto path = QString();
+	{
+		const auto stateLock = std::lock_guard(state->mutex);
+		path = state->path;
+	}
+	if (FinishDocumentDownload(key, state, false, false)) {
+		crl::on_main_sync([=] {
+			auto removePath = true;
+			if (const auto current = weakSession.get()) {
+				const auto document = current->data().document(key.documentId);
+				const auto loadingPath = document->loadingFilePath();
+				if (document->loading()
+					&& !loadingPath.isEmpty()
+					&& SameFilePath(path, loadingPath)) {
+					document->cancel();
+					removePath = false;
+				} else if (document->loading()) {
+					removePath = false;
+				}
+			}
+			if (removePath && !path.isEmpty()) {
+				QFile::remove(path);
+			}
 			state->lifetime.destroy();
 		});
 	}
@@ -516,7 +544,7 @@ QString loadDocumentSync(
 		return ReadyDocumentPath(registration.state, document.size);
 	}
 	const auto cleanup = gsl::finally([&] {
-		CancelDocumentDownload(key, registration.state);
+		CancelDocumentDownload(key, registration.state, weakSession);
 	});
 	auto path = LoadedDocumentPath(session, document.id);
 	if (FileHasExactSize(path, document.size)) {
@@ -531,7 +559,12 @@ QString loadDocumentSync(
 		}
 		return path;
 	}
-	while (true) {
+	const auto state = registration.state;
+	const auto weakState = std::weak_ptr<ActiveDocumentDownload>(state);
+	const auto documentId = document.id;
+	const auto expectedSize = document.size;
+	auto started = false;
+	for (auto attempt = 0; attempt != kMaxDocumentPathAttempts; ++attempt) {
 		if (!weakSession) {
 			return {};
 		}
@@ -542,71 +575,76 @@ QString loadDocumentSync(
 		if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
 			return {};
 		}
-		auto reservation = QFile(path);
-		if (reservation.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-			reservation.close();
+		if (cancelled && cancelled()) {
+			return {};
+		}
+		crl::on_main_sync([&] {
+			const auto current = weakSession.get();
+			if (!current) {
+				return;
+			}
+			auto destination = std::make_unique<QFile>(path);
+			if (!destination->open(QIODevice::ReadWrite | QIODevice::NewOnly)) {
+				return;
+			}
+			{
+				const auto stateLock = std::lock_guard(state->mutex);
+				state->path = path;
+			}
+			const auto data = current->data().document(documentId);
+			data->save(
+				origin,
+				path,
+				LoadFromCloudOrLocal,
+				false,
+				std::move(destination));
+			{
+				const auto stateLock = std::lock_guard(state->mutex);
+				state->allowSizeFallback = !data->loading();
+			}
+			if (!data->loading()) {
+				started = true;
+				CompleteDocumentDownload(current, key, expectedSize, state);
+				return;
+			}
+
+			current->data().documentLoadProgress()
+				| rpl::filter([=](not_null<DocumentData*> changed) {
+					return changed->id == key.documentId
+						&& !changed->loading();
+				})
+				| rpl::on_next([=](not_null<DocumentData*>) {
+					if (const auto current = weakSession.get()) {
+						if (const auto state = weakState.lock()) {
+							CompleteDocumentDownload(
+									current,
+									key,
+									expectedSize,
+									state);
+						}
+					}
+				}, state->lifetime);
+			started = true;
+		});
+		if (started) {
 			break;
 		}
 		if (!QFile::exists(path)) {
 			return {};
 		}
 	}
-	{
-		const auto stateLock = std::lock_guard(registration.state->mutex);
-		registration.state->path = path;
-	}
-	if (cancelled && cancelled()) {
+	if (!started) {
 		return {};
 	}
 
-	const auto state = registration.state;
-	const auto weakState = std::weak_ptr<ActiveDocumentDownload>(state);
-	const auto documentId = document.id;
-	const auto expectedSize = document.size;
-	crl::on_main_sync([=] {
-		const auto current = weakSession.get();
-		if (!current) {
-			if (FinishDocumentDownload(key, state, false)) {
-				state->lifetime.destroy();
-			}
-			return;
-		}
-		const auto data = current->data().document(documentId);
-		data->save(origin, path);
-		{
-			const auto stateLock = std::lock_guard(state->mutex);
-			state->allowSizeFallback = !data->loading();
-		}
-		if (!data->loading()) {
-			CompleteDocumentDownload(current, key, expectedSize, state);
-			return;
-		}
-
-		current->data().documentLoadProgress()
-			| rpl::filter([=](not_null<DocumentData*> changed) {
-				return changed->id == key.documentId
-					&& !changed->loading();
-			})
-			| rpl::on_next([=](not_null<DocumentData*>) {
-				if (const auto current = weakSession.get()) {
-					if (const auto state = weakState.lock()) {
-						CompleteDocumentDownload(
-								current,
-								key,
-								expectedSize,
-								state);
-						}
-					}
-				}, state->lifetime);
-	});
 	const auto waitResult = WaitForDownload(
-			registration.state->done,
+			state->done,
 			kDocumentDownloadTimeout,
 			cancelled);
 	if (waitResult != DownloadWaitResult::Completed) {
 		return {};
 	}
-	return ReadyDocumentPath(registration.state, document.size);
+	return ReadyDocumentPath(state, document.size);
 }
 
 void forwardMessagesSync(not_null<Main::Session*> session,
@@ -704,7 +742,17 @@ void loadPhotoSync(
 								  *lifetime);
 	});
 
-	(void)WaitForDownload(*latch, std::chrono::minutes(5), cancelled);
+	const auto waitResult = WaitForDownload(
+			*latch,
+			std::chrono::minutes(5),
+			cancelled);
+	if (waitResult != DownloadWaitResult::Completed) {
+		if (waitResult == DownloadWaitResult::TimedOut) {
+			LOG(("AyuSync: photo loading timed out."));
+		} else {
+			LOG(("AyuSync: photo loading cancelled."));
+		}
+	}
 	crl::on_main_sync([lifetime = base::take(lifetime)]
 	{
 		lifetime->destroy();
