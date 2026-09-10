@@ -17,7 +17,6 @@
 #include "features/translator/ayu_translator.h"
 #include "lang/lang_instance.h"
 #include "ui/chat/chat_style_radius.h"
-#include "ui/text/text.h"
 #include "utils/rc_manager.h"
 
 #ifdef Q_OS_WIN
@@ -38,9 +37,6 @@ void initUiSettings() {
 	AyuUiSettings::setMaterialSwitches(settings.materialSwitches());
 	AyuUiSettings::setAvatarCorners(settings.avatarCorners());
 	Ui::SetAppliedBubbleRadius(settings.messageBubbleRadius());
-	Ui::Text::RevealAllSpoilersCallback = [] {
-		return AyuSettings::getInstance().revealAllSpoilers();
-	};
 }
 
 void initDatabase() {

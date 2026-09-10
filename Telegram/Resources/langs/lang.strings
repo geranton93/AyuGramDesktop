@@ -9226,7 +9226,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_UpdateAyuGram" = "Update AyuGram";
 "ayu_UtilityRestartRequired" = "The app will close in 5 seconds.";
 "ayu_RevealAllSpoilers" = "Reveal All Spoilers";
-"ayu_RevealAllSpoilersDescription" = "Automatically reveal all image, video, and text spoilers.";
+"ayu_RevealAllSpoilersDescription" = "Automatically reveal all image and video spoilers.";
 "ayu_SttSectionTitle" = "Local Voice-to-Text";
 "ayu_SttEnabled" = "Enable local voice transcription";
 "ayu_SttSectionDescription" = "Transcribe voice messages on this device. Audio is decoded and processed locally and is not sent to Telegram for transcription.";
