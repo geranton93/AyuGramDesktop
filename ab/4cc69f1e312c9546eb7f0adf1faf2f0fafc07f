@@ -1,0 +1,115 @@
+Telegram/SourceFiles/ayu/ayu_settings.cpp
+  s_ef6173f274c1ad::t_8d35e08b2d27f2 1334
+  s_ef6173f274c1ad::t_478ade7bae507a 1536-1542
+  s_ef6173f274c1ad::t_0c393d075c96b1 1659-1666,1678-1684
+  s_ef6173f274c1ad::t_3f6c57868f63ef 71-80
+  s_ef6173f274c1ad::t_26474bfcdd338c 1669
+Telegram/SourceFiles/ayu/features/hidden_folders/hidden_folders.cpp
+  s_ef6173f274c1ad::t_8db9648449cc29 66-79
+  s_ef6173f274c1ad::t_6369b132dface1 17-18
+Telegram/CMakeLists.txt
+  s_ef6173f274c1ad::t_ca8341f48b8249 29-61
+Telegram/Resources/langs/lang.strings
+  s_ef6173f274c1ad::t_59ab4a710aa9ca 9171
+Telegram/SourceFiles/ayu/features/stt/whisper_service.cpp
+  s_ef6173f274c1ad::t_52a3649535b9a5 48,102,110,118,129-130,137-138,160
+Telegram/SourceFiles/data/data_histories.cpp
+  s_ef6173f274c1ad::t_1c654d817f33c6 924,927-932,938-940
+  s_ef6173f274c1ad::t_91d331e3ece471 934-937
+  s_ef6173f274c1ad::t_68e66e58ccc50e 37,52,986-987
+  s_ef6173f274c1ad::t_f07465df8f570a 50,879-880
+  s_ef6173f274c1ad::t_bcfe8dc78c1825 360,362,415-417,424
+  s_ef6173f274c1ad::t_c5c59c9f5efce4 418,422-423
+  s_ef6173f274c1ad::t_d19262e8069220 420-421
+  s_ef6173f274c1ad::t_e57d0722d17a0d 419
+  s_ef6173f274c1ad::t_60941b24d0ba6f 361,754,877-878,923,933
+  s_ef6173f274c1ad::t_1a8fa8ab8ff08a 755-757
+Telegram/SourceFiles/ayu/ui/boxes/delete_my_messages_box.cpp
+  s_ef6173f274c1ad::t_966811a3261f12 349-354
+Telegram/SourceFiles/ayu/features/stt/whisper_service.h
+  s_ef6173f274c1ad::t_52a3649535b9a5 48
+Telegram/SourceFiles/storage/file_download.cpp
+  s_ef6173f274c1ad::t_946425cbd826b5 209-210
+  s_ef6173f274c1ad::t_41b3dbd20ad642 140-141
+Telegram/SourceFiles/api/api_transcribes.cpp
+  s_ef6173f274c1ad::t_bef5f0f749cd59 40-43,237-240,242,250,252-253,256-259,264,268,270
+Telegram/SourceFiles/ayu/features/forward/ayu_forward_rich.cpp
+  s_ef6173f274c1ad::t_f202b72f2b42ce 651
+  s_ef6173f274c1ad::t_416dd6bd96c834 9,354,370,604-605,608
+Telegram/SourceFiles/ayu/features/stt/platform/stt_mac.mm
+  s_ef6173f274c1ad::t_0abb2bff5673c8 583-584
+  s_ef6173f274c1ad::t_e0e06f3cc4ad9d 43-49,85-188,195-218
+  s_ef6173f274c1ad::t_4db8b8e8ef8627 26
+  s_ef6173f274c1ad::t_b1a1b8c9432b49 189-193,436-440,445-451,478-488,494-510,512-560,562-563,567-582
+  s_ef6173f274c1ad::t_67611bf80d0933 289-292,295,300,317-319,351-375
+Telegram/SourceFiles/api/api_transcribes.h
+  s_ef6173f274c1ad::t_bef5f0f749cd59 10-12,34,37
+Telegram/SourceFiles/ayu/features/forward/ayu_sync.cpp
+  s_ef6173f274c1ad::t_5300316c1b892b 134-135,144-146,186-192
+  s_ef6173f274c1ad::t_416dd6bd96c834 12,815-818,821,910-913,916,1312-1315,1318
+  s_ef6173f274c1ad::t_e733ad8e176a02 80,118-122
+  s_ef6173f274c1ad::t_69a581296f7558 197
+  s_ef6173f274c1ad::t_876cf8826bc4c8 139,142,171-181,196,198-199,201,206-211,213,215,219-220
+  s_ef6173f274c1ad::t_d9bd89b1d720cc 926,1330
+  s_ef6173f274c1ad::t_450aab329b23b3 79,200,216
+  s_ef6173f274c1ad::t_4608234d129b39 575,615
+  s_ef6173f274c1ad::t_8711bd07020668 75,112-113,125,184,194-195,202-205,212,214,217-218,222-227,233,241-243,245,249-250,485,553,568
+Telegram/SourceFiles/ui/widgets/chat_filters_tabs_strip.cpp
+  s_ef6173f274c1ad::t_8db9648449cc29 170-174,199,429,439-442,446-453,486-497
+Telegram/SourceFiles/data/data_document.cpp
+  s_ef6173f274c1ad::t_3c70311ae8209e 1267,1286,1294
+  s_ef6173f274c1ad::t_d15749ad2c022b 1379-1381,1385-1386
+  s_ef6173f274c1ad::t_b29bef57339d69 1306,1375
+  s_ef6173f274c1ad::t_c63c4e94e6e07c 1295
+Telegram/SourceFiles/ayu/features/forward/ayu_forward.h
+  s_ef6173f274c1ad::t_3b3b7764b62ae4 70
+  s_ef6173f274c1ad::t_a6696e33898cff 14,34-38,43,59,69,71-77
+Telegram/SourceFiles/ayu/features/forward/ayu_forward.cpp
+  s_ef6173f274c1ad::t_3ff3eea6c13efe 103
+  s_ef6173f274c1ad::t_c1a562ab184e15 33,35,99-102,691-700,702-708,1019,1024-1025,1036-1037,1053-1054,1067,1186,1189,1196,1199
+  s_ef6173f274c1ad::t_6e2c3af43aafce 321
+  s_ef6173f274c1ad::t_83438010772b6b 701
+  s_ef6173f274c1ad::t_6a0bf7673c58d1 965-970,976-977,1068-1136
+  s_ef6173f274c1ad::t_1673774066647d 42
+  s_ef6173f274c1ad::t_04c9792708ade0 36
+  s_ef6173f274c1ad::t_ccb75b5ade7221 78,80-81,546
+  s_ef6173f274c1ad::t_5d56186e3f7b74 79
+  s_ef6173f274c1ad::t_d751b15c682b53 356,366-369
+  s_ef6173f274c1ad::t_886b4ec563a00b 293-297,320,322,336-342
+  s_ef6173f274c1ad::t_86c8b3815e6cca 15,38-39,115-120,124-125,128-132,272-292,300-319,323-335,343-353,355,357-365,370-372,375-409,411,415-416,422-423,425-480,483-491,494-510,513-516,519-523,525-544,547,550-553,555-556,558,561-563,565-566,568-571,573-612
+Telegram/SourceFiles/ayu/ui/boxes/remove_media_box.cpp
+  s_ef6173f274c1ad::t_ba2db9fab44a40 522-527
+  s_ef6173f274c1ad::t_b468200cb9efd6 533-535
+Telegram/SourceFiles/ayu/features/stt/stt_transcribe_provider.cpp
+  s_ef6173f274c1ad::t_48c87e19e1db38 202-204,206-215,217,219-220,289,291,293
+  s_ef6173f274c1ad::t_078664fa35aed8 194-201,221
+  s_ef6173f274c1ad::t_715e1412a6e1dc 216,290
+  s_ef6173f274c1ad::t_6b04257b33e151 287-288
+  s_ef6173f274c1ad::t_72861a67e100bd 144-145
+  s_ef6173f274c1ad::t_e260e1eee5c111 41-50,147,154-162,164,205,218,292,298
+  s_ef6173f274c1ad::t_132b819f4dd6ae 248-254
+Telegram/SourceFiles/window/window_filters_menu.cpp
+  s_ef6173f274c1ad::t_8db9648449cc29 408-413,417-418,433-441,451
+  s_ef6173f274c1ad::t_832fa0723ea343 442
+Telegram/SourceFiles/ayu/features/hidden_folders/hidden_folders.h
+  s_ef6173f274c1ad::t_8db9648449cc29 38-41
+Telegram/SourceFiles/data/data_histories.h
+  s_ef6173f274c1ad::t_6c95b9620e68bd 177
+  s_ef6173f274c1ad::t_fdd879b12efb64 178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ab4cc69f1e312c9546eb7f0adf1faf2f0fafc07f",
+  "prompts": {},
+  "sessions": {
+    "s_ef6173f274c1ad": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0865a-618f-7860-a7b5-0bb510244fe6",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": null
+    }
+  }
+}
