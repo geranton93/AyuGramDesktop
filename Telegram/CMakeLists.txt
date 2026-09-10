@@ -25,7 +25,9 @@ add_subdirectory(codegen)
 add_subdirectory(lib_icu)
 # AyuGram filters
 
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/whisper.cpp/CMakeLists.txt")
+set(ayu_whisper_dir "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/whisper.cpp")
+if (EXISTS "${ayu_whisper_dir}/CMakeLists.txt"
+    AND EXISTS "${ayu_whisper_dir}/include/whisper.h")
     block(SCOPE_FOR VARIABLES)
         set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
         set(CMAKE_POLICY_VERSION_MINIMUM 3.13)
@@ -42,6 +44,10 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/whisper.cpp/CMakeLists.txt")
         set(GGML_CCACHE OFF)
         set(GGML_NATIVE OFF)
         add_subdirectory(ThirdParty/whisper.cpp whisper_build)
+        if (NOT TARGET whisper)
+            message(FATAL_ERROR
+                "Whisper checkout did not provide the expected whisper target.")
+        endif()
         if (APPLE AND TARGET ggml-base)
             target_compile_options(ggml-base PRIVATE
                 $<$<COMPILE_LANGUAGE:CXX>:-include>
@@ -272,10 +278,14 @@ set(ayugram_files
         ayu/features/message_shot/message_shot_theme_state.h
         ayu/features/forward/ayu_forward.cpp
         ayu/features/forward/ayu_forward.h
+        ayu/features/forward/ayu_forward_source.cpp
+        ayu/features/forward/ayu_forward_source.h
         ayu/features/forward/ayu_forward_rich.cpp
         ayu/features/forward/ayu_forward_rich.h
         ayu/features/forward/ayu_sync.cpp
         ayu/features/forward/ayu_sync.h
+        ayu/features/forward/ayu_sync_download.cpp
+        ayu/features/forward/ayu_sync_wait.h
         ayu/features/translator/ayu_translator.cpp
         ayu/features/translator/ayu_translator.h
         ayu/features/translator/ayu_translate_provider.cpp
@@ -312,7 +322,7 @@ set(ayugram_files
         info/profile/info_profile_music_button.h
 )
 
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/whisper.cpp/CMakeLists.txt")
+if (TARGET whisper)
     nice_target_sources(Telegram ${src_loc}
     PRIVATE
         ayu/features/stt/whisper_service.cpp
