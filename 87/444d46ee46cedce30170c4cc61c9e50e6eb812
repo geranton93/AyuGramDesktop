@@ -1,0 +1,36 @@
+Telegram/SourceFiles/ayu/features/forward/ayu_forward.cpp
+  s_ef6173f274c1ad::t_d9688e6b17151c 8,628
+Telegram/CMakeLists.txt
+  s_ef6173f274c1ad::t_d9688e6b17151c 281-282
+  s_ef6173f274c1ad::t_f7a01a8300546d 287
+  s_ef6173f274c1ad::t_699ebc3690c698 28-30,47-50,325
+  s_ef6173f274c1ad::t_b6e71b6eeb5fc1 288
+Telegram/SourceFiles/ayu/features/forward/ayu_sync.cpp
+  s_ef6173f274c1ad::t_b6e71b6eeb5fc1 8
+Telegram/SourceFiles/ayu/features/forward/ayu_forward_source.h
+  s_ef6173f274c1ad::t_d9688e6b17151c 1-18
+Telegram/SourceFiles/ayu/features/forward/ayu_forward_source.cpp
+  s_ef6173f274c1ad::t_d9688e6b17151c 1-511
+Telegram/SourceFiles/ayu/features/forward/ayu_sync_wait.h
+  s_ef6173f274c1ad::t_b6e71b6eeb5fc1 1-44
+Telegram/SourceFiles/ayu/features/forward/ayu_sync_download.cpp
+  s_ef6173f274c1ad::t_6f3a3f8f083b05 11
+  s_ef6173f274c1ad::t_40bc6cfda46263 1-3,5-10,12-707
+  s_ef6173f274c1ad::t_b6e71b6eeb5fc1 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "87444d46ee46cedce30170c4cc61c9e50e6eb812",
+  "prompts": {},
+  "sessions": {
+    "s_ef6173f274c1ad": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0865a-618f-7860-a7b5-0bb510244fe6",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
