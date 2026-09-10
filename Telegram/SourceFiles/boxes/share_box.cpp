@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_premium.h"
 #include "base/call_delayed.h"
 #include "base/random.h"
+#include "base/weak_ptr.h"
 #include "lang/lang_keys.h"
 #include "base/qthelp_url.h"
 #include "storage/storage_account.h"
@@ -1866,27 +1867,73 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			}
 		};
 
-		if (AyuForward::isFullAyuForwardNeeded(items.front())) {
-			crl::async([=]{
-				for (const auto thread : result) {
+		if (AyuForward::isFullAyuForwardNeeded(items)) {
+			const auto sourceSession = base::make_weak(
+				&history->owner().session());
+			auto targetActions = std::vector<Api::SendAction>();
+			auto targetHistories = std::vector<base::weak_ptr<History>>();
+			targetActions.reserve(result.size());
+			targetHistories.reserve(result.size());
+			for (const auto thread : result) {
+				const auto targetHistory = thread->owningHistory();
+				targetActions.emplace_back(thread, options);
+				targetHistories.emplace_back(
+					base::make_weak(targetHistory));
+			}
+			crl::async([
+					sourceSession,
+					targetActions = std::move(targetActions),
+					targetHistories = std::move(targetHistories),
+					existingIds,
+					forwardOptions] {
+				const auto session = sourceSession.get();
+				if (!session) {
+					return;
+				}
+				for (auto i = 0; i != targetActions.size(); ++i) {
 					AyuForward::forwardMessages(
-					&history->owner().session(),
-					Api::SendAction(thread, options),
-					false,
-					Data::ResolvedForwardDraft(items, forwardOptions));
+						not_null<Main::Session*>(session),
+						targetActions[i],
+						false,
+						existingIds,
+						forwardOptions,
+						targetHistories[i]);
 				}
 			});
 
 			dismiss();
 			return;
 		} else if (AyuForward::isAyuForwardNeeded(items)) {
-			crl::async([=]
+			const auto sourceSession = base::make_weak(
+				&history->owner().session());
+			auto targetActions = std::vector<Api::SendAction>();
+			auto targetHistories = std::vector<base::weak_ptr<History>>();
+			targetActions.reserve(result.size());
+			targetHistories.reserve(result.size());
+			for (const auto thread : result) {
+				const auto targetHistory = thread->owningHistory();
+				targetActions.emplace_back(thread, options);
+				targetHistories.emplace_back(
+					base::make_weak(targetHistory));
+			}
+			crl::async([
+					sourceSession,
+					targetActions = std::move(targetActions),
+					targetHistories = std::move(targetHistories),
+					existingIds,
+					forwardOptions]
 			{
-				for (const auto thread : result) {
+				const auto session = sourceSession.get();
+				if (!session) {
+					return;
+				}
+				for (auto i = 0; i != targetActions.size(); ++i) {
 					AyuForward::intelligentForward(
-						&history->owner().session(),
-						Api::SendAction(thread, options),
-						Data::ResolvedForwardDraft(items, forwardOptions));
+						not_null<Main::Session*>(session),
+						targetActions[i],
+						existingIds,
+						forwardOptions,
+						targetHistories[i]);
 				}
 			});
 

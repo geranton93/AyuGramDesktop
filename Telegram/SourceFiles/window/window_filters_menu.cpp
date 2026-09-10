@@ -52,6 +52,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/hidden_folders/hidden_folders.h"
 
 
 namespace Window {
@@ -163,6 +164,10 @@ void FiltersMenu::setup() {
 		rpl::single(rpl::empty) | rpl::then(filters->changed()),
 		std::move(premium)
 	) | rpl::on_next([=] {
+		refresh();
+	}, _outer.lifetime());
+	AyuSettings::getInstance().hiddenFolderIdsChanges()
+	| rpl::on_next([=] {
 		refresh();
 	}, _outer.lifetime());
 
@@ -358,6 +363,10 @@ void FiltersMenu::refresh() {
 	const auto &settings = AyuSettings::getInstance();
 
 	const auto filters = &_session->session().data().chatsFilters();
+	const auto accountId = _session->session().userId().bare;
+	const auto visibleFilters = AyuFeatures::HiddenFolders::VisibleOnly(
+		accountId,
+		filters->list());
 	if (!filters->has() || _ignoreRefresh) {
 		return;
 	}
@@ -377,7 +386,7 @@ void FiltersMenu::refresh() {
 	}
 	_reorder->addPinnedInterval(
 		premiumFrom,
-		std::max(1, int(filters->list().size()) - maxLimit));
+		std::max(1, int(visibleFilters.size()) - maxLimit));
 
 	// Remember which folder holds keyboard focus so the roving Tab-stop can be
 	// re-established on its replacement after the rebuild: the new buttons are
@@ -393,7 +402,15 @@ void FiltersMenu::refresh() {
 
 	auto now = base::flat_map<int, base::unique_qptr<Ui::SideBarButton>>();
 	const auto &currentFilter = _session->activeChatsFilterCurrent();
-	for (const auto &filter : filters->list()) {
+	const auto firstVisibleId = !visibleFilters.empty()
+		? visibleFilters.front().id()
+		: FilterId();
+	if (AyuFeatures::HiddenFolders::IsHidden(
+			accountId,
+			currentFilter)) {
+		_session->setActiveChatsFilter(firstVisibleId);
+	}
+	for (const auto &filter : visibleFilters) {
 		const auto nextIsLocked = (now.size() >= premiumFrom);
 		if (nextIsLocked && (currentFilter == filter.id())) {
 			_session->setActiveChatsFilter(FilterId(0));
@@ -439,7 +456,7 @@ void FiltersMenu::refresh() {
 
 	if (settings.hideAllChatsFolder()
 		&& _session->widget()->sessionContent()) {
-		_session->setActiveChatsFilter(filters->lookupId(0));
+		_session->setActiveChatsFilter(firstVisibleId);
 	}
 
 	if (refocus) {
@@ -793,6 +810,10 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 			_session,
 			std::move(filteredChats),
 			addAction);
+		AyuFeatures::HiddenFolders::AddToggleAction(
+			addAction,
+			_session->session().userId().bare,
+			id);
 
 		addAction({
 			.text = tr::lng_filters_context_remove(tr::now),
@@ -840,24 +861,39 @@ void FiltersMenu::applyReorder(
 
 	const auto filters = &_session->session().data().chatsFilters();
 	const auto &list = filters->list();
-	if (!settings.hideAllChatsFolder() && !premium()) {
+	if (!settings.hideAllChatsFolder() && !premium() && !list.empty()) {
 		if (list[0].id() != FilterId()) {
 			filters->moveAllToFront();
 		}
 	}
-	Assert(oldPosition >= 0 && oldPosition < list.size());
-	Assert(newPosition >= 0 && newPosition < list.size());
-	const auto id = list[oldPosition].id();
+	const auto accountId = _session->session().userId().bare;
+	const auto visibleFilters = AyuFeatures::HiddenFolders::VisibleOnly(
+		accountId,
+		filters->list());
+	if (oldPosition < 0
+		|| newPosition < 0
+		|| oldPosition >= int(visibleFilters.size())
+		|| newPosition >= int(visibleFilters.size())) {
+		return;
+	}
+	const auto id = visibleFilters[oldPosition].id();
 	const auto i = _filters.find(id);
-	Assert(i != end(_filters));
-	Assert(i->second == widget);
+	if (i == end(_filters) || i->second != widget) {
+		return;
+	}
 
 	auto order = ranges::views::all(
-		list
+		filters->list()
 	) | ranges::views::transform(
 		&Data::ChatFilter::id
 	) | ranges::to_vector;
-	base::reorder(order, oldPosition, newPosition);
+	order = AyuFeatures::HiddenFolders::ReorderVisible(
+		std::move(order),
+		oldPosition,
+		newPosition,
+		[=](FilterId filterId) {
+			return AyuFeatures::HiddenFolders::IsHidden(accountId, filterId);
+		});
 
 	_ignoreRefresh = true;
 	filters->saveOrder(order);

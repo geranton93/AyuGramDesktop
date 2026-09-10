@@ -70,6 +70,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QApplication>
 
 // AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ayu/features/stt/stt_manager.h"
 #include "ayu/features/message_shot/message_shot.h"
 
 
@@ -611,7 +613,10 @@ float64 Gif::revealedProgress() const {
 		&& item->media()->ttlSeconds()
 		&& !inTTLViewer)
 		? 0.
-		: (!isRound && _spoiler)
+		: (!isRound
+			&& _spoiler
+			&& (!AyuSettings::getInstance().revealAllSpoilers()
+				|| _sensitiveSpoiler))
 		? _spoiler->revealAnimation.value(_spoiler->revealed ? 1. : 0.)
 		: 1.;
 }
@@ -1526,7 +1531,10 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	}
 	if (QRect(usex + paintx, painty, usew, painth).contains(point)) {
 		ensureDataMediaCreated();
-		if (_spoiler && !_spoiler->revealed) {
+		if (_spoiler
+			&& !_spoiler->revealed
+			&& (!AyuSettings::getInstance().revealAllSpoilers()
+				|| _sensitiveSpoiler)) {
 			const auto media = _parent->data()->media();
 			result.link = _sensitiveSpoiler
 				? spoilerTagLink()
@@ -1999,7 +2007,10 @@ TextState Gif::getStateGrouped(
 	}
 	ensureDataMediaCreated();
 
-	auto link = (_spoiler && !_spoiler->revealed)
+	auto link = (_spoiler
+		&& !_spoiler->revealed
+		&& (!AyuSettings::getInstance().revealAllSpoilers()
+			|| _sensitiveSpoiler))
 		? (_sensitiveSpoiler ? spoilerTagLink() : _spoiler->link)
 		: currentVideoLink(fullFeatured);
 	return TextState(_parent, std::move(link));
@@ -2731,9 +2742,11 @@ void Gif::ensureTranscribeButton() const {
 	if (_data->isVideoMessage()
 		&& (!media || !media->ttlSeconds())
 		&& !_parent->data()->isScheduled()
-		&& !_parent->data()->isAdminLogEntry()
-		&& (_data->session().premium()
-			|| _data->session().api().transcribes().trialsSupport())) {
+			&& !_parent->data()->isAdminLogEntry()
+			&& (_data->session().premium()
+				|| (AyuSettings::getInstance().sttEnabled()
+					&& Ayu::STT::STTManager::localEngineAvailable())
+				|| _data->session().api().transcribes().trialsSupport())) {
 		if (!_transcribe) {
 			_transcribe = std::make_unique<TranscribeButton>(
 				_realParent,

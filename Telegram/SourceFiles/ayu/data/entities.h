@@ -44,6 +44,8 @@ public:
 	std::string mediaPath;
 	std::string hqThumbPath;
 	int documentType;
+	int mediaDc = 0;
+	ID mediaSize = 0;
 	std::vector<char> documentSerialized;
 	std::vector<char> thumbsSerialized;
 	std::vector<char> documentAttributesSerialized;

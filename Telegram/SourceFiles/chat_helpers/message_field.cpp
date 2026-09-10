@@ -1426,7 +1426,7 @@ std::unique_ptr<Ui::AbstractButton> AyuForwardWriteRestriction(
 	using namespace Ui;
 
 	// status and part
-	const auto pair = AyuForward::stateName(peer);
+	const auto pair = AyuForward::stateName(session, peer);
 
 	auto result = std::make_unique<FlatButton>(
 		parent,

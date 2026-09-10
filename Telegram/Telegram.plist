@@ -191,6 +191,8 @@
 	<string>We need access to your location so that you can send your current locations.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>We need access to Bluetooth so that you can sign in with a passkey from your phone over a QR code.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>We need access to speech recognition to transcribe voice messages on this device.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

@@ -17,6 +17,7 @@
 #include "features/translator/ayu_translator.h"
 #include "lang/lang_instance.h"
 #include "ui/chat/chat_style_radius.h"
+#include "ui/text/text.h"
 #include "utils/rc_manager.h"
 
 #ifdef Q_OS_WIN
@@ -26,14 +27,7 @@
 namespace AyuInfra {
 
 void initLang() {
-	QString id = Lang::GetInstance().id();
-	QString baseId = Lang::GetInstance().baseId();
-	if (id.isEmpty()) {
-		LOG(("Language is not loaded"));
-		return;
-	}
 	AyuLanguage::init();
-	AyuLanguage::currentInstance()->fetchLanguage(id, baseId);
 }
 
 void initUiSettings() {
@@ -44,6 +38,9 @@ void initUiSettings() {
 	AyuUiSettings::setMaterialSwitches(settings.materialSwitches());
 	AyuUiSettings::setAvatarCorners(settings.avatarCorners());
 	Ui::SetAppliedBubbleRadius(settings.messageBubbleRadius());
+	Ui::Text::RevealAllSpoilersCallback = [] {
+		return AyuSettings::getInstance().revealAllSpoilers();
+	};
 }
 
 void initDatabase() {

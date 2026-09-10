@@ -9,8 +9,10 @@
 #include "api/api_common.h"
 #include "api/api_sending.h"
 #include "apiwrap.h"
+#include "ayu/utils/ayu_mapper.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/base_file_utilities.h"
+#include "base/weak_ptr.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
@@ -26,10 +28,14 @@
 #include "history/history_item_helpers.h"
 #include "iv/iv_rich_page.h"
 #include "main/main_session.h"
+#include "mtproto/sender.h"
 #include "storage/localimageloader.h"
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <utility>
 
 namespace AyuSync {
@@ -37,6 +43,34 @@ namespace {
 
 constexpr auto kDocumentDownloadTimeout = std::chrono::minutes(15);
 constexpr auto kDownloadWaitStep = std::chrono::milliseconds(100);
+constexpr auto kMaxDocumentNameChars = int(AyuMapper::kMaxMediaPathBytes);
+
+[[nodiscard]] bool IsBoundedMediaSize(int64 size) {
+	return size >= 0 && size <= AyuMapper::kMaxMediaFileSize;
+}
+
+[[nodiscard]] bool IsBoundedDocumentName(const QString &name) {
+	if (name.size() > kMaxDocumentNameChars) {
+		return false;
+	}
+	return name.toUtf8().size()
+		<= static_cast<int>(AyuMapper::kMaxMediaPathBytes);
+}
+
+[[nodiscard]] std::optional<PeerId> ResolveTargetPeerId(
+		not_null<Main::Session*> session,
+		const base::weak_ptr<History> &targetHistory) {
+	auto result = std::optional<PeerId>();
+	const auto weakSession = base::make_weak(session);
+	crl::on_main_sync([&] {
+		const auto current = weakSession.get();
+		const auto history = targetHistory.get();
+		if (current && history && &history->session() == current) {
+			result = history->peer->id;
+		}
+	});
+	return result;
+}
 
 enum class DownloadWaitResult {
 	Completed,
@@ -49,8 +83,19 @@ struct ActiveDocumentDownload {
 	QString readyPath;
 	TimedCountDownLatch done{ 1 };
 	rpl::lifetime lifetime;
+	std::mutex mutex;
 	int consumers = 1;
 	bool allowSizeFallback = false;
+	bool finished = false;
+};
+
+struct DocumentDownloadKey {
+	uint64 sessionUniqueId = 0;
+	DocumentId documentId = 0;
+
+	friend inline auto operator<=>(
+		DocumentDownloadKey,
+		DocumentDownloadKey) = default;
 };
 
 struct DocumentDownloadRegistration {
@@ -59,7 +104,7 @@ struct DocumentDownloadRegistration {
 };
 
 using ActiveDocumentDownloads = base::flat_map<
-	DocumentData*,
+	DocumentDownloadKey,
 	std::shared_ptr<ActiveDocumentDownload>>;
 
 [[nodiscard]] std::mutex &DocumentDownloadsMutex() {
@@ -73,35 +118,65 @@ using ActiveDocumentDownloads = base::flat_map<
 }
 
 [[nodiscard]] DocumentDownloadRegistration RegisterDocumentDownload(
-		not_null<DocumentData*> document) {
+		DocumentDownloadKey key) {
 	const auto lock = std::lock_guard(DocumentDownloadsMutex());
 	auto &active = DocumentDownloads();
-	const auto i = active.find(document);
+	const auto i = active.find(key);
 	if (i != active.end()) {
 		++i->second->consumers;
 		return { i->second, false };
 	}
 	auto state = std::make_shared<ActiveDocumentDownload>();
-	active.emplace(document, state);
+	active.emplace(key, state);
 	return { std::move(state), true };
 }
 
-void FinishDocumentDownload(
-		DocumentData *document,
-		const std::shared_ptr<ActiveDocumentDownload> &state) {
+[[nodiscard]] bool FinishDocumentDownload(
+		DocumentDownloadKey key,
+		const std::shared_ptr<ActiveDocumentDownload> &state,
+		bool ready) {
+	auto path = QString();
+	{
+		const auto stateLock = std::lock_guard(state->mutex);
+		if (state->finished) {
+			return false;
+		}
+		state->finished = true;
+		path = state->path;
+		state->path.clear();
+		if (ready) {
+			state->readyPath = path;
+		} else {
+			state->readyPath.clear();
+		}
+	}
+	if (!ready && !path.isEmpty()) {
+		QFile::remove(path);
+	}
 	{
 		const auto lock = std::lock_guard(DocumentDownloadsMutex());
 		auto &active = DocumentDownloads();
-		const auto i = active.find(document);
+		const auto i = active.find(key);
 		if (i != active.end() && i->second == state) {
 			active.erase(i);
 		}
 	}
 	state->done.countDown();
+	return true;
+}
+
+void CancelDocumentDownload(
+		DocumentDownloadKey key,
+		const std::shared_ptr<ActiveDocumentDownload> &state) {
+	if (FinishDocumentDownload(key, state, false)) {
+		crl::on_main_sync([state] {
+			state->lifetime.destroy();
+		});
+	}
 }
 
 void ReleaseDocumentDownloadConsumer(
-		DocumentData *document,
+		DocumentDownloadKey key,
 		const std::shared_ptr<ActiveDocumentDownload> &state) {
 	auto released = false;
 	{
@@ -110,7 +185,7 @@ void ReleaseDocumentDownloadConsumer(
 		--state->consumers;
 		if (state->consumers == 0) {
 			auto &active = DocumentDownloads();
-			const auto i = active.find(document);
+			const auto i = active.find(key);
 			if (i != active.end() && i->second == state) {
 				active.erase(i);
 				released = true;
@@ -167,50 +242,70 @@ void ReleaseDocumentDownloadConsumer(
 
 [[nodiscard]] bool FileHasExactSize(const QString &path, int64 expectedSize) {
 	const auto info = QFileInfo(path);
-	return !path.isEmpty()
+	return IsBoundedMediaSize(expectedSize)
+		&& !path.isEmpty()
 		&& info.isFile()
 		&& info.size() == expectedSize;
 }
 
-[[nodiscard]] QString LoadedDocumentPath(not_null<DocumentData*> document) {
+[[nodiscard]] QString ReadyDocumentPath(
+		const std::shared_ptr<ActiveDocumentDownload> &state,
+		int64 expectedSize) {
+	auto path = QString();
+	{
+		const auto stateLock = std::lock_guard(state->mutex);
+		path = state->readyPath;
+	}
+	return FileHasExactSize(path, expectedSize) ? path : QString();
+}
+
+[[nodiscard]] QString LoadedDocumentPath(
+	not_null<Main::Session*> session,
+	DocumentId documentId) {
 	auto result = QString();
+	const auto weakSession = base::make_weak(session);
 	crl::on_main_sync([&] {
-		result = document->filepath(true);
+		if (const auto current = weakSession.get()) {
+			result = current->data().document(documentId)->filepath(true);
+		}
 	});
 	return result;
 }
 
 [[nodiscard]] bool DocumentReady(
-		not_null<DocumentData*> document,
-		const QString &path) {
+	not_null<DocumentData*> document,
+	const QString &path,
+	int64 expectedSize) {
 	const auto loaded = document->filepath(true);
 	return !path.isEmpty()
 		&& !loaded.isEmpty()
 		&& SameFilePath(path, loaded)
-		&& FileHasExactSize(path, document->size);
+		&& FileHasExactSize(path, expectedSize);
 }
 
 void CompleteDocumentDownload(
-		not_null<DocumentData*> document,
-		const std::shared_ptr<ActiveDocumentDownload> &state) {
+	not_null<Main::Session*> session,
+	DocumentDownloadKey key,
+	int64 expectedSize,
+	const std::shared_ptr<ActiveDocumentDownload> &state) {
+	const auto document = session->data().document(key.documentId);
 	if (document->loading()) {
 		return;
 	}
-	const auto released = state->done.await(std::chrono::milliseconds(0));
-	const auto ready = state->allowSizeFallback
-		? FileHasExactSize(state->path, document->size)
+	auto path = QString();
+	auto allowSizeFallback = false;
+	{
+		const auto stateLock = std::lock_guard(state->mutex);
+		path = state->path;
+		allowSizeFallback = state->allowSizeFallback;
+	}
+	const auto ready = allowSizeFallback
+		? FileHasExactSize(path, expectedSize)
 		: (document->status != FileDownloadFailed
 			&& !document->cancelled()
-			&& DocumentReady(document, state->path));
-	if (!ready) {
-		QFile::remove(state->path);
-		state->path.clear();
-	} else if (!released) {
-		state->readyPath = state->path;
-	}
-	state->lifetime.destroy();
-	if (!released) {
-		FinishDocumentDownload(document, state);
+			&& DocumentReady(document, path, expectedSize));
+	if (FinishDocumentDownload(key, state, ready)) {
+		state->lifetime.destroy();
 	}
 }
 
@@ -227,7 +322,8 @@ void CompleteDocumentDownload(
 
 [[nodiscard]] QString DocumentFileName(not_null<DocumentData*> document) {
 	if (!document->filename().isEmpty()) {
-		return base::FileNameFromUserString(document->filename());
+		const auto result = base::FileNameFromUserString(document->filename());
+		return IsBoundedDocumentName(result) ? result : QString();
 	}
 	if (document->isVoiceMessage()) {
 		return GeneratedDocumentName(document, u"audio_"_q, u".ogg"_q);
@@ -245,14 +341,24 @@ void CompleteDocumentDownload(
 }
 
 [[nodiscard]] QString NextDocumentPath(
-		not_null<Main::Session*> session,
-		not_null<DocumentData*> document) {
-	const auto directory = pathForSave(session);
-	const auto filename = DocumentFileName(document);
-	if (directory.isEmpty() || filename.isEmpty()) {
-		return {};
-	}
-	return filedialogNextFilename(filename, QString(), directory);
+	not_null<Main::Session*> session,
+	DocumentId documentId) {
+	auto result = QString();
+	const auto weakSession = base::make_weak(session);
+	crl::on_main_sync([&] {
+		if (const auto current = weakSession.get()) {
+			const auto document = current->data().document(documentId);
+			const auto directory = pathForSave(current);
+			const auto filename = DocumentFileName(document);
+			if (!directory.isEmpty() && !filename.isEmpty()) {
+				result = filedialogNextFilename(
+					filename,
+					QString(),
+					directory);
+			}
+		}
+	});
+	return result;
 }
 
 } // namespace
@@ -292,34 +398,79 @@ qint64 fileSize(const QString &path) {
 	return file.exists() ? file.size() : 0;
 }
 
+bool isValidPhotoSnapshot(const PhotoSnapshot &photo) {
+	return photo.id
+		&& IsBoundedMediaSize(photo.size);
+}
+
+bool isValidDocumentSnapshot(const DocumentSnapshot &document) {
+	return document.id
+		&& IsBoundedMediaSize(document.size)
+		&& IsBoundedDocumentName(document.name);
+}
+
+PhotoSnapshot snapshotPhoto(
+	not_null<Main::Session*> session,
+	not_null<PhotoData*> photo) {
+	return PhotoSnapshot{
+		.id = photo->id,
+		.dc = photo->getDC(),
+		.size = photo->imageByteSize(Data::PhotoSize::Large),
+		.path = filePath(session, photo),
+	};
+}
+
+DocumentSnapshot snapshotDocument(not_null<DocumentData*> document) {
+	return DocumentSnapshot{
+		.id = document->id,
+		.size = document->size,
+		.name = DocumentFileName(document),
+		.duration = document->duration(),
+		.sticker = document->sticker() != nullptr,
+		.voice = document->isVoiceMessage(),
+		.round = document->isVideoMessage(),
+		.playable = document->isVideoFile()
+			|| document->isGifv()
+			|| document->isSong()
+			|| document->isAudioFile()
+			|| document->isVoiceMessage(),
+	};
+}
+
 DocumentPaths loadDocuments(
 		not_null<Main::Session*> session,
-		const std::vector<not_null<HistoryItem*>> &items,
+		const std::vector<DownloadItem> &items,
 		const Fn<bool()> &cancelled) {
 	auto result = DocumentPaths();
+	const auto weakSession = base::make_weak(session);
 	for (const auto &item : items) {
-		if (cancelled && cancelled()) {
+		if (!weakSession || (cancelled && cancelled())) {
 			break;
 		}
-		if (const auto data = item->media()->document()) {
-			const auto path = loadDocumentSync(
-				session,
-				data,
-				item->fullId(),
-				cancelled);
-			if (!path.isEmpty()) {
-				result.emplace(data, path);
+		if (const auto document = item.document) {
+			if (isValidDocumentSnapshot(*document)) {
+				const auto path = loadDocumentSync(
+					session,
+					*document,
+					item.fullId,
+					cancelled);
+				if (!path.isEmpty()) {
+					result.emplace(document->id, path);
+				}
 			}
-		} else if (auto photo = item->media()->photo()) {
-			if (fileSize(filePath(session, photo))
-					== photo->imageByteSize(Data::PhotoSize::Large)) {
+		} else if (const auto photo = item.photo) {
+			if (!isValidPhotoSnapshot(*photo)) {
+				continue;
+			}
+			const auto info = QFileInfo(photo->path);
+			if (info.isFile() && info.size() == photo->size) {
 				continue;
 			}
 
 			loadPhotoSync(
 				session,
-				photo,
-				item->fullId(),
+				*photo,
+				item.fullId,
 				cancelled);
 		}
 	}
@@ -327,20 +478,32 @@ DocumentPaths loadDocuments(
 }
 
 QString loadDocumentSync(
-		not_null<Main::Session*> session,
-		not_null<DocumentData*> data,
+	not_null<Main::Session*> session,
+		const DocumentSnapshot &document,
 		Data::FileOrigin origin,
 		const Fn<bool()> &cancelled) {
-	// const auto application = QCoreApplication::instance();
-	// Expects(QThread::currentThread() != application->thread());
-
-	if (cancelled && cancelled()) {
+	const auto weakSession = base::make_weak(session);
+	if (!weakSession
+		|| !isValidDocumentSnapshot(document)
+		|| (cancelled && cancelled())) {
 		return {};
 	}
-	const auto expectedSize = data->size;
-	const auto registration = RegisterDocumentDownload(data);
+	auto sessionUniqueId = uint64(0);
+	crl::on_main_sync([&] {
+		if (const auto current = weakSession.get()) {
+			sessionUniqueId = current->uniqueId();
+		}
+	});
+	if (!sessionUniqueId) {
+		return {};
+	}
+	const auto key = DocumentDownloadKey{
+		.sessionUniqueId = sessionUniqueId,
+		.documentId = document.id,
+	};
+	const auto registration = RegisterDocumentDownload(key);
 	const auto releaseConsumer = gsl::finally([&] {
-		ReleaseDocumentDownloadConsumer(data, registration.state);
+		ReleaseDocumentDownloadConsumer(key, registration.state);
 	});
 	if (!registration.owner) {
 		const auto waitResult = WaitForDownload(
@@ -350,31 +513,29 @@ QString loadDocumentSync(
 		if (waitResult != DownloadWaitResult::Completed) {
 			return {};
 		}
-		const auto path = registration.state->readyPath;
-		return FileHasExactSize(path, expectedSize) ? path : QString();
+		return ReadyDocumentPath(registration.state, document.size);
 	}
-	auto registrationActive = true;
-	auto reserved = false;
 	const auto cleanup = gsl::finally([&] {
-		if (!registrationActive) {
-			return;
-		}
-		if (reserved) {
-			QFile::remove(registration.state->path);
-		}
-		registration.state->path.clear();
-		FinishDocumentDownload(data, registration.state);
+		CancelDocumentDownload(key, registration.state);
 	});
-	auto path = LoadedDocumentPath(data);
-	if (FileHasExactSize(path, expectedSize)) {
-		registration.state->path = path;
-		registration.state->readyPath = path;
-		registrationActive = false;
-		FinishDocumentDownload(data, registration.state);
+	auto path = LoadedDocumentPath(session, document.id);
+	if (FileHasExactSize(path, document.size)) {
+		{
+			const auto stateLock = std::lock_guard(registration.state->mutex);
+			registration.state->path = path;
+		}
+		if (FinishDocumentDownload(key, registration.state, true)) {
+			crl::on_main_sync([state = registration.state] {
+				state->lifetime.destroy();
+			});
+		}
 		return path;
 	}
 	while (true) {
-		path = NextDocumentPath(session, data);
+		if (!weakSession) {
+			return {};
+		}
+		path = NextDocumentPath(session, document.id);
 		if (path.isEmpty()) {
 			return {};
 		}
@@ -384,37 +545,60 @@ QString loadDocumentSync(
 		auto reservation = QFile(path);
 		if (reservation.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
 			reservation.close();
-			reserved = true;
 			break;
 		}
 		if (!QFile::exists(path)) {
 			return {};
 		}
 	}
-	registration.state->path = path;
+	{
+		const auto stateLock = std::lock_guard(registration.state->mutex);
+		registration.state->path = path;
+	}
 	if (cancelled && cancelled()) {
 		return {};
 	}
 
 	const auto state = registration.state;
-	const auto documentId = data->id;
+	const auto weakState = std::weak_ptr<ActiveDocumentDownload>(state);
+	const auto documentId = document.id;
+	const auto expectedSize = document.size;
 	crl::on_main_sync([=] {
+		const auto current = weakSession.get();
+		if (!current) {
+			if (FinishDocumentDownload(key, state, false)) {
+				state->lifetime.destroy();
+			}
+			return;
+		}
+		const auto data = current->data().document(documentId);
 		data->save(origin, path);
-		state->allowSizeFallback = !data->loading();
+		{
+			const auto stateLock = std::lock_guard(state->mutex);
+			state->allowSizeFallback = !data->loading();
+		}
 		if (!data->loading()) {
-			CompleteDocumentDownload(data, state);
+			CompleteDocumentDownload(current, key, expectedSize, state);
 			return;
 		}
 
-		session->data().documentLoadProgress(
-		) | rpl::filter([=](not_null<DocumentData*> changed) {
-			return changed->id == documentId
-				&& !changed->loading();
-		}) | rpl::on_next([=](not_null<DocumentData*> changed) {
-			CompleteDocumentDownload(changed, state);
-		}, state->lifetime);
+		current->data().documentLoadProgress()
+			| rpl::filter([=](not_null<DocumentData*> changed) {
+				return changed->id == key.documentId
+					&& !changed->loading();
+			})
+			| rpl::on_next([=](not_null<DocumentData*>) {
+				if (const auto current = weakSession.get()) {
+					if (const auto state = weakState.lock()) {
+						CompleteDocumentDownload(
+								current,
+								key,
+								expectedSize,
+								state);
+						}
+					}
+				}, state->lifetime);
 	});
-	registrationActive = false;
 	const auto waitResult = WaitForDownload(
 			registration.state->done,
 			kDocumentDownloadTimeout,
@@ -422,24 +606,37 @@ QString loadDocumentSync(
 	if (waitResult != DownloadWaitResult::Completed) {
 		return {};
 	}
-	path = registration.state->readyPath;
-	return FileHasExactSize(path, expectedSize) ? path : QString();
+	return ReadyDocumentPath(registration.state, document.size);
 }
 
 void forwardMessagesSync(not_null<Main::Session*> session,
-						 const std::vector<not_null<HistoryItem*>> &items,
-						 const ApiWrap::SendAction &action,
-						 Data::ForwardOptions options) {
+							 const MessageIdsList &itemIds,
+							 const ApiWrap::SendAction &action,
+							 Data::ForwardOptions options,
+							 base::weak_ptr<History> targetHistory) {
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
+	const auto forwardIds = itemIds;
+	const auto weakSession = base::make_weak(session);
 
 	crl::on_main([=]
 	{
-		session->api().forwardMessages(Data::ResolvedForwardDraft(items, options),
-									   action,
-									   [=]
-									   {
-										   latch->countDown();
-									   });
+		const auto current = weakSession.get();
+		const auto history = targetHistory.get();
+		if (current && history) {
+			auto safeAction = action;
+			safeAction.history = history;
+			const auto forwardItems = current->data().idsToItems(forwardIds);
+			if (forwardItems.size() != forwardIds.size()) {
+				latch->countDown();
+				return;
+			}
+			current->api().forwardMessages(
+				Data::ResolvedForwardDraft(forwardItems, options),
+				std::move(safeAction),
+				[latch] { latch->countDown(); });
+		} else {
+			latch->countDown();
+		}
 	});
 
 
@@ -447,21 +644,36 @@ void forwardMessagesSync(not_null<Main::Session*> session,
 }
 
 void loadPhotoSync(
-		not_null<Main::Session*> session,
-		not_null<PhotoData*> photo,
-		Data::FileOrigin origin,
-		const Fn<bool()> &cancelled) {
-	const auto path = pathForSave(session);
-	if (path.isEmpty() || !QDir().mkpath(path)) {
+	not_null<Main::Session*> session,
+	const PhotoSnapshot &photo,
+	Data::FileOrigin origin,
+	const Fn<bool()> &cancelled) {
+	const auto weakSession = base::make_weak(session);
+	if (!weakSession || !isValidPhotoSnapshot(photo)) {
 		return;
 	}
+	const auto snapshot = photo;
 
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
 	auto lifetime = std::make_shared<rpl::lifetime>();
 
 	crl::on_main([=]
 	{
-		const auto view = photo->createMediaView();
+		const auto current = weakSession.get();
+		if (!current) {
+			latch->countDown();
+			return;
+		}
+		const auto data = current->data().photo(snapshot.id);
+		const auto path = snapshot.path.isEmpty()
+			? filePath(current, data)
+			: snapshot.path;
+		if (path.isEmpty()
+			|| !QDir().mkpath(QFileInfo(path).absolutePath())) {
+			latch->countDown();
+			return;
+		}
+		const auto view = data->createMediaView();
 		if (!view) {
 			latch->countDown();
 			return;
@@ -470,7 +682,9 @@ void loadPhotoSync(
 
 		const auto saveToFiles = [=]
 		{
-			view->saveToFile(filePath(session, photo));
+			if (weakSession) {
+				view->saveToFile(path);
+			}
 		};
 
 		if (view->loaded()) {
@@ -479,7 +693,7 @@ void loadPhotoSync(
 			return;
 		}
 
-		session->downloaderTaskFinished() | rpl::filter([=]
+		current->downloaderTaskFinished() | rpl::filter([=]
 		{
 			return view->loaded();
 		}) | rpl::on_next([=]
@@ -491,46 +705,66 @@ void loadPhotoSync(
 	});
 
 	(void)WaitForDownload(*latch, std::chrono::minutes(5), cancelled);
-	crl::on_main([lifetime = base::take(lifetime)]
+	crl::on_main_sync([lifetime = base::take(lifetime)]
 	{
 		lifetime->destroy();
 	});
 }
 
-void sendMessageSync(not_null<Main::Session*> session, Api::MessageToSend &&message) {
+void sendMessageSync(
+		not_null<Main::Session*> session,
+		Api::MessageToSend &&message,
+		base::weak_ptr<History> targetHistory) {
 	const auto action = message.action;
+	const auto weakSession = base::make_weak(session);
 	crl::on_main([=, message = std::move(message)]() mutable
 	{
-		// we cannot send events to objects
-		// owned by a different thread
-		// because sendMessage updates UI too
+		const auto current = weakSession.get();
+		const auto history = targetHistory.get();
+		if (current && history) {
+			message.action.history = history;
+			// we cannot send events to objects
+			// owned by a different thread
+			// because sendMessage updates UI too
 
-		session->api().sendMessage(std::move(message));
+			current->api().sendMessage(std::move(message));
+		}
 	});
 
 
-	waitForMsgSync(session, action);
+	waitForMsgSync(session, std::move(targetHistory));
 }
 
-void waitForMsgSync(not_null<Main::Session*> session, const Api::SendAction &action) {
+void waitForMsgSync(
+	not_null<Main::Session*> session,
+		base::weak_ptr<History> targetHistory) {
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
 	auto lifetime = std::make_shared<rpl::lifetime>();
+	const auto weakSession = base::make_weak(session);
+	const auto peerId = ResolveTargetPeerId(session, targetHistory);
+	if (!peerId) {
+		return;
+	}
 
 	crl::on_main([=]
 	{
-		session->data().itemIdChanged()
-			| rpl::filter([=](const Data::Session::IdChange &update)
-			{
-				return action.history->peer->id == update.newId.peer;
-			}) | rpl::on_next([=]
+		if (const auto current = weakSession.get()) {
+			current->data().itemIdChanged()
+				| rpl::filter([=](const Data::Session::IdChange &update)
+				{
+					return peerId == update.newId.peer;
+				}) | rpl::on_next([=]
 									  {
 										  latch->countDown();
 									  },
 									  *lifetime);
+		} else {
+			latch->countDown();
+		}
 	});
 
 	latch->await(std::chrono::minutes(5));
-	crl::on_main([lifetime = base::take(lifetime)]
+	crl::on_main_sync([lifetime = base::take(lifetime)]
 	{
 		lifetime->destroy();
 	});
@@ -540,63 +774,94 @@ void sendDocumentSync(not_null<Main::Session*> session,
 					  Ui::PreparedGroup &group,
 					  SendMediaType type,
 					  TextWithTags &&caption,
-					  const Api::SendAction &action) {
+					  const Api::SendAction &action,
+					  base::weak_ptr<History> targetHistory) {
 	auto groupId = std::make_shared<SendingAlbum>();
 	groupId->groupId = base::RandomValue<uint64>();
+	const auto weakSession = base::make_weak(session);
 
 	crl::on_main([=, lst = std::move(group.list), caption = std::move(caption)]() mutable
 	{
+		const auto current = weakSession.get();
+		const auto history = targetHistory.get();
+		if (!current || !history) {
+			return;
+		}
+		auto safeAction = action;
+		safeAction.history = history;
 		auto size = lst.files.size();
 		if (!lst.files.empty()) {
 			lst.files.front().caption = std::move(caption);
 		}
-		session->api().sendFiles(
+		current->api().sendFiles(
 			std::move(lst),
 			type,
 			size > 1 ? groupId : nullptr,
-			action);
+			std::move(safeAction));
 	});
 
-	waitForMsgSync(session, action);
+	waitForMsgSync(session, std::move(targetHistory));
 }
 
 void sendStickerSync(not_null<Main::Session*> session,
-					 Api::MessageToSend &&message,
-					 not_null<DocumentData*> document) {
+						 Api::MessageToSend &&message,
+						 DocumentId documentId,
+						 base::weak_ptr<History> targetHistory) {
 	const auto action = message.action;
+	const auto weakSession = base::make_weak(session);
 	crl::on_main([=, message = std::move(message)]() mutable
 	{
-		Api::SendExistingDocument(std::move(message), document, std::nullopt);
+		const auto current = weakSession.get();
+		const auto history = targetHistory.get();
+		if (current && history && documentId) {
+			message.action.history = history;
+			Api::SendExistingDocument(
+				std::move(message),
+				current->data().document(documentId),
+				std::nullopt);
+		}
 	});
 
-	waitForMsgSync(session, action);
+	waitForMsgSync(session, std::move(targetHistory));
 }
 
 void sendVoiceSync(not_null<Main::Session*> session,
-				   const QByteArray &data,
-				   int64_t duration,
-				   bool video,
-				   Api::MessageToSend &&message) {
+					   const QByteArray &data,
+					   int64_t duration,
+					   bool video,
+					   Api::MessageToSend &&message,
+					   base::weak_ptr<History> targetHistory) {
 	const auto action = message.action;
+	const auto weakSession = base::make_weak(session);
+	const auto peerId = ResolveTargetPeerId(session, targetHistory);
+	if (!peerId) {
+		return;
+	}
+	const auto voiceData = data;
 
 	crl::on_main([=]
 	{
+		const auto current = weakSession.get();
+		if (!current) {
+			return;
+		}
 		const auto to = FileLoadTo(
-			action.history->peer->id,
+			*peerId,
 			action.options,
 			action.replyTo,
 			action.replaceMediaOf);
-		session->api().fileLoader()->addTask(std::make_unique<FileLoadTask>(FileLoadTask::VoiceArgs{
-			.session = session,
-			.voice = data,
-			.duration = duration,
-			.waveform = QVector<signed char>(),
-			.video = video,
-			.to = to,
-			.caption = message.textWithTags
-		}));
+		current->api().fileLoader()->addTask(
+			std::make_unique<FileLoadTask>(FileLoadTask::VoiceArgs{
+				.session = current,
+				.voice = voiceData,
+				.duration = duration,
+				.waveform = QVector<signed char>(),
+				.video = video,
+				.to = to,
+				.caption = message.textWithTags
+			}));
 	});
-	waitForMsgSync(session, action);
+	waitForMsgSync(session, std::move(targetHistory));
 }
 
 namespace {
@@ -648,27 +913,53 @@ namespace {
 } // namespace
 
 UploadedFile uploadFileSync(not_null<Main::Session*> session,
-							not_null<PeerData*> peer,
+							PeerId peerId,
 							const QString &path,
 							SendMediaType type,
 							bool forceFile,
-							const QString &displayName) {
+							const QString &displayName,
+							const Fn<bool()> &cancelled) {
+	const auto weakSession = base::make_weak(session);
+	if (!weakSession) {
+		return {};
+	}
 	if (path.isEmpty() || !QFile::exists(path)) {
 		return {};
 	}
-
-	auto task = FileLoadTask(FileLoadTask::Args{
-		.session = session,
-		.filepath = path,
-		.type = type,
-		.to = FileLoadTo(peer->id, Api::SendOptions(), FullReplyTo(), MsgId()),
-		.forceFile = forceFile,
-		.sendLargePhotos = (type == SendMediaType::Photo),
-		.displayName = displayName,
+	const auto pathInfo = QFileInfo(path);
+	if (!pathInfo.isFile()
+		|| pathInfo.size() < 0
+		|| pathInfo.size() > AyuMapper::kMaxMediaFileSize) {
+		return {};
+	}
+	if (cancelled && cancelled()) {
+		return {};
+	}
+	std::unique_ptr<FileLoadTask> task;
+	crl::on_main_sync([&]
+	{
+		if (const auto current = weakSession.get()) {
+			task = std::make_unique<FileLoadTask>(FileLoadTask::Args{
+				.session = current,
+				.filepath = path,
+				.type = type,
+				.to = FileLoadTo(
+					peerId,
+					Api::SendOptions(),
+					FullReplyTo(),
+					MsgId()),
+				.forceFile = forceFile,
+				.sendLargePhotos = (type == SendMediaType::Photo),
+				.displayName = displayName,
+			});
+		}
 	});
-	task.process({.generateGoodThumbnail = false});
+	if (!task) {
+		return {};
+	}
+	task->process({.generateGoodThumbnail = false});
 
-	const auto prepared = task.peekResult();
+	const auto prepared = task->peekResult();
 	if (!prepared) {
 		return {};
 	}
@@ -676,13 +967,31 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 	const auto info = std::make_shared<std::optional<Api::RemoteFileInfo>>();
 	auto uploadLatch = std::make_shared<TimedCountDownLatch>(1);
 	auto lifetime = std::make_shared<rpl::lifetime>();
+	const auto uploadId = std::make_shared<FullMsgId>();
+	const auto uploadAbandoned = std::make_shared<std::atomic_bool>(false);
 
 	crl::on_main([=]
 	{
-		const auto uploadId = FullMsgId(peer->id, session->data().nextLocalMessageId());
+		if (uploadAbandoned->load()) {
+			uploadLatch->countDown();
+			return;
+		}
+		const auto current = weakSession.get();
+		if (!current) {
+			uploadLatch->countDown();
+			return;
+		}
+		const auto currentUploadId = FullMsgId(
+			peerId,
+			current->data().nextLocalMessageId());
+		*uploadId = currentUploadId;
 		const auto ready = [=](const Storage::UploadedMedia &data)
 		{
-			if (data.fullId != uploadId) {
+			if (!weakSession) {
+				uploadLatch->countDown();
+				return;
+			}
+			if (data.fullId != currentUploadId) {
 				return;
 			}
 			*info = data.info;
@@ -690,58 +999,102 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 		};
 		const auto failed = [=](const FullMsgId &id)
 		{
-			if (id == uploadId) {
+			if (id == currentUploadId) {
 				uploadLatch->countDown();
 			}
 		};
 
-		session->uploader().photoReady() | rpl::on_next(ready, *lifetime);
-		session->uploader().documentReady() | rpl::on_next(ready, *lifetime);
-		session->uploader().photoFailed() | rpl::on_next(failed, *lifetime);
-		session->uploader().documentFailed() | rpl::on_next(failed, *lifetime);
+		current->uploader().photoReady() | rpl::on_next(ready, *lifetime);
+		current->uploader().documentReady() | rpl::on_next(ready, *lifetime);
+		current->uploader().photoFailed() | rpl::on_next(failed, *lifetime);
+		current->uploader().documentFailed() | rpl::on_next(failed, *lifetime);
 
-		session->uploader().upload(uploadId, prepared);
+		current->uploader().upload(currentUploadId, prepared);
 	});
 
-	const auto uploadFinished = uploadLatch->await(std::chrono::minutes(30));
-	crl::on_main([lifetime = base::take(lifetime)]
+	const auto uploadFinished = WaitForDownload(
+		*uploadLatch,
+		std::chrono::minutes(30),
+		cancelled);
+	const auto cancelUpload = uploadFinished != DownloadWaitResult::Completed;
+	if (cancelUpload) {
+		uploadAbandoned->store(true);
+	}
+	crl::on_main_sync([
+		lifetime = base::take(lifetime),
+		weakSession,
+		uploadId,
+		uploadAbandoned,
+		cancelUpload
+	]
 	{
 		lifetime->destroy();
+		if (cancelUpload && *uploadId) {
+			if (const auto current = weakSession.get()) {
+				current->uploader().cancel(*uploadId);
+			}
+		}
+		uploadAbandoned->store(true);
 	});
 
-	if (!uploadFinished || !info->has_value()) {
+	if (uploadFinished != DownloadWaitResult::Completed
+		|| !info->has_value()) {
+		return {};
+	}
+	if (cancelled && cancelled()) {
 		return {};
 	}
 
 	const auto result = std::make_shared<UploadedFile>();
 	auto mediaLatch = std::make_shared<TimedCountDownLatch>(1);
+	const auto mediaAbandoned = std::make_shared<std::atomic_bool>(false);
+	std::shared_ptr<MTP::Sender> mediaApi;
+	crl::on_main_sync([&]
+	{
+		if (const auto current = weakSession.get()) {
+			mediaApi = std::make_shared<MTP::Sender>(&current->mtp());
+		}
+	});
+	if (!mediaApi) {
+		return {};
+	}
 
 	crl::on_main([=]
 	{
-		session->api().request(MTPmessages_UploadMedia(
+		if (mediaAbandoned->load()) {
+			mediaLatch->countDown();
+			return;
+		}
+		const auto current = weakSession.get();
+		if (!current) {
+			mediaLatch->countDown();
+			return;
+		}
+		const auto currentPeer = current->data().peer(peerId);
+		mediaApi->request(MTPmessages_UploadMedia(
 			MTP_flags(0),
 			MTPstring(),
-			peer->input(),
-			UploadedInputMedia(prepared, **info)
-		)).done([=](const MTPMessageMedia &media)
-		{
-			media.match([&](const MTPDmessageMediaPhoto &data)
-						{
+			currentPeer->input(),
+				UploadedInputMedia(prepared, **info)
+			)).done([=](const MTPMessageMedia &media)
+			{
+				if (const auto current = weakSession.get()) {
+					media.match(
+						[&](const MTPDmessageMediaPhoto &data) {
 							const auto photo = data.vphoto();
 							if (photo && photo->type() == mtpc_photo) {
-								result->photo = session->data().processPhoto(*photo);
+								result->photoId = current->data().processPhoto(*photo)->id;
 							}
 						},
-						[&](const MTPDmessageMediaDocument &data)
-						{
+						[&](const MTPDmessageMediaDocument &data) {
 							const auto document = data.vdocument();
 							if (document && document->type() == mtpc_document) {
-								result->document = session->data().processDocument(*document);
+								result->documentId = current->data().processDocument(*document)->id;
 							}
 						},
-						[](const auto &)
-						{
+						[](const auto &) {
 						});
+				}
 			mediaLatch->countDown();
 		}).fail([=](const MTP::Error &)
 		{
@@ -749,9 +1102,25 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 		}).send();
 	});
 
-	const auto mediaFinished = mediaLatch->await(std::chrono::minutes(5));
+	const auto mediaFinished = WaitForDownload(
+		*mediaLatch,
+		std::chrono::minutes(5),
+		cancelled);
+	if (mediaFinished != DownloadWaitResult::Completed) {
+		mediaAbandoned->store(true);
+	}
+	crl::on_main_sync([
+		mediaApi = base::take(mediaApi),
+		mediaAbandoned
+	]() mutable
+	{
+		mediaAbandoned->store(true);
+		mediaApi.reset();
+	});
 
-	return mediaFinished ? *result : UploadedFile();
+	return mediaFinished == DownloadWaitResult::Completed
+		? *result
+		: UploadedFile();
 }
 
 std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
@@ -759,10 +1128,16 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 	FullMsgId itemId) {
 	const auto resolved = std::make_shared<std::shared_ptr<const Iv::RichPage>>();
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
+	const auto weakSession = base::make_weak(session);
 
 	crl::on_main([=]
 	{
-		const auto item = session->data().message(itemId);
+		const auto current = weakSession.get();
+		if (!current) {
+			latch->countDown();
+			return;
+		}
+		const auto item = current->data().message(itemId);
 		if (!item) {
 			latch->countDown();
 			return;
@@ -784,19 +1159,25 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 			return;
 		}
 
-		const auto peer = item->history()->peer;
+		const auto peerId = item->history()->peer->id;
+		const auto peerInput = item->history()->peer->input();
 
-		session->api().request(MTPmessages_GetRichMessage(
-			peer->input(),
+		current->api().request(MTPmessages_GetRichMessage(
+			peerInput,
 			MTP_int(itemId.msg)
 		)).done([=](const MTPmessages_Messages &result)
 		{
+			const auto current = weakSession.get();
+			if (!current) {
+				latch->countDown();
+				return;
+			}
 			auto full = std::shared_ptr<const Iv::RichPage>();
 			const auto process = [&](const auto &data)
 			{
-				session->data().processUsers(data.vusers());
-				session->data().processChats(data.vchats());
-				peer->processTopics(data.vtopics());
+				current->data().processUsers(data.vusers());
+				current->data().processChats(data.vchats());
+				current->data().peer(peerId)->processTopics(data.vtopics());
 				for (const auto &message : data.vmessages().v) {
 					if (message.type() != mtpc_message) {
 						continue;
@@ -806,7 +1187,7 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 						continue;
 					}
 					if (const auto richMessage = fields.vrich_message()) {
-						full = Iv::ParseRichPage(session, *richMessage);
+						full = Iv::ParseRichPage(current, *richMessage);
 					}
 					break;
 				}
@@ -817,7 +1198,8 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 						 [&](const MTPDmessages_channelMessages &data)
 						 {
 							 process(data);
-							 if (const auto channel = peer->asChannel()) {
+							 if (const auto channel
+									 = current->data().peer(peerId)->asChannel()) {
 								 channel->ptsReceived(data.vpts().v);
 							 }
 						 },
@@ -826,8 +1208,8 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 							 process(data);
 						 });
 			if (full) {
-				if (const auto current = session->data().message(itemId)) {
-					current->setFullRichPage(full);
+				if (const auto resolvedItem = current->data().message(itemId)) {
+					resolvedItem->setFullRichPage(full);
 				}
 				*resolved = full;
 			}
@@ -845,58 +1227,74 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 
 bool sendRichMessageSync(not_null<Main::Session*> session,
 						 const MTPInputRichMessage &richMessage,
-						 const Api::SendAction &action) {
+						 const Api::SendAction &action,
+						 base::weak_ptr<History> targetHistory) {
 	const auto sent = std::make_shared<bool>(false);
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
+	const auto weakSession = base::make_weak(session);
+	const auto peerId = ResolveTargetPeerId(session, targetHistory);
+	if (!peerId) {
+		return false;
+	}
 
 	crl::on_main([=]
 	{
-		const auto peer = action.history->peer;
+		const auto current = weakSession.get();
+		const auto currentHistory = targetHistory.get();
+		if (!current || !currentHistory) {
+			latch->countDown();
+			return;
+		}
+		auto safeAction = action;
+		safeAction.history = currentHistory;
+		const auto peer = current->data().peer(*peerId);
 
 		using Flag = MTPmessages_SendMessage::Flag;
 		auto sendFlags = MTPmessages_SendMessage::Flags(0)
 			| Flag::f_rich_message;
-		if (action.replyTo) {
+		if (safeAction.replyTo) {
 			sendFlags |= Flag::f_reply_to;
 		}
-		if (ShouldSendSilent(peer, action.options)) {
+		if (ShouldSendSilent(peer, safeAction.options)) {
 			sendFlags |= Flag::f_silent;
 		}
-		if (action.options.scheduled) {
+		if (safeAction.options.scheduled) {
 			sendFlags |= Flag::f_schedule_date;
-			if (action.options.scheduleRepeatPeriod) {
+			if (safeAction.options.scheduleRepeatPeriod) {
 				sendFlags |= Flag::f_schedule_repeat_period;
 			}
 		}
-		if (action.options.sendAs) {
+		if (safeAction.options.sendAs) {
 			sendFlags |= Flag::f_send_as;
 		}
-		if (action.options.effectId) {
+		if (safeAction.options.effectId) {
 			sendFlags |= Flag::f_effect;
 		}
 
-		session->api().request(MTPmessages_SendMessage(
+		current->api().request(MTPmessages_SendMessage(
 			MTP_flags(sendFlags),
 			peer->input(),
-			action.mtpReplyTo(),
+			safeAction.mtpReplyTo(),
 			MTP_string(QString()),
 			MTP_long(base::RandomValue<uint64>()),
 			MTPReplyMarkup(),
 			MTPVector<MTPMessageEntity>(),
-			MTP_int(action.options.scheduled),
-			MTP_int(action.options.scheduleRepeatPeriod),
-			(action.options.sendAs
-				? action.options.sendAs->input()
+			MTP_int(safeAction.options.scheduled),
+			MTP_int(safeAction.options.scheduleRepeatPeriod),
+			(safeAction.options.sendAs
+				? safeAction.options.sendAs->input()
 				: MTP_inputPeerEmpty()),
 			MTPInputQuickReplyShortcut(),
-			MTP_long(action.options.effectId),
+			MTP_long(safeAction.options.effectId),
 			MTP_long(0),
-			Api::SuggestToMTP(action.options.suggest),
+			Api::SuggestToMTP(safeAction.options.suggest),
 			richMessage
 		)).done([=](const MTPUpdates &result)
 		{
-			session->api().applyUpdates(result);
-			*sent = true;
+			if (const auto current = weakSession.get()) {
+				current->api().applyUpdates(result);
+				*sent = true;
+			}
 			latch->countDown();
 		}).fail([=](const MTP::Error &error)
 		{

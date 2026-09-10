@@ -347,7 +347,8 @@ Media *GroupedMedia::lookupSpoilerTagMedia() const {
 	// Only Photo and Gif parts implement the spoiler tag methods, and they
 	// are the only kinds a Mode::Grid group holds. A Mode::Column group is
 	// built from Document parts, which would hit the base class Unexpected().
-	if (_parts.empty() || _mode == Mode::Column) {
+	if (_parts.empty()
+		|| _mode == Mode::Column) {
 		return nullptr;
 	}
 	const auto media = _parts.front().content.get();
