@@ -24,6 +24,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rect.h"
 #include "api/api_transcribes.h"
 #include "apiwrap.h"
+#include "ayu/ayu_settings.h"
+#include "ayu/features/stt/stt_manager.h"
 #include "styles/style_chat.h"
 #include "window/window_session_controller.h"
 
@@ -338,6 +340,10 @@ bool TranscribeButton::hasLock() const {
 	if (_summarize) {
 		return transcribes->summary(_item).premiumRequired;
 	}
+	if (AyuSettings::getInstance().sttEnabled()
+		&& Ayu::STT::STTManager::localEngineAvailable()) {
+		return false;
+	}
 	if (transcribes->freeFor(_item) || transcribes->trialsCount()) {
 		return false;
 	}
@@ -378,13 +384,42 @@ ClickHandlerPtr TranscribeButton::link() {
 		if (!item) {
 			return;
 		}
+		const auto my = context.other.value<ClickHandlerContext>();
+		if (!summarize
+			&& AyuSettings::getInstance().sttEnabled()
+			&& Ayu::STT::STTManager::localEngineAvailable()) {
+#if defined(HAVE_WHISPER)
+			const auto doc = item->media()
+				? item->media()->document()
+				: nullptr;
+			if (doc && doc->duration() > Ayu::STT::STTManager::maxAudioDurationMs()) {
+				if (const auto controller = my.sessionWindow.get()) {
+					controller->showToast(
+						tr::lng_audio_transcribe_long(tr::now));
+				}
+				return;
+			}
+			if (AyuSettings::getInstance().sttEngine() == STTEngine::Whisper) {
+				const auto modelType = static_cast<int>(
+					AyuSettings::getInstance().whisperModelType());
+				if (!Ayu::STT::STTManager::modelExists(modelType)) {
+					if (const auto controller = my.sessionWindow.get()) {
+						controller->showToast(
+							tr::ayu_SttModelNotDownloaded(tr::now));
+					}
+					return;
+				}
+			}
+#endif
+			session->api().transcribes().toggle(item);
+			return;
+		}
 		if (session->premium()) {
 			auto &transcribes = session->api().transcribes();
 			return summarize
 				? transcribes.toggleSummary(item)
 				: transcribes.toggle(item);
 		}
-		const auto my = context.other.value<ClickHandlerContext>();
 		if (hasLock()) {
 			if (const auto controller = my.sessionWindow.get()) {
 				if (summarize) {

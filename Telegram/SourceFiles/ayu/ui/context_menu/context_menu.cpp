@@ -16,6 +16,8 @@
 #include "ayu/features/filters/filters_controller.h"
 #include "ayu/features/forward/ayu_forward.h"
 #include "ayu/features/forward/ayu_forward_rich.h"
+#include "ayu/ui/boxes/delete_my_messages_box.h"
+#include "ayu/ui/boxes/remove_media_box.h"
 #include "ayu/ui/context_menu/menu_item_subtext.h"
 #include "ayu/ui/message_history/history_section.h"
 #include "ayu/ui/settings/filters/edit_filter.h"
@@ -25,6 +27,7 @@
 #include "base/call_delayed.h"
 #include "base/random.h"
 #include "base/unixtime.h"
+#include "base/weak_ptr.h"
 #include "core/mime_type.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
@@ -78,175 +81,20 @@ Fn<void()> ClearDeletedMessagesHandler(not_null<Window::SessionController*> cont
 	};
 }
 
-void DeleteMyMessagesAfterConfirm(not_null<PeerData*> peer) {
-	const auto session = &peer->session();
 
-	if (const auto channel = peer->asChannel()) {
-		if (channel->isMegagroup() && channel->canDeleteMessages()) {
-			session->api().deleteAllFromParticipant(channel, session->user());
-			return;
-		}
-	}
-
-	auto collected = std::make_shared<std::vector<MsgId>>();
-
-	const auto removeNext = std::make_shared<Fn<void(int)>>();
-	const auto requestNext = std::make_shared<Fn<void(MsgId)>>();
-
-	*removeNext = [=](int index)
-	{
-		if (index >= int(collected->size())) {
-			DEBUG_LOG(("Deleted all %1 my messages in this chat").arg(collected->size()));
-			*requestNext = nullptr;
-			*removeNext = nullptr;
-			return;
-		}
-
-		QVector<MTPint> ids;
-		ids.reserve(std::min<int>(100, collected->size() - index));
-		for (auto i = 0; i < 100 && (index + i) < int(collected->size()); ++i) {
-			ids.push_back(MTP_int((*collected)[index + i].bare));
-		}
-
-		const auto batch = index / 100 + 1;
-		const auto done = [=](const MTPmessages_AffectedMessages &result)
-		{
-			session->api().applyAffectedMessages(peer, result);
-			if (peer->isChannel()) {
-				session->data().processMessagesDeleted(peer->id, ids);
-			} else {
-				session->data().processNonChannelMessagesDeleted(ids);
-			}
-			const auto deleted = index + ids.size();
-			DEBUG_LOG(("Deleted batch %1, total deleted %2/%3").arg(batch).arg(deleted).arg(collected->size()));
-			const auto delay = crl::time(500 + base::RandomValue<int>() % 500);
-			base::call_delayed(delay, [=] { (*removeNext)(deleted); });
-		};
-		const auto fail = [=](const MTP::Error &error)
-		{
-			const auto type = error.type();
-			DEBUG_LOG(("Delete batch %1 failed: %2").arg(batch).arg(type));
-
-			if (type.startsWith(u"FLOOD_WAIT_"_q)
-				|| type.startsWith(u"FLOOD_PREMIUM_WAIT_"_q)) {
-				const auto underscore = type.lastIndexOf('_');
-				const auto seconds = (underscore >= 0)
-					? type.mid(underscore + 1).toInt()
-					: 0;
-				const auto delay = crl::time(std::max(seconds, 1) * 1000);
-				base::call_delayed(delay, [=] { (*removeNext)(index); });
-				return;
-			}
-
-			if (type == u"MESSAGE_DELETE_FORBIDDEN"_q
-				|| type == u"MSG_ID_INVALID"_q
-				|| type == u"MESSAGE_ID_INVALID"_q) {
-				DEBUG_LOG(("Skipping batch %1 (%2 ids)").arg(batch).arg(ids.size()));
-				const auto delay = crl::time(500 + base::RandomValue<int>() % 500);
-				base::call_delayed(delay, [=] { (*removeNext)(index + ids.size()); });
-				return;
-			}
-
-			DEBUG_LOG(("Stopping deletion, unrecoverable error: %1").arg(type));
-			*requestNext = nullptr;
-			*removeNext = nullptr;
-		};
-
-		if (const auto channel = peer->asChannel()) {
-			session->api()
-				.request(MTPchannels_DeleteMessages(channel->inputChannel(), MTP_vector<MTPint>(ids)))
-				.done(done)
-				.fail(fail)
-				.handleFloodErrors()
-				.send();
-		} else {
-			using Flag = MTPmessages_DeleteMessages::Flag;
-			session->api()
-				.request(MTPmessages_DeleteMessages(MTP_flags(Flag::f_revoke), MTP_vector<MTPint>(ids)))
-				.done(done)
-				.fail(fail)
-				.handleFloodErrors()
-				.send();
+Fn<void()> DeleteMyMessagesHandler(
+		not_null<Window::SessionController*> controller,
+		not_null<PeerData*> peer) {
+	return [=] {
+		if (!controller->showFrozenError()) {
+			controller->show(Box(FillDeleteMyMessagesBox, peer, controller));
 		}
 	};
-
-	*requestNext = [=](MsgId from)
-	{
-		using Flag = MTPmessages_Search::Flag;
-		auto request = MTPmessages_Search(
-			MTP_flags(Flag::f_from_id),
-			peer->input(),
-			MTP_string(),
-			MTP_inputPeerSelf(),
-			MTPInputPeer(),
-			MTPVector<MTPReaction>(),
-			MTP_int(0),
-			// top_msg_id
-			MTP_inputMessagesFilterEmpty(),
-			MTP_int(0),
-			// min_date
-			MTP_int(0),
-			// max_date
-			MTP_int(from.bare),
-			MTP_int(0),
-			// add_offset
-			MTP_int(100),
-			MTP_int(0),
-			// max_id
-			MTP_int(0),
-			// min_id
-			MTP_long(0)); // hash
-
-		session->api()
-			.request(std::move(request))
-			.done([=](const Api::HistoryRequestResult &result)
-			{
-				auto parsed = Api::ParseHistoryResult(peer, from, Data::LoadDirection::Before, result);
-				MsgId minId;
-				int batchCount = 0;
-				for (const auto &id : parsed.messageIds) {
-					if (!minId || id < minId) minId = id;
-					collected->push_back(id);
-					++batchCount;
-				}
-				DEBUG_LOG(("Batch found %1 my messages, total %2").arg(batchCount).arg(collected->size()));
-				if (parsed.messageIds.size() == 100 && minId) {
-					(*requestNext)(minId - MsgId(1));
-				} else {
-					DEBUG_LOG(("Found %1 my messages in this chat (SEARCH)").arg(collected->size()));
-					(*removeNext)(0);
-				}
-			})
-			.fail([=](const MTP::Error &error)
-			{
-				DEBUG_LOG(("History fetch failed: %1").arg(error.type()));
-				*requestNext = nullptr;
-				*removeNext = nullptr;
-			})
-			.send();
-	};
-
-	(*requestNext)(MsgId(0));
 }
 
-Fn<void()> DeleteMyMessagesHandler(not_null<Window::SessionController*> controller, not_null<PeerData*> peer) {
-	return [=]
-	{
-		if (!controller->showFrozenError()) {
-			controller->show(Ui::MakeConfirmBox({
-				.text = tr::ayu_DeleteOwnMessagesConfirmation(tr::now),
-				.confirmed =
-				[=](Fn<void()> &&close)
-				{
-					DeleteMyMessagesAfterConfirm(peer);
-					close();
-				},
-				.confirmText = tr::lng_box_delete(),
-				.cancelText = tr::lng_cancel(),
-				.confirmStyle = &st::attentionBoxButton,
-			}));
-		}
-	};
+[[nodiscard]] bool CanToggleGhostTrustedChatException(PeerData *peerData) {
+	const auto user = peerData ? peerData->asUser() : nullptr;
+	return user && !user->isSelf() && !user->isBot();
 }
 
 }
@@ -269,7 +117,9 @@ void AddAyuGramActions(PeerData *peerData,
 	const auto showFilters = settings.filtersEnabled()
 		&& (!user || user->isBot());
 	const auto saveDeletedMessages = settings.saveDeletedMessages();
-	if (!showFilters && !saveDeletedMessages) {
+	const auto showTrustedChatException = CanToggleGhostTrustedChatException(
+		peerData);
+	if (!showFilters && !saveDeletedMessages && !showTrustedChatException) {
 		return;
 	}
 
@@ -282,6 +132,12 @@ void AddAyuGramActions(PeerData *peerData,
 		.icon = &st::menuIconGroupReactions,
 		.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
 			const auto addAction = Ui::Menu::CreateAddActionCallback(menu);
+			if (showTrustedChatException) {
+				AddGhostTrustedChatExceptionAction(peerData, addAction);
+				if (showFilters || saveDeletedMessages) {
+					addAction({ .isSeparator = true });
+				}
+			}
 			if (showFilters) {
 				addAction(
 					tr::ayu_ViewFiltersMenuText(tr::now),
@@ -471,11 +327,34 @@ void AddShadowBanAction(PeerData *peerData,
 	});
 }
 
+void AddGhostTrustedChatExceptionAction(
+		PeerData *peerData,
+		const Window::PeerMenuCallback &addCallback) {
+	if (!CanToggleGhostTrustedChatException(peerData)) {
+		return;
+	}
+
+	const auto &ghost = AyuSettings::ghost(&peerData->session());
+	const auto trusted = ghost.isTrustedChatException(peerData);
+	addCallback({
+		.text = trusted
+			? tr::ayu_GhostUseDefaultsForTrustedChat(tr::now)
+			: tr::ayu_GhostAlwaysSendReadsAndActivity(tr::now),
+		.handler = [=] {
+			auto &current = AyuSettings::ghost(&peerData->session());
+			current.setTrustedChatException(
+				peerData,
+				!current.isTrustedChatException(peerData));
+		},
+		.icon = trusted ? &st::menuIconStealth : &st::menuIconMarkRead,
+	});
+}
+
 void AddDeleteOwnMessagesAction(PeerData *peerData,
 								Data::ForumTopic *topic,
 								not_null<Window::SessionController*> sessionController,
 								const Window::PeerMenuCallback &addCallback) {
-	if (topic) {
+	if (!peerData || topic) {
 		return;
 	}
 	if (const auto chat = peerData->asChat()) {
@@ -483,16 +362,58 @@ void AddDeleteOwnMessagesAction(PeerData *peerData,
 			return;
 		}
 	} else if (const auto channel = peerData->asChannel()) {
-		if (!channel->isMegagroup() || !channel->amIn()) {
+		if (!channel->amIn()) {
 			return;
 		}
 	} else {
 		return;
 	}
-	addCallback(
-		tr::ayu_DeleteOwnMessages(tr::now),
-		DeleteMyMessagesHandler(sessionController, peerData),
-		&st::menuIconTTL);
+	addCallback({
+		.text = tr::ayu_DeleteOwnMessages(tr::now),
+		.handler = DeleteMyMessagesHandler(sessionController, peerData),
+		.icon = &st::menuIconClearAttention,
+		.isAttention = true,
+	});
+}
+
+void AddRemoveMediaAction(
+		PeerData *peerData,
+		Data::ForumTopic *topic,
+		not_null<Window::SessionController*> sessionController,
+		const Window::PeerMenuCallback &addCallback) {
+	if (!peerData
+		|| (!peerData->isUser()
+			&& !peerData->isChat()
+			&& !peerData->isChannel())) {
+		return;
+	}
+	if (const auto chat = peerData->asChat()) {
+		if (!chat->amIn()) {
+			return;
+		}
+	} else if (const auto channel = peerData->asChannel()) {
+		const auto isGroup = peerData->isMegagroup();
+		if (!channel->amIn()
+			|| (!channel->canDeleteMessages()
+				&& (!isGroup || channel->isPublic() || channel->isForum()))) {
+			return;
+		}
+	}
+	addCallback({
+		.text = tr::ayu_RemoveMediaMenu(tr::now),
+		.handler = [=] {
+			if (sessionController->showFrozenError()) {
+				return;
+			}
+			sessionController->show(Box(
+				FillRemoveMediaBox,
+				peerData,
+				sessionController,
+				topic));
+		},
+		.icon = &st::menuIconClearAttention,
+		.isAttention = true,
+	});
 }
 
 void AddHistoryAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
@@ -837,6 +758,8 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 				action.replyTo.monoforumPeerId = currentItem->sublistPeerId();
 			}
 			action.clearDraft = false;
+			const auto targetHistory = base::make_weak(action.history);
+			const auto sourceSession = base::make_weak(session);
 
 			applyGhostScheduling(session, action.options);
 
@@ -852,7 +775,15 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 				if (currentItem->richPage() && session->premium()) {
 					if (preserveReply) {
 						crl::async([=] {
-							AyuForward::forwardRichMessage(session, itemId, action);
+							const auto current = sourceSession.get();
+							if (!current) {
+								return;
+							}
+							AyuForward::forwardRichMessage(
+								not_null<Main::Session*>(current),
+								itemId,
+								action,
+								targetHistory);
 						});
 					} else {
 						const auto forwardDraft = Data::ForwardDraft{
@@ -891,16 +822,38 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 					.options = Data::ForwardOptions::PreserveInfo,
 				};
 				auto resolvedDraft = history->resolveForwardDraft(forwardDraft);
+				const auto itemIds = history->owner().itemsToIds(
+					resolvedDraft.items);
+				const auto forwardOptions = resolvedDraft.options;
 
 				if (AyuForward::isFullAyuForwardNeeded(currentItem)) {
 					crl::async([=]
 					{
-						AyuForward::forwardMessages(session, action, false, resolvedDraft);
+						const auto current = sourceSession.get();
+						if (!current) {
+							return;
+						}
+						AyuForward::forwardMessages(
+							not_null<Main::Session*>(current),
+							action,
+							false,
+							itemIds,
+							forwardOptions,
+							targetHistory);
 					});
 				} else if (AyuForward::isAyuForwardNeeded(currentItem)) {
 					crl::async([=]
 					{
-						AyuForward::intelligentForward(session, action, resolvedDraft);
+						const auto current = sourceSession.get();
+						if (!current) {
+							return;
+						}
+						AyuForward::intelligentForward(
+							not_null<Main::Session*>(current),
+							action,
+							itemIds,
+							forwardOptions,
+							targetHistory);
 					});
 				} else {
 					session->api().forwardMessages(std::move(resolvedDraft), action, [] {});
@@ -922,7 +875,7 @@ void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 	}
 
 	const auto &ghost = AyuSettings::ghost(&readItem->history()->session());
-	if (ghost.sendReadMessages()) {
+	if (ghost.shouldSendReadMessages(readItem->history()->peer)) {
 		return;
 	}
 	const auto session = &readItem->history()->session();

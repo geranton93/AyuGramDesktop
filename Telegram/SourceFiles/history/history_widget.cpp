@@ -8572,7 +8572,7 @@ void HistoryWidget::updateSendRestriction() {
 		return;
 	}
 	_sendRestrictionKey = restriction.text;
-	if (AyuForward::isForwarding(_peer->id)) {
+	if (AyuForward::isForwarding(session(), _peer->id)) {
 		_sendRestriction = AyuForwardWriteRestriction(this, _peer->id, session());
 	} else if (!restriction) {
 		_sendRestriction = nullptr;

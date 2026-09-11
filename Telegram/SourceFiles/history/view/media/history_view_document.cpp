@@ -47,6 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/stt/stt_manager.h"
 #include "ayu/features/message_shot/message_shot.h"
 
 
@@ -381,6 +382,24 @@ Document::Document(
 	}
 
 	createComponents();
+	if (_data->isVoiceMessage() || isRound) {
+		const auto requestResize = [=] {
+			_realParent->history()->owner().requestItemResize(_realParent);
+		};
+		const auto &settings = AyuSettings::getInstance();
+		settings.sttEnabledValue() | rpl::skip(1) | rpl::on_next(
+			[=](bool) { requestResize(); },
+			_sttSettingsLifetime);
+		settings.sttEngineValue() | rpl::skip(1) | rpl::on_next(
+			[=](STTEngine) { requestResize(); },
+			_sttSettingsLifetime);
+		settings.sttLanguageValue() | rpl::skip(1) | rpl::on_next(
+			[=](const QString &) { requestResize(); },
+			_sttSettingsLifetime);
+		settings.whisperModelTypeValue() | rpl::skip(1) | rpl::on_next(
+			[=](WhisperModel) { requestResize(); },
+			_sttSettingsLifetime);
+	}
 	if (const auto named = Get<HistoryDocumentNamed>()) {
 		fillNamedFromData(named);
 		_tooltipFilename.setTooltipText(named->name.toString());
@@ -507,14 +526,20 @@ QSize Document::countOptimalSize() {
 		const auto session = &history->session();
 		const auto transcribes = &session->api().transcribes();
 		const auto media = _parent->data()->media();
-		if ((media && media->ttlSeconds())
+		if (!_realParent->isHistoryEntry()
+			|| _realParent->isLocal()
+			|| (media && media->ttlSeconds())
 			|| IsHostedInstantViewMedia(_parent)
 			|| _realParent->isScheduled()
 			|| _realParent->isAdminLogEntry()
 			|| (!session->premium()
+				&& !(AyuSettings::getInstance().sttEnabled()
+					&& Ayu::STT::STTManager::localEngineAvailable())
 				&& !transcribes->freeFor(_realParent)
 				&& !transcribes->trialsSupport())
 			|| (!session->premium()
+				&& !(AyuSettings::getInstance().sttEnabled()
+					&& Ayu::STT::STTManager::localEngineAvailable())
 				&& _data->duration() > transcribes->trialsMaxLengthMs())) {
 			voice->transcribe = nullptr;
 			voice->transcribeText = {};

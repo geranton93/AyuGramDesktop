@@ -46,6 +46,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 
 // AyuGram includes
+#include "ayu/ayu_settings.h"
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/ui/ayu_userpic.h"
 
@@ -383,7 +384,12 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			Assert(rounding.has_value());
 			fillImageShadow(p, rthumb, *rounding, context);
 		}
-		const auto revealed = _spoiler
+		const auto protectedSpoiler = _sensitiveSpoiler
+			|| _ttlCover
+			|| _data->extendedMediaPreview();
+		const auto revealed = (_spoiler
+			&& (!AyuSettings::getInstance().revealAllSpoilers()
+				|| protectedSpoiler))
 			? _spoiler->revealAnimation.value(_spoiler->revealed ? 1. : 0.)
 			: 1.;
 		if (revealed < 1.) {
@@ -779,8 +785,16 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 
 	if (QRect(paintx, painty, paintw, painth).contains(point)) {
 		ensureDataMediaCreated();
-		result.link = (_spoiler && !_spoiler->revealed)
-			? ((_data->extendedMediaPreview() || _sensitiveSpoiler)
+		const auto protectedSpoiler = _sensitiveSpoiler
+			|| _ttlCover
+			|| _data->extendedMediaPreview();
+		result.link = (_spoiler
+			&& !_spoiler->revealed
+			&& (!AyuSettings::getInstance().revealAllSpoilers()
+				|| protectedSpoiler))
+			? ((_data->extendedMediaPreview()
+				|| _sensitiveSpoiler
+				|| _ttlCover)
 				? spoilerTagLink()
 				: _spoiler->link)
 			: _data->uploading()
@@ -858,7 +872,12 @@ void Photo::drawGrouped(
 	}
 	const auto radial = isRadialAnimation();
 
-	const auto revealed = _spoiler
+	const auto protectedSpoiler = _sensitiveSpoiler
+		|| _ttlCover
+		|| _data->extendedMediaPreview();
+	const auto revealed = (_spoiler
+		&& (!AyuSettings::getInstance().revealAllSpoilers()
+			|| protectedSpoiler))
 		? _spoiler->revealAnimation.value(_spoiler->revealed ? 1. : 0.)
 		: 1.;
 	if (revealed < 1.) {
@@ -982,8 +1001,16 @@ TextState Photo::getStateGrouped(
 		return {};
 	}
 	ensureDataMediaCreated();
-	auto link = (_spoiler && !_spoiler->revealed)
-		? ((_data->extendedMediaPreview() || _sensitiveSpoiler)
+	const auto protectedSpoiler = _sensitiveSpoiler
+		|| _ttlCover
+		|| _data->extendedMediaPreview();
+	auto link = (_spoiler
+		&& !_spoiler->revealed
+		&& (!AyuSettings::getInstance().revealAllSpoilers()
+			|| protectedSpoiler))
+		? ((_data->extendedMediaPreview()
+			|| _sensitiveSpoiler
+			|| _ttlCover)
 			? spoilerTagLink()
 			: _spoiler->link)
 		: _data->uploading()

@@ -114,6 +114,14 @@ HistoryUnreadThings::ConstProxy Thread::unreadPollVotes() const {
 	};
 }
 
+UnsentReadGeneration &Thread::unreadMentionsReadDebt() {
+	return _unreadMentionsReadDebt;
+}
+
+UnsentReadGeneration &Thread::unreadReactionsReadDebt() {
+	return _unreadReactionsReadDebt;
+}
+
 bool Thread::canToggleUnread(bool nowUnread) const {
 	if ((asTopic() || asForum()) && !nowUnread) {
 		return false;

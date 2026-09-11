@@ -10,7 +10,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/binary_guard.h"
 #include "base/weak_ptr.h"
 
+#include <QtCore/QFile>
 #include <QtNetwork/QNetworkReply>
+
+#include <memory>
 
 namespace Data {
 struct FileOrigin;
@@ -106,6 +109,7 @@ public:
 	}
 
 	bool setFileName(const QString &filename); // set filename for loaders to cache
+	[[nodiscard]] bool setDestinationFile(std::unique_ptr<QFile> file);
 	void permitLoadFromCloud();
 	void increaseLoadSize(int64 size, bool autoLoading);
 
@@ -160,6 +164,8 @@ protected:
 	bool writeResultPart(int64 offset, bytes::const_span buffer);
 	bool finalizeResult();
 	[[nodiscard]] QByteArray readLoadedPartBack(int64 offset, int size);
+	[[nodiscard]] QFile &file();
+	[[nodiscard]] const QFile &file() const;
 
 	const not_null<Main::Session*> _session;
 
@@ -171,6 +177,7 @@ protected:
 
 	QString _filename;
 	QFile _file;
+	std::unique_ptr<QFile> _externalFile;
 	bool _fileIsOpen = false;
 
 	LoadToCacheSetting _toCache;

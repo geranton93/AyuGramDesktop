@@ -21,6 +21,7 @@
 #include "core/core_settings.h"
 #include "core/application.h"
 #include "base/unixtime.h"
+#include "base/weak_ptr.h"
 #include "core/mime_type.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
@@ -74,6 +75,8 @@ const auto regDateBotFallbackUsername = QString("ayugrambot");
 
 const auto kZalgoPattern = QStringLiteral(
 	"\\p{Mn}{3,}|[\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}\\x{200E}\\x{200F}\\x{061C}]");
+
+constexpr auto kMaxReadThingsRequests = 64;
 
 class BadgeToastIcon final : public Ui::RpWidget {
 public:
@@ -301,22 +304,35 @@ bool isMessageHidden(const not_null<HistoryItem*> item) {
 	return FiltersController::filtered(item);
 }
 
-void MarkAsReadChatList(not_null<Dialogs::MainList*> list) {
+void MarkAsReadChatList(
+		not_null<Dialogs::MainList*> list,
+		bool locally) {
 	auto mark = std::vector<not_null<History*>>();
 	for (const auto &row : list->indexed()->all()) {
 		if (const auto history = row->history()) {
 			mark.push_back(history);
 		}
 	}
-	ranges::for_each(mark, MarkAsReadThread);
+	for (const auto history : mark) {
+		MarkAsReadThread(history, locally);
+	}
 }
 
-void readMentions(base::weak_ptr<Data::Thread> weakThread) {
+void readMentions(
+		base::weak_ptr<Data::Thread> weakThread,
+		Data::UnsentReadGeneration::Generation generation,
+		bool passthrough = false,
+		int requests = 0) {
 	const auto thread = weakThread.get();
 	if (!thread) {
 		return;
 	}
 	const auto peer = thread->peer();
+	if (!AyuSettings::ghost(&peer->session()).shouldSendReadMessages(
+			peer,
+			passthrough)) {
+		return;
+	}
 	const auto topic = thread->asTopic();
 	const auto rootId = topic ? topic->rootId() : 0;
 	using Flag = MTPmessages_ReadMentions::Flag;
@@ -326,18 +342,42 @@ void readMentions(base::weak_ptr<Data::Thread> weakThread) {
 		MTP_int(rootId)
 	)).done([=](const MTPmessages_AffectedHistory &result)
 	{
-		const auto offset = peer->session().api().applyAffectedHistory(
-			peer,
+		const auto current = weakThread.get();
+		if (!current) {
+			return;
+		}
+		const auto currentPeer = current->peer();
+		const auto offset = currentPeer->session().api().applyAffectedHistory(
+			currentPeer,
 			result);
 		if (offset > 0) {
-			readMentions(weakThread);
+			if (requests + 1 < kMaxReadThingsRequests) {
+				readMentions(
+					weakThread,
+					generation,
+					passthrough,
+					requests + 1);
+			} else {
+				LOG(("AyuGram: stopped reading mentions after %1 requests")
+					.arg(kMaxReadThingsRequests));
+			}
 		} else {
-			peer->owner().history(peer)->clearUnreadMentionsFor(rootId);
+			const auto pendingGeneration = current
+				->unreadMentionsReadDebt().generation();
+			current->unreadMentionsReadDebt().sent(generation);
+			if (pendingGeneration == generation) {
+				currentPeer->owner().history(currentPeer)->clearUnreadMentionsFor(
+					current->asTopic() ? current->asTopic()->rootId() : 0);
+			}
 		}
 	}).send();
 }
 
-void readReactions(base::weak_ptr<Data::Thread> weakThread) {
+void readReactions(
+		base::weak_ptr<Data::Thread> weakThread,
+		Data::UnsentReadGeneration::Generation generation,
+		bool passthrough = false,
+		int requests = 0) {
 	const auto thread = weakThread.get();
 	if (!thread) {
 		return;
@@ -345,6 +385,11 @@ void readReactions(base::weak_ptr<Data::Thread> weakThread) {
 	const auto topic = thread->asTopic();
 	const auto sublist = thread->asSublist();
 	const auto peer = thread->peer();
+	if (!AyuSettings::ghost(&peer->session()).shouldSendReadMessages(
+			peer,
+			passthrough)) {
+		return;
+	}
 	const auto rootId = topic ? topic->rootId() : 0;
 	using Flag = MTPmessages_ReadReactions::Flag;
 	peer->session().api().request(MTPmessages_ReadReactions(
@@ -354,101 +399,192 @@ void readReactions(base::weak_ptr<Data::Thread> weakThread) {
 		sublist ? sublist->sublistPeer()->input() : MTPInputPeer()
 	)).done([=](const MTPmessages_AffectedHistory &result)
 	{
-		const auto offset = peer->session().api().applyAffectedHistory(
-			peer,
+		const auto current = weakThread.get();
+		if (!current) {
+			return;
+		}
+		const auto currentPeer = current->peer();
+		const auto offset = currentPeer->session().api().applyAffectedHistory(
+			currentPeer,
 			result);
 		if (offset > 0) {
-			readReactions(weakThread);
+			if (requests + 1 < kMaxReadThingsRequests) {
+				readReactions(
+					weakThread,
+					generation,
+					passthrough,
+					requests + 1);
+			} else {
+				LOG(("AyuGram: stopped reading reactions after %1 requests")
+					.arg(kMaxReadThingsRequests));
+			}
 		} else {
-			peer->owner().history(peer)->clearUnreadReactionsFor(rootId, sublist);
+			const auto pendingGeneration = current
+				->unreadReactionsReadDebt().generation();
+			current->unreadReactionsReadDebt().sent(generation);
+			if (pendingGeneration == generation) {
+				currentPeer->owner().history(currentPeer)->clearUnreadReactionsFor(
+					current->asTopic() ? current->asTopic()->rootId() : 0,
+					current->asSublist());
+			}
 		}
 	}).send();
 }
 
-void MarkAsReadThread(not_null<Data::Thread*> thread) {
-	const auto readHistoryNative = [&](const not_null<History*> history)
+
+void MarkAsReadThread(not_null<Data::Thread*> thread, bool locally) {
+	const auto readHistoryNative = [=](const not_null<History*> history)
 	{
-		history->owner().histories().readInbox(history);
+		if (locally) {
+			history->owner().histories().readInboxLocally(history);
+		} else {
+			history->owner().histories().readInbox(history);
+		}
 	};
 	const auto sendReadMentions = [=](
 		const not_null<Data::Thread*> threadInner)
 	{
-		readMentions(base::make_weak(threadInner));
+		readMentions(
+			base::make_weak(threadInner),
+			threadInner->unreadMentionsReadDebt().generation(),
+			true);
 	};
 	const auto sendReadReactions = [=](
 		const not_null<Data::Thread*> threadInner)
 	{
-		readReactions(base::make_weak(threadInner));
+		readReactions(
+			base::make_weak(threadInner),
+			threadInner->unreadReactionsReadDebt().generation(),
+			true);
+	};
+	const auto clearReadMentions = [](
+		const not_null<Data::Thread*> threadInner)
+	{
+		threadInner->unreadMentionsReadDebt().add();
+		const auto peer = threadInner->peer();
+		const auto topic = threadInner->asTopic();
+		peer->owner().history(peer)->clearUnreadMentionsFor(
+			topic ? topic->rootId() : MsgId());
+	};
+	const auto clearReadReactions = [](
+		const not_null<Data::Thread*> threadInner)
+	{
+		threadInner->unreadReactionsReadDebt().add();
+		const auto peer = threadInner->peer();
+		const auto topic = threadInner->asTopic();
+		peer->owner().history(peer)->clearUnreadReactionsFor(
+			topic ? topic->rootId() : MsgId(),
+			threadInner->asSublist());
 	};
 
-	if (thread->chatListBadgesState().unread) {
-		if (const auto forum = thread->asForum()) {
-			forum->enumerateTopics([](
-				not_null<Data::ForumTopic*> topic)
-				{
-					MarkAsReadThread(topic);
-				});
-		} else if (const auto topic = thread->asTopic()) {
+	if (const auto forum = thread->asForum()) {
+		forum->enumerateTopics([=](
+			not_null<Data::ForumTopic*> topic)
+			{
+				MarkAsReadThread(topic, locally);
+			});
+	} else if (const auto topic = thread->asTopic()) {
+		if (locally) {
+			topic->readTillEndLocally();
+		} else {
 			topic->readTillEnd();
-		} else if (const auto history = thread->asHistory()) {
-			readHistoryNative(history);
-			if (const auto migrated = history->migrateSibling()) {
-				readHistoryNative(migrated);
-			}
+		}
+	} else if (const auto history = thread->asHistory()) {
+		readHistoryNative(history);
+		if (const auto migrated = history->migrateSibling()) {
+			readHistoryNative(migrated);
 		}
 	}
 
-	if (thread->unreadMentions().has()) {
-		sendReadMentions(thread);
+	if (thread->unreadMentions().has()
+		|| thread->unreadMentionsReadDebt()) {
+		if (locally) {
+			clearReadMentions(thread);
+		} else {
+			sendReadMentions(thread);
+		}
 	}
 
-	if (thread->unreadReactions().has()) {
-		sendReadReactions(thread);
+	if (thread->unreadReactions().has()
+		|| thread->unreadReactionsReadDebt()) {
+		if (locally) {
+			clearReadReactions(thread);
+		} else {
+			sendReadReactions(thread);
+		}
 	}
 
-	AyuWorker::markAsOnline(&thread->session());
+	if (!locally) {
+		AyuWorker::markAsOnline(&thread->session());
+	}
 }
 
 void readHistory(not_null<HistoryItem*> message) {
 	const auto history = message->history();
 	const auto tillId = message->id;
+	const auto weakHistory = base::make_weak(history);
 
 	history->session().data().histories()
 		.sendRequest(history,
 					 Data::Histories::RequestType::ReadInbox,
 					 [=](Fn<void()> finish)
 					 {
-						 if (const auto channel = history->peer->asChannel()) {
-							 return history->session().api().request(MTPchannels_ReadHistory(
-								 channel->inputChannel(),
-								 MTP_int(tillId)
-							 )).done([=] { AyuWorker::markAsOnline(&history->session()); }).send();
+						 const auto current = weakHistory.get();
+						 if (!current) {
+							 finish();
+							 return mtpRequestId(0);
+						 }
+						 if (const auto channel = current->peer->asChannel()) {
+							 return current->session().api().request(MTPchannels_ReadHistory(
+									 channel->inputChannel(),
+									 MTP_int(tillId)
+							 )).done([=] {
+								if (const auto current = weakHistory.get()) {
+									AyuWorker::markAsOnline(&current->session());
+								}
+								finish();
+							 }).fail([=] { finish(); }).send();
 						 }
 
-						 return history->session().api().request(MTPmessages_ReadHistory(
-							 history->peer->input(),
+						 return current->session().api().request(MTPmessages_ReadHistory(
+							 current->peer->input(),
 							 MTP_int(tillId)
 						 )).done([=](const MTPmessages_AffectedMessages &result)
 						 {
-							 history->session().api().applyAffectedMessages(history->peer, result);
-							 AyuWorker::markAsOnline(&history->session());
+							 if (const auto current = weakHistory.get()) {
+								 current->session().api().applyAffectedMessages(
+									 current->peer,
+									 result);
+								 AyuWorker::markAsOnline(&current->session());
+							 }
+							 finish();
 						 }).fail([=]
 						 {
+							 finish();
 						 }).send();
 					 });
 
-	if (history->unreadMentions().has()) {
-		readMentions(history->asThread());
+	if (history->unreadMentions().has()
+		|| history->unreadMentionsReadDebt()) {
+		readMentions(
+			history->asThread(),
+			history->unreadMentionsReadDebt().generation(),
+			true);
 	}
 
-	if (history->unreadReactions().has()) {
-		readReactions(history->asThread());
+	if (history->unreadReactions().has()
+		|| history->unreadReactionsReadDebt()) {
+		readReactions(
+			history->asThread(),
+			history->unreadReactionsReadDebt().generation(),
+			true);
 	}
 }
 
 void markReadAfterAction(not_null<History*> history) {
 	const auto &ghost = AyuSettings::ghost(&history->session());
-	if (ghost.sendReadMessages() || !ghost.markReadAfterAction()) {
+	if (ghost.shouldSendReadMessages(history->peer)
+		|| !ghost.markReadAfterAction()) {
 		return;
 	}
 	if (const auto last = history->lastServerMessage()) {

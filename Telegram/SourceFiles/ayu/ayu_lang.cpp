@@ -6,7 +6,6 @@
 // Copyright @Radolyn, 2026
 #include "ayu/ayu_lang.h"
 
-#include "qjsondocument.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "lang/lang_instance.h"
@@ -14,6 +13,16 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QJsonObject>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QtNetwork/QNetworkProxy>
+
+#include <gsl/gsl>
+
+#include <optional>
+#include <vector>
 
 // hard-coded languages
 std::map<QString, QString> langMapping = {
@@ -33,13 +42,174 @@ constexpr auto postfixes = {
 	"other"
 };
 
+namespace {
+
+constexpr auto kMaxLanguageJsonBytes = qint64(4 * 1024 * 1024);
+constexpr auto kMaxLanguageKeys = 4096;
+constexpr auto kMaxLanguageIdBytes = 64;
+constexpr auto kMaxLanguageKeyBytes = 128;
+constexpr auto kMaxLanguageValueBytes = 32 * 1024;
+constexpr auto kLanguageTransferTimeoutMs = 10000;
+constexpr auto kLanguageCacheSchemaVersion = 1;
+
+const auto kLanguageCacheSchemaKey = u"_ayu_schema"_q;
+const auto kLanguageCacheLanguageKey = u"_ayu_language"_q;
+const auto kLanguageCacheValuesKey = u"_ayu_values"_q;
+
+struct LanguageEntry {
+	QByteArray key;
+	QByteArray value;
+};
+
+[[nodiscard]] QString NormalizeLanguage(QString id) {
+	id = id.toLower();
+	if (id.toUtf8().size() > kMaxLanguageIdBytes) {
+		return QString();
+	}
+	if (const auto i = langMapping.find(id); i != langMapping.end()) {
+		id = i->second;
+	}
+	static const auto valid = QRegularExpression(u"^[a-z0-9_-]+$"_q);
+	return valid.match(id).hasMatch() ? id : QString();
+}
+
+[[nodiscard]] bool IsLanguageKey(const QString &key) {
+	for (const auto ch : key) {
+		if (!((ch >= u'a' && ch <= u'z')
+			|| (ch >= u'A' && ch <= u'Z')
+			|| (ch >= u'0' && ch <= u'9')
+			|| ch == u'_')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+[[nodiscard]] std::optional<std::vector<LanguageEntry>> NormalizeEntries(
+		const QJsonObject &object) {
+	if (object.size() > kMaxLanguageKeys) {
+		return std::nullopt;
+	}
+
+	auto result = std::vector<LanguageEntry>();
+	result.reserve(object.size());
+	for (auto i = object.begin(); i != object.end(); ++i) {
+		const auto brokenKey = i.key();
+		const auto keyBytes = brokenKey.toUtf8();
+		if (keyBytes.size() > kMaxLanguageKeyBytes
+			|| !IsLanguageKey(brokenKey)) {
+			return std::nullopt;
+		}
+		if (!i.value().isString()) {
+			return std::nullopt;
+		}
+
+		auto key = u"ayu_"_q + brokenKey;
+		if (key.endsWith(u"_Android"_q)) {
+			continue;
+		}
+		for (const auto postfix : postfixes) {
+			const auto suffix = u"_"_q + QString::fromLatin1(postfix);
+			if (key.endsWith(suffix)) {
+				key.replace(suffix, u"#"_q + QString::fromLatin1(postfix));
+				break;
+			}
+		}
+		if (key.endsWith(u"_PC"_q)) {
+			key.chop(3);
+		}
+
+		auto value = i.value().toString().replace(u"&amp;"_q, u"&"_q);
+		if (value.contains(u"%1$d"_q)
+			&& !value.contains(u"%2$d"_q)) {
+			value.replace(u"%1$d"_q, u"{count}"_q);
+		} else if (value.contains(u"%1$d"_q)
+			&& value.contains(u"%2$d"_q)) {
+			value.replace(u"%1$d"_q, u"{count1}"_q);
+			value.replace(u"%2$d"_q, u"{count2}"_q);
+		} else if (value.contains(u"%1$s"_q)
+			&& !value.contains(u"%2$s"_q)) {
+			value.replace(u"%1$s"_q, u"{item}"_q);
+		} else if (value.contains(u"%1$s"_q)
+			&& value.contains(u"%2$s"_q)) {
+			value.replace(u"%1$s"_q, u"{item1}"_q);
+			value.replace(u"%2$s"_q, u"{item2}"_q);
+		}
+
+		const auto valueBytes = value.toUtf8();
+		if (valueBytes.size() > kMaxLanguageValueBytes) {
+			return std::nullopt;
+		} else if (!valueBytes.isEmpty()) {
+			result.push_back({ key.toUtf8(), valueBytes });
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] std::optional<QJsonDocument> ParseLanguageJson(
+		const QByteArray &data) {
+	if (data.isEmpty() || data.size() > kMaxLanguageJsonBytes) {
+		return std::nullopt;
+	}
+	QJsonParseError error;
+	const auto document = QJsonDocument::fromJson(data, &error);
+	if (error.error != QJsonParseError::NoError
+		|| !document.isObject()
+		|| !NormalizeEntries(document.object())) {
+		return std::nullopt;
+	}
+	return document;
+}
+
+[[nodiscard]] std::optional<QJsonDocument> ReadCachedLanguage(
+		const QByteArray &data,
+		const QString &languageId) {
+	if (data.isEmpty() || data.size() > kMaxLanguageJsonBytes) {
+		return std::nullopt;
+	}
+	QJsonParseError error;
+	const auto document = QJsonDocument::fromJson(data, &error);
+	if (error.error != QJsonParseError::NoError || !document.isObject()) {
+		return std::nullopt;
+	}
+
+	const auto object = document.object();
+	if (!object.contains(kLanguageCacheSchemaKey)) {
+		return NormalizeEntries(object)
+			? std::optional(document)
+			: std::nullopt;
+	}
+	const auto schema = object.value(kLanguageCacheSchemaKey);
+	if (!schema.isDouble()
+		|| schema.toDouble() != kLanguageCacheSchemaVersion
+		|| object.value(kLanguageCacheLanguageKey).toString() != languageId) {
+		return std::nullopt;
+	}
+	const auto values = object.value(kLanguageCacheValuesKey);
+	if (!values.isObject() || !NormalizeEntries(values.toObject())) {
+		return std::nullopt;
+	}
+	return QJsonDocument(values.toObject());
+}
+
+} // namespace
+
 AyuLanguage *AyuLanguage::instance = nullptr;
 
-AyuLanguage::AyuLanguage() = default;
+AyuLanguage::AyuLanguage() {
+	Lang::GetInstance().idChanges() | rpl::on_next([=] {
+		syncLanguage();
+	}, _lifetime);
+	Lang::GetInstance().updated() | rpl::on_next([=] {
+		syncLanguage();
+	}, _lifetime);
+}
 
 void AyuLanguage::init() {
-	if (!instance) instance = new AyuLanguage;
-	instance->loadCachedLanguage();
+	if (!instance) {
+		instance = new AyuLanguage;
+	}
+	instance->syncLanguage();
 }
 
 AyuLanguage *AyuLanguage::currentInstance() {
@@ -55,159 +225,170 @@ QString AyuLanguage::getCachePath(const QString &langId) const {
 }
 
 void AyuLanguage::loadCachedLanguage() {
-	const auto langPackId = Lang::GetInstance().id();
-	const auto langPackBaseId = Lang::GetInstance().baseId();
-	auto finalLangPackId = langMapping.contains(langPackId) ? langMapping[langPackId] : langPackId;
-
-	if (finalLangPackId.isEmpty()) {
-		finalLangPackId = langPackBaseId;
-	}
-	if (finalLangPackId.isEmpty()) {
-		return;
-	}
-
-	const auto cachePath = getCachePath(finalLangPackId);
-	QFile file(cachePath);
-	if (!file.exists()) {
-		const auto basePath = getCachePath(langPackBaseId);
-		if (!QFile::exists(basePath)) {
+	for (const auto &id : { _currentLangId, _baseLangId }) {
+		if (id.isEmpty() || id == u"en"_q) {
+			continue;
+		}
+		QFile file(getCachePath(id));
+		const auto size = QFileInfo(file).size();
+		if (size <= 0 || size > kMaxLanguageJsonBytes
+			|| !file.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto data = file.read(kMaxLanguageJsonBytes + 1);
+		file.close();
+		if (const auto document = ReadCachedLanguage(data, id)) {
+			_document = *document;
+			LOG(("Loading AyuGram language: %1").arg(id));
+			applyLanguageJson(_document);
 			return;
 		}
-		file.setFileName(basePath);
-	}
-
-	if (file.open(QIODevice::ReadOnly)) {
-		const auto data = file.readAll();
-		file.close();
-
-		QJsonParseError error{};
-		const auto doc = QJsonDocument::fromJson(data, &error);
-		if (error.error == QJsonParseError::NoError) {
-			LOG(("Loading cached AyuGram language: %1").arg(finalLangPackId));
-			applyLanguageJson(doc);
-		}
+		LOG(("Ignoring invalid AyuGram language cache: %1").arg(id));
 	}
 }
 
-void AyuLanguage::saveCachedLanguage(const QByteArray &json, const QString &langId) {
-	const auto cacheDir = getCacheDir();
-	QDir().mkpath(cacheDir);
+void AyuLanguage::saveCachedLanguage(
+		const QJsonDocument &document,
+		const QString &langId) {
+	if (!NormalizeEntries(document.object())) {
+		return;
+	}
+	const auto object = QJsonObject{
+		{ kLanguageCacheSchemaKey, kLanguageCacheSchemaVersion },
+		{ kLanguageCacheLanguageKey, langId },
+		{ kLanguageCacheValuesKey, document.object() },
+	};
+	const auto json = QJsonDocument(object).toJson(QJsonDocument::Compact);
+	if (json.size() > kMaxLanguageJsonBytes
+		|| !QDir().mkpath(getCacheDir())) {
+		return;
+	}
 
-	const auto cachePath = getCachePath(langId);
-	QFile file(cachePath);
-	if (file.open(QIODevice::WriteOnly)) {
-		file.write(json);
-		file.close();
+	QSaveFile file(getCachePath(langId));
+	if (file.open(QIODevice::WriteOnly)
+		&& file.write(json) == json.size()
+		&& file.commit()) {
 		LOG(("Cached AyuGram language: %1").arg(langId));
 	}
 }
 
-void AyuLanguage::fetchLanguage(const QString &id, const QString &baseId) {
-	auto finalLangPackId = langMapping.contains(id) ? langMapping[id] : id;
-	_currentLangId = finalLangPackId.isEmpty() ? baseId : finalLangPackId;
+void AyuLanguage::syncLanguage() {
+	if (_applying) {
+		return;
+	}
+	const auto custom = Lang::GetInstance().isCustom();
+	const auto currentId = NormalizeLanguage(Lang::GetInstance().id());
+	const auto baseId = NormalizeLanguage(Lang::GetInstance().baseId());
+	const auto id = custom
+		? QString()
+		: !currentId.isEmpty()
+		? currentId
+		: baseId;
+	if (id == _currentLangId && baseId == _baseLangId) {
+		if (!custom && !_document.isNull()) {
+			applyLanguageJson(_document);
+		}
+		return;
+	}
 
+	++_generation;
+	if (_chkReply) {
+		const auto reply = _chkReply;
+		_chkReply = nullptr;
+		reply->abort();
+		reply->deleteLater();
+	}
+	const auto hadOverlay = !_appliedKeys.isEmpty();
+	_applying = true;
+	clearAppliedLanguage();
+	_currentLangId = id;
+	_baseLangId = baseId;
+	_document = QJsonDocument();
+	if (hadOverlay) {
+		Lang::GetInstance().notifyUpdated();
+	}
+	if (id.isEmpty() || id == u"en"_q) {
+		_applying = false;
+		return;
+	}
+	_applying = false;
+	loadCachedLanguage();
+	fetchLanguage(id, _generation);
+}
+
+void AyuLanguage::fetchLanguage(
+		const QString &id,
+		quint64 generation,
+		bool mirror) {
+	networkManager.setProxy(QNetworkProxy::DefaultProxy);
 	if (Core::App().settings().proxy().isEnabled()) {
 		const auto proxy = Core::App().settings().proxy().selected();
-		if (proxy.type == MTP::ProxyData::Type::Socks5 || proxy.type == MTP::ProxyData::Type::Http) {
-			const auto networkProxy = ToNetworkProxy(ToDirectIpProxy(Core::App().settings().proxy().selected()));
-			networkManager.setProxy(networkProxy);
+		if (proxy.type == MTP::ProxyData::Type::Socks5
+			|| proxy.type == MTP::ProxyData::Type::Http) {
+			networkManager.setProxy(ToNetworkProxy(ToDirectIpProxy(proxy)));
 		}
+	} else {
+		networkManager.setProxy(QNetworkProxy::DefaultProxy);
 	}
 
-	// using `jsdelivr` since China (...and maybe other?) users have some problems with GitHub
-	// https://crowdin.com/project/ayugram/discussions/6
-	QUrl url;
-	if (!finalLangPackId.isEmpty() && !baseId.isEmpty() && !needFallback) {
-		url.setUrl(qsl("https://cdn.jsdelivr.net/gh/AyuGram/Languages@l10n_main/values/langs/%1/Shared.json").arg(
-			finalLangPackId));
-	} else {
-		url.setUrl(qsl("https://cdn.jsdelivr.net/gh/AyuGram/Languages@l10n_main/values/langs/%1/Shared.json").arg(
-			needFallback ? baseId : finalLangPackId));
-	}
-	_chkReply = networkManager.get(QNetworkRequest(url));
-	connect(_chkReply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(fetchError(QNetworkReply::NetworkError)));
-	connect(_chkReply, SIGNAL(finished()), this, SLOT(fetchFinished()));
-}
-
-void AyuLanguage::fetchFinished() {
-	if (!_chkReply) return;
-
-	QString langPackBaseId = Lang::GetInstance().baseId();
-	QString langPackId = Lang::GetInstance().id();
-	auto statusCode = _chkReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-
-	if (statusCode == 404 && !langPackId.isEmpty() && !langPackBaseId.isEmpty() && !needFallback) {
-		LOG(("AyuGram Language not found! Fallback to main language: %1...").arg(langPackBaseId));
-		needFallback = true;
-		_chkReply->disconnect();
-		fetchLanguage("", langPackBaseId);
-	} else {
-		const auto result = _chkReply->readAll().trimmed();
-		QJsonParseError error{};
-		const auto doc = QJsonDocument::fromJson(result, &error);
-		if (error.error == QJsonParseError::NoError) {
-			saveCachedLanguage(result, _currentLangId);
-			applyLanguageJson(doc);
-		} else {
-			LOG(("Incorrect language JSON File."));
+	const auto url = (mirror
+		? u"https://raw.githubusercontent.com/AyuGram/Languages/l10n_main/values/langs/%1/Shared.json"_q
+		: u"https://cdn.jsdelivr.net/gh/AyuGram/Languages@l10n_main/values/langs/%1/Shared.json"_q).arg(id);
+	auto request = QNetworkRequest(QUrl(url));
+	request.setTransferTimeout(kLanguageTransferTimeoutMs);
+	const auto reply = networkManager.get(request);
+	reply->setReadBufferSize(kMaxLanguageJsonBytes + 1);
+	_chkReply = reply;
+	connect(reply, &QNetworkReply::finished, this, [=] {
+		if (_chkReply != reply || _generation != generation) {
+			reply->deleteLater();
+			return;
 		}
-
 		_chkReply = nullptr;
-	}
-}
-
-void AyuLanguage::fetchError(QNetworkReply::NetworkError e) {
-	LOG(("Network error: %1").arg(e));
-
-	if (e == QNetworkReply::NetworkError::ContentNotFoundError) {
-		const auto baseId = Lang::GetInstance().baseId();
-		const auto id = Lang::GetInstance().id();
-
-		if (!id.isEmpty() && !baseId.isEmpty() && !needFallback) {
-			LOG(("AyuGram Language not found! Fallback to main language: %1...").arg(baseId));
-			needFallback = true;
-			_chkReply->disconnect();
-			fetchLanguage("", baseId);
+		const auto data = reply->read(kMaxLanguageJsonBytes + 1);
+		const auto document = reply->error() == QNetworkReply::NoError
+			? ParseLanguageJson(data)
+			: std::optional<QJsonDocument>();
+		if (document) {
+			_document = *document;
+			saveCachedLanguage(*document, id);
+			applyLanguageJson(_document);
+		} else if (!mirror) {
+			fetchLanguage(id, generation, true);
+		} else if (!_baseLangId.isEmpty() && id != _baseLangId) {
+			fetchLanguage(_baseLangId, generation);
 		} else {
-			LOG(("AyuGram Language not found!"));
-			_chkReply = nullptr;
+			LOG(("AyuGram language unavailable: %1").arg(id));
 		}
-	}
+		reply->deleteLater();
+	});
 }
 
-void AyuLanguage::applyLanguageJson(QJsonDocument doc) {
-	const auto json = doc.object();
-	for (const QString &brokenKey : json.keys()) {
-		auto key = qsl("ayu_") + brokenKey;
-		auto val = json.value(brokenKey).toString().replace(qsl("&amp;"), qsl("&"));
+void AyuLanguage::clearAppliedLanguage() {
+	for (const auto &key : _appliedKeys) {
+		Lang::GetInstance().resetValue(key);
+	}
+	_appliedKeys.clear();
+}
 
-		if (key.endsWith("_Android")) {
-			continue;
-		}
+void AyuLanguage::applyLanguageJson(const QJsonDocument &document) {
+	const auto entries = NormalizeEntries(document.object());
+	if (!entries) {
+		LOG(("Ignoring invalid AyuGram language document."));
+		return;
+	}
 
-		for (const auto &postfix : postfixes) {
-			if (key.endsWith(qsl("_") + postfix)) {
-				key = key.replace(qsl("_") + postfix, qsl("#") + postfix);
-				break;
-			}
-		}
-
-		if (key.endsWith("_PC")) {
-			key = key.replace("_PC", "");
-		}
-
-		if (val.contains(qsl("%1$d")) && !val.contains(qsl("%2$d"))) {
-			val = val.replace(qsl("%1$d"), qsl("{count}"));
-		} else if (val.contains(qsl("%1$d")) && val.contains(qsl("%2$d"))) {
-			val = val.replace(qsl("%1$d"), qsl("{count1}")).replace(qsl("%2$d"), qsl("{count2}"));
-		} else if (val.contains(qsl("%1$s")) && !val.contains(qsl("%2$s"))) {
-			val = val.replace(qsl("%1$s"), qsl("{item}"));
-		} else if (val.contains(qsl("%1$s")) && val.contains(qsl("%2$s"))) {
-			val = val.replace(qsl("%1$s"), qsl("{item1}")).replace(qsl("%2$s"), qsl("{item2}"));
-		}
-
-		Lang::GetInstance().resetValue(key.toUtf8());
-		Lang::GetInstance().applyValue(key.toUtf8(), val.toUtf8());
+	const auto wasApplying = _applying;
+	_applying = true;
+	const auto restoreApplying = gsl::finally([&] {
+		_applying = wasApplying;
+	});
+	clearAppliedLanguage();
+	for (const auto &entry : *entries) {
+		Lang::GetInstance().resetValue(entry.key);
+		Lang::GetInstance().applyValue(entry.key, entry.value);
+		_appliedKeys.insert(entry.key);
 	}
 	Lang::GetInstance().updatePluralRules();
+	Lang::GetInstance().notifyUpdated();
 }

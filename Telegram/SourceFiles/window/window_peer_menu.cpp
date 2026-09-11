@@ -1090,14 +1090,8 @@ void Filler::addTranslate() {
 		|| !Core::App().settings().translateChatEnabled()) {
 		return;
 	}
-	const auto history = _peer->owner().historyLoaded(_peer);
-	if (!history
-		|| !history->translateOfferedFrom()
-		|| history->translatedTo()) {
-		return;
-	}
-	_addAction(tr::lng_context_translate(tr::now), [=] {
-		history->peer->saveTranslationDisabled(false);
+	_addAction(tr::lng_translate_settings_show(tr::now), [=] {
+		_peer->saveTranslationDisabled(false);
 	}, &st::menuIconTranslate);
 }
 
@@ -1921,6 +1915,8 @@ void Filler::fillContextMenuActions() {
 	}
 	addBanFromChannel();
 	addClearHistory();
+	AyuUi::AddGhostTrustedChatExceptionAction(_peer, _addAction);
+	AyuUi::AddRemoveMediaAction(_peer, _topic, _controller, _addAction);
 	AyuUi::AddDeleteOwnMessagesAction(_peer, _topic, _controller, _addAction);
 	addDeleteChat();
 	addLeaveChat();
@@ -1949,6 +1945,7 @@ void Filler::fillHistoryActions() {
 	addTranslate();
 	addReport();
 	addClearHistory();
+	AyuUi::AddRemoveMediaAction(_peer, _topic, _controller, _addAction);
 	AyuUi::AddDeleteOwnMessagesAction(_peer, _topic, _controller, _addAction);
 	addDeleteChat();
 	addLeaveChat();
@@ -1972,6 +1969,7 @@ void Filler::fillProfileActions() {
 	addToggleTopicClosed();
 	AyuUi::AddOpenChannelAction(_peer, _controller, _addAction);
 	AyuUi::AddShadowBanAction(_peer, _addAction);
+	AyuUi::AddGhostTrustedChatExceptionAction(_peer, _addAction);
 	addViewDiscussion();
 	addDirectMessages();
 	addExportChat();
@@ -3662,7 +3660,7 @@ base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 			forwardOptions);
 		const auto items = history->owner().idsToItems(msgIds);
 		const auto ayuForwarding = AyuForward::isAyuForwardNeeded(items)
-			|| AyuForward::isFullAyuForwardNeeded(items.front());
+			|| AyuForward::isFullAyuForwardNeeded(items);
 
 		if ((!state->submit || ayuForwarding) && successCallback) {
 			successCallback();

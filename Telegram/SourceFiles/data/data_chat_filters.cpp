@@ -418,6 +418,13 @@ ChatFilters::ChatFilters(not_null<Session*> owner)
 			}
 		}
 	}, _lifetime);
+
+	AyuSettings::getInstance().hiddenFolderIdsChanges()
+	| rpl::on_next([=] {
+		if (_loaded) {
+			_visibilityChanged.fire({});
+		}
+	}, _lifetime);
 }
 
 ChatFilters::~ChatFilters() = default;
@@ -973,6 +980,10 @@ bool ChatFilters::has() const {
 
 rpl::producer<> ChatFilters::changed() const {
 	return _listChanged.events();
+}
+
+rpl::producer<> ChatFilters::visibilityChanged() const {
+	return _visibilityChanged.events();
 }
 
 rpl::producer<FilterId> ChatFilters::isChatlistChanged() const {

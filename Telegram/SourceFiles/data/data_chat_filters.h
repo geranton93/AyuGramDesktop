@@ -163,6 +163,7 @@ public:
 	void moveAllToFront();
 	[[nodiscard]] const std::vector<ChatFilter> &list() const;
 	[[nodiscard]] rpl::producer<> changed() const;
+	[[nodiscard]] rpl::producer<> visibilityChanged() const;
 	[[nodiscard]] rpl::producer<FilterId> isChatlistChanged() const;
 	[[nodiscard]] rpl::producer<TagColorChanged> tagColorChanged() const;
 	[[nodiscard]] bool loaded() const;
@@ -239,6 +240,7 @@ private:
 	std::vector<ChatFilter> _list;
 	base::flat_map<FilterId, std::unique_ptr<Dialogs::MainList>> _chatsLists;
 	rpl::event_stream<> _listChanged;
+	rpl::event_stream<> _visibilityChanged;
 	rpl::event_stream<FilterId> _isChatlistChanged;
 	rpl::event_stream<TagColorChanged> _tagColorChanged;
 	mtpRequestId _loadRequestId = 0;

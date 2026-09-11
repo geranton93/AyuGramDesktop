@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/timer.h"
+#include "data/data_unsent_read_generation.h"
+#include "data/data_unsent_read_till.h"
 
 class History;
 class HistoryItem;
@@ -59,6 +61,7 @@ public:
 	void clearAll();
 
 	void readInbox(not_null<History*> history);
+	void readInboxLocally(not_null<History*> history);
 	void readInboxTill(not_null<HistoryItem*> item);
 	void readInboxTill(not_null<History*> history, MsgId tillId);
 	void readInboxOnNewMessage(not_null<HistoryItem*> item);
@@ -71,7 +74,10 @@ public:
 		not_null<History*> history,
 		Fn<void()> callback = nullptr);
 	void dialogEntryApplied(not_null<History*> history);
-	void changeDialogUnreadMark(not_null<History*> history, bool unread);
+	void changeDialogUnreadMark(
+		not_null<History*> history,
+		bool unread,
+		Fn<void(bool)> finished = nullptr);
 	void changeSublistUnreadMark(
 		not_null<Data::SavedSublist*> sublist,
 		bool unread);
@@ -155,9 +161,12 @@ private:
 		base::flat_map<int, SentRequest> sent;
 		MsgId willReadTill = 0;
 		MsgId sentReadTill = 0;
+		UnsentReadTill<MsgId> readTillNotSent;
 		crl::time willReadWhen = 0;
+		UnsentReadGeneration unreadMarkNotSent;
 		bool sentReadDone = false;
 		bool postponedRequestEntry = false;
+		std::uint32_t readRequestGeneration = 0;
 		// Set once a ReadHistory request for this history comes back
 		// with a terminal error (PEER_ID_INVALID); sendReadRequest's
 		// .fail was otherwise treated identically to .done, so an open
@@ -165,6 +174,8 @@ private:
 		// re-issuing (and re-failing) a fresh request on every new
 		// message, forever, with no circuit breaker.
 		bool readRequestsDisabled = false;
+		bool readRequestCooldown = false;
+		std::uint8_t readRequestRetries = 0;
 	};
 	struct ChatListGroupRequest {
 		MsgId aroundId = 0;
@@ -199,7 +210,14 @@ private:
 		}
 	}
 
-	void readInboxTill(not_null<History*> history, MsgId tillId, bool force);
+	void readInbox(not_null<History*> history, bool locally);
+	void readInboxTill(
+		not_null<History*> history,
+		MsgId tillId,
+		bool force,
+		bool locally);
+	void cancelPendingReadInbox(not_null<History*> history);
+	void scheduleReadRequests();
 	void sendReadRequests();
 	void sendReadRequest(not_null<History*> history, State &state);
 	[[nodiscard]] State *lookup(not_null<History*> history);

@@ -6,6 +6,7 @@
 // Copyright @Radolyn, 2026
 #include "ayu/features/forward/ayu_forward_rich.h"
 
+#include "ayu/features/forward/ayu_forward.h"
 #include "ayu/features/forward/ayu_sync.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/flat_map.h"
@@ -20,26 +21,73 @@
 #include "iv/iv_rich_page.h"
 #include "storage/localimageloader.h"
 
+#include <atomic>
+#include <cstddef>
+#include <optional>
+
 namespace AyuForward {
 namespace {
 
 using Block = Iv::RichPage::Block;
 using BlockKind = Iv::RichPage::BlockKind;
 
+constexpr auto kMaxRichDepth = std::size_t(32);
+constexpr auto kMaxRichBlocks = std::size_t(4096);
+constexpr auto kMaxRichChildren = std::size_t(1024);
+constexpr auto kMaxRichGroupedMedia = std::size_t(128);
+constexpr auto kMaxRichMediaItems = std::size_t(4096);
+constexpr auto kMaxRichTextLength = std::size_t(32768);
+constexpr auto kMaxRichEntities = std::size_t(4096);
+constexpr auto kMaxRichAnchors = std::size_t(4096);
+constexpr auto kMaxRichHtmlBytes = std::size_t(4) * 1024 * 1024;
+constexpr auto kMaxRichPayloadUnits = std::size_t(4) * 1024 * 1024;
+
 struct RichMedia
 {
-	base::flat_map<PhotoId, not_null<PhotoData*>> photos;
-	base::flat_map<DocumentId, not_null<DocumentData*>> documents;
+	base::flat_map<PhotoId, AyuSync::PhotoSnapshot> photos;
+	base::flat_map<DocumentId, AyuSync::DocumentSnapshot> documents;
 };
 
-[[nodiscard]] PhotoData *resolvePhoto(not_null<Main::Session*> session, PhotoId id, PhotoData *photo) {
-	return photo ? photo : (id ? session->data().photo(id).get() : nullptr);
+struct UploadedRichMedia
+{
+	base::flat_map<PhotoId, PhotoId> photos;
+	base::flat_map<DocumentId, DocumentId> documents;
+};
+
+struct RichTraversalLimits {
+	std::size_t blocks = 0;
+	std::size_t payloadUnits = 0;
+	bool exceeded = false;
+
+	[[nodiscard]] bool enter(std::size_t depth) {
+		if (depth > kMaxRichDepth || blocks >= kMaxRichBlocks) {
+			exceeded = true;
+			return false;
+		}
+		++blocks;
+		return true;
+	}
+
+	[[nodiscard]] bool addPayload(std::size_t units) {
+		if (units > kMaxRichPayloadUnits - payloadUnits) {
+			exceeded = true;
+			return false;
+		}
+		payloadUnits += units;
+		return true;
+	}
+};
+
+[[nodiscard]] PhotoData *resolvePhoto(
+		not_null<Main::Session*> session,
+		PhotoId id) {
+	return id ? session->data().photo(id).get() : nullptr;
 }
 
-[[nodiscard]] DocumentData *resolveDocument(not_null<Main::Session*> session,
-											DocumentId id,
-											DocumentData *document) {
-	return document ? document : (id ? session->data().document(id).get() : nullptr);
+[[nodiscard]] DocumentData *resolveDocument(
+		not_null<Main::Session*> session,
+		DocumentId id) {
+	return id ? session->data().document(id).get() : nullptr;
 }
 
 [[nodiscard]] bool isSerializableKind(BlockKind kind) {
@@ -56,39 +104,162 @@ struct RichMedia
 	}
 }
 
-void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &blocks, RichMedia &media) {
-	const auto addPhoto = [&](PhotoId id, PhotoData *photo)
-	{
-		if (const auto resolved = resolvePhoto(session, id, photo)) {
-			media.photos.emplace(resolved->id, resolved);
+[[nodiscard]] bool IsRichTextWithinLimits(const Iv::RichPage::RichText &text) {
+	return text.text.text.size() <= kMaxRichTextLength
+		&& text.text.entities.size() <= kMaxRichEntities
+		&& text.anchorIds.size() <= kMaxRichAnchors;
+}
+
+[[nodiscard]] bool IsRichBlockWithinLimits(const Block &block) {
+	if (!IsRichTextWithinLimits(block.text)
+		|| !IsRichTextWithinLimits(block.caption)
+		|| block.html.size() > kMaxRichHtmlBytes
+		|| block.blocks.size() > kMaxRichChildren
+		|| block.listItems.size() > kMaxRichChildren
+		|| block.mediaItems.size() > kMaxRichGroupedMedia
+		|| block.tableRows.size() > kMaxRichChildren
+		|| block.relatedArticles.size() > kMaxRichChildren
+		|| block.buttons.size() > kMaxRichChildren) {
+		return false;
+	}
+	for (const auto &row : block.tableRows) {
+		if (row.cells.size() > kMaxRichGroupedMedia) {
+			return false;
 		}
+		for (const auto &cell : row.cells) {
+			if (!IsRichTextWithinLimits(cell.text)) {
+				return false;
+			}
+		}
+	}
+	for (const auto &item : block.listItems) {
+		if (!IsRichTextWithinLimits(item.text)) {
+			return false;
+		}
+	}
+	for (const auto &button : block.buttons) {
+		if (!IsRichTextWithinLimits(button.text)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+[[nodiscard]] bool AccountRichBlockPayload(
+	const Block &block,
+	RichTraversalLimits &limits) {
+	const auto accountText = [&](const Iv::RichPage::RichText &text) {
+		if (!limits.addPayload(text.text.text.size())
+			|| !limits.addPayload(text.anchorId.size())) {
+			return false;
+		}
+		for (const auto &anchorId : text.anchorIds) {
+			if (!limits.addPayload(anchorId.size())) {
+				return false;
+			}
+		}
+		return true;
 	};
-	const auto addDocument = [&](DocumentId id, DocumentData *document)
-	{
-		if (const auto resolved = resolveDocument(session, id, document)) {
-			media.documents.emplace(resolved->id, resolved);
+	if (!accountText(block.text)
+		|| !accountText(block.caption)
+		|| !limits.addPayload(block.html.size())) {
+		return false;
+	}
+	for (const auto &item : block.listItems) {
+		if (!accountText(item.text)) {
+			return false;
 		}
+	}
+	for (const auto &row : block.tableRows) {
+		for (const auto &cell : row.cells) {
+			if (!accountText(cell.text)) {
+				return false;
+			}
+		}
+	}
+	for (const auto &button : block.buttons) {
+		if (!accountText(button.text)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+[[nodiscard]] bool collectMedia(
+		not_null<Main::Session*> session,
+		const std::vector<Block> &blocks,
+		RichMedia &media,
+		RichTraversalLimits &limits,
+		std::size_t depth = 0) {
+	const auto addPhoto = [&](PhotoId id)
+	{
+		if (const auto resolved = resolvePhoto(session, id)) {
+			if (media.photos.contains(resolved->id)) {
+				return true;
+			}
+			if (media.photos.size() + media.documents.size()
+				>= kMaxRichMediaItems) {
+				limits.exceeded = true;
+				return false;
+			}
+			const auto snapshot = AyuSync::snapshotPhoto(session, resolved);
+			if (!AyuSync::isValidPhotoSnapshot(snapshot)) {
+				limits.exceeded = true;
+				return false;
+			}
+			media.photos.emplace(resolved->id, snapshot);
+		}
+		return true;
+	};
+	const auto addDocument = [&](DocumentId id)
+	{
+		if (const auto resolved = resolveDocument(session, id)) {
+			if (media.documents.contains(resolved->id)) {
+				return true;
+			}
+			if (media.photos.size() + media.documents.size()
+				>= kMaxRichMediaItems) {
+				limits.exceeded = true;
+				return false;
+			}
+			const auto snapshot = AyuSync::snapshotDocument(resolved);
+			if (!AyuSync::isValidDocumentSnapshot(snapshot)) {
+				limits.exceeded = true;
+				return false;
+			}
+			media.documents.emplace(resolved->id, snapshot);
+		}
+		return true;
 	};
 
 	for (const auto &block : blocks) {
+		if (!limits.enter(depth)
+			|| !IsRichBlockWithinLimits(block)
+			|| !AccountRichBlockPayload(block, limits)) {
+			limits.exceeded = true;
+			return false;
+		}
 		if (!isSerializableKind(block.kind)) {
 			continue;
 		}
 
+		auto mediaAccepted = true;
 		switch (block.kind) {
 		case BlockKind::Photo:
-			addPhoto(block.photoId, block.photo);
+			mediaAccepted = addPhoto(block.photoId);
 			break;
 		case BlockKind::Video:
 		case BlockKind::Audio:
-			addDocument(block.documentId, block.document);
+			mediaAccepted = addDocument(block.documentId);
 			break;
 		case BlockKind::GroupedMedia:
 			for (const auto &item : block.mediaItems) {
 				if (item.kind == BlockKind::Photo) {
-					addPhoto(item.photoId, item.photo);
+					mediaAccepted = addPhoto(item.photoId)
+						&& mediaAccepted;
 				} else if (item.kind == BlockKind::Video) {
-					addDocument(item.documentId, item.document);
+					mediaAccepted = addDocument(item.documentId)
+						&& mediaAccepted;
 				}
 			}
 			break;
@@ -96,19 +267,33 @@ void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &bl
 			break;
 		}
 
-		collectMedia(session, block.blocks, media);
+		if (!mediaAccepted || limits.exceeded) {
+			return false;
+		}
+		if (!collectMedia(session, block.blocks, media, limits, depth + 1)) {
+			return false;
+		}
 		for (const auto &item : block.listItems) {
-			collectMedia(session, item.blocks, media);
+			if (!collectMedia(
+					session,
+					item.blocks,
+					media,
+					limits,
+					depth + 1)) {
+				return false;
+			}
 		}
 	}
+	return !limits.exceeded;
 }
 
-[[nodiscard]] RichMedia reuploadMedia(not_null<Main::Session*> session,
-									  not_null<PeerData*> peer,
-									  Data::FileOrigin origin,
-									  const RichMedia &source,
-									  const Fn<bool()> &cancelled) {
-	auto result = RichMedia();
+[[nodiscard]] UploadedRichMedia reuploadMedia(
+		not_null<Main::Session*> session,
+		PeerId peerId,
+		Data::FileOrigin origin,
+		const RichMedia &source,
+		const Fn<bool()> &cancelled) {
+	auto result = UploadedRichMedia();
 
 	const auto ensureUploaded = [&](const QString &path,
 									int64 expected,
@@ -127,7 +312,14 @@ void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &bl
 				return AyuSync::UploadedFile();
 			}
 		}
-		return AyuSync::uploadFileSync(session, peer, path, type, forceFile);
+		return AyuSync::uploadFileSync(
+			session,
+			peerId,
+			path,
+			type,
+			forceFile,
+			QString(),
+			cancelled);
 	};
 
 	for (const auto &[id, photo] : source.photos) {
@@ -136,8 +328,8 @@ void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &bl
 		}
 
 		const auto uploaded = ensureUploaded(
-			AyuSync::filePath(session, photo),
-			photo->imageByteSize(Data::PhotoSize::Large),
+			photo.path,
+			photo.size,
 			[&] {
 				AyuSync::loadPhotoSync(
 					session,
@@ -147,8 +339,8 @@ void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &bl
 			},
 			SendMediaType::Photo,
 			false);
-		if (uploaded.photo) {
-			result.photos.emplace(id, uploaded.photo);
+		if (uploaded.photoId) {
+			result.photos.emplace(id, uploaded.photoId);
 		} else {
 			LOG(("AyuForward: failed to transfer photo %1 for rich message").arg(id));
 		}
@@ -159,11 +351,7 @@ void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &bl
 			return result;
 		}
 
-		const auto playable = document->isVideoFile()
-			|| document->isGifv()
-			|| document->isSong()
-			|| document->isAudioFile()
-			|| document->isVoiceMessage();
+		const auto video = document.video;
 		const auto path = AyuSync::loadDocumentSync(
 			session,
 			document,
@@ -173,17 +361,18 @@ void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &bl
 		auto uploaded = AyuSync::UploadedFile();
 		if (!path.isEmpty()
 			&& pathInfo.isFile()
-			&& pathInfo.size() == document->size) {
+			&& pathInfo.size() == document.size) {
 			uploaded = AyuSync::uploadFileSync(
 				session,
-				peer,
+				peerId,
 				path,
 				SendMediaType::File,
-				!playable,
-				AyuSync::documentFileName(document));
+				!video,
+				document.name,
+				cancelled);
 		}
-		if (uploaded.document) {
-			result.documents.emplace(id, uploaded.document);
+		if (uploaded.documentId) {
+			result.documents.emplace(id, uploaded.documentId);
 		} else {
 			LOG(("AyuForward: failed to transfer document %1 for rich message").arg(id));
 		}
@@ -194,12 +383,19 @@ void collectMedia(not_null<Main::Session*> session, const std::vector<Block> &bl
 
 [[nodiscard]] bool runOnMainSync(Fn<void()> callback) {
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
-	crl::on_main([latch, callback = std::move(callback)]
+	auto completed = std::make_shared<std::atomic_bool>(false);
+	crl::on_main([latch, completed, callback = std::move(callback)]
 	{
-		callback();
+		try {
+			callback();
+			completed->store(true, std::memory_order_release);
+		} catch (...) {
+			LOG(("AyuForward: main-thread rich callback failed"));
+		}
 		latch->countDown();
 	});
-	return latch->await(std::chrono::minutes(1));
+	return latch->await(std::chrono::minutes(1))
+		&& completed->load(std::memory_order_acquire);
 }
 
 void sanitizeRichText(Iv::RichPage::RichText &text) {
@@ -225,33 +421,51 @@ void sanitizeRichText(Iv::RichPage::RichText &text) {
 	text.text.entities.erase(removed.begin(), removed.end());
 }
 
-void pruneBlocks(not_null<Main::Session*> session, std::vector<Block> &blocks, const RichMedia &remap);
+[[nodiscard]] bool pruneBlocks(
+	not_null<Main::Session*> session,
+	std::vector<Block> &blocks,
+	const UploadedRichMedia &remap,
+	RichTraversalLimits &limits,
+	std::size_t depth);
 
-[[nodiscard]] bool prepareBlock(not_null<Main::Session*> session, Block &block, const RichMedia &remap) {
+[[nodiscard]] bool prepareBlock(
+		not_null<Main::Session*> session,
+		Block &block,
+		const UploadedRichMedia &remap,
+		RichTraversalLimits &limits,
+		std::size_t depth) {
+	if (!limits.enter(depth)
+		|| !IsRichBlockWithinLimits(block)
+		|| !AccountRichBlockPayload(block, limits)) {
+		limits.exceeded = true;
+		return false;
+	}
 	if (!isSerializableKind(block.kind)) {
 		return false;
 	}
 
 	const auto remapPhoto = [&](PhotoId &id, PhotoData *&photo)
 	{
-		const auto resolved = resolvePhoto(session, id, photo);
+		const auto resolved = resolvePhoto(session, id);
 		const auto i = resolved ? remap.photos.find(resolved->id) : remap.photos.end();
 		if (i == remap.photos.end()) {
 			return false;
 		}
-		photo = i->second;
-		id = i->second->id;
+		const auto replacement = session->data().photo(i->second);
+		photo = replacement;
+		id = replacement->id;
 		return true;
 	};
 	const auto remapDocument = [&](DocumentId &id, DocumentData *&document)
 	{
-		const auto resolved = resolveDocument(session, id, document);
+		const auto resolved = resolveDocument(session, id);
 		const auto i = resolved ? remap.documents.find(resolved->id) : remap.documents.end();
 		if (i == remap.documents.end()) {
 			return false;
 		}
-		document = i->second;
-		id = i->second->id;
+		const auto replacement = session->data().document(i->second);
+		document = replacement;
+		id = replacement->id;
 		return true;
 	};
 
@@ -318,26 +532,43 @@ void pruneBlocks(not_null<Main::Session*> session, std::vector<Block> &blocks, c
 		}
 	}
 
-	pruneBlocks(session, block.blocks, remap);
+	if (!pruneBlocks(session, block.blocks, remap, limits, depth + 1)) {
+		return false;
+	}
 	for (auto &item : block.listItems) {
 		sanitizeRichText(item.text);
 		item.anchorId = QString();
-		pruneBlocks(session, item.blocks, remap);
+		if (!pruneBlocks(session, item.blocks, remap, limits, depth + 1)) {
+			return false;
+		}
 	}
 	return true;
 }
 
-void pruneBlocks(not_null<Main::Session*> session, std::vector<Block> &blocks, const RichMedia &remap) {
+
+[[nodiscard]] bool pruneBlocks(
+	not_null<Main::Session*> session,
+	std::vector<Block> &blocks,
+	const UploadedRichMedia &remap,
+	RichTraversalLimits &limits,
+	std::size_t depth) {
 	auto write = blocks.begin();
 	for (auto read = blocks.begin(); read != blocks.end(); ++read) {
-		if (prepareBlock(session, *read, remap)) {
+		if (limits.exceeded) {
+			break;
+		}
+		if (prepareBlock(session, *read, remap, limits, depth)) {
 			if (write != read) {
 				*write = std::move(*read);
 			}
 			++write;
 		}
 	}
+	if (limits.exceeded) {
+		return false;
+	}
 	blocks.erase(write, blocks.end());
+	return true;
 }
 
 } // namespace
@@ -346,8 +577,9 @@ bool forwardRichMessage(
 	not_null<Main::Session*> session,
 	FullMsgId itemId,
 	const Api::SendAction &action,
+	base::weak_ptr<History> targetHistory,
 	Fn<bool()> cancelled) {
-	// session (and everything reached through it -- action.history->peer,
+	// session (and everything reached through it -- targetHistory,
 	// session->data(), etc.) can be destroyed mid-flight if the user logs
 	// out or switches accounts while this runs on a background thread
 	// (this whole call is dispatched via crl::async with no lifetime
@@ -369,33 +601,54 @@ bool forwardRichMessage(
 	if (!source || cancelled()) {
 		return false;
 	}
+	const auto target = SnapshotForwardTarget(session, targetHistory);
+	if (!target || cancelled()) {
+		return false;
+	}
+	const auto peerId = target->peerId;
 
 	struct PrepareState
 	{
 		Iv::RichPage page;
 		RichMedia media;
 		bool premiumBlocked = false;
+		bool valid = true;
 	};
 	const auto prepared = std::make_shared<PrepareState>();
 
 	const auto preparedOk = runOnMainSync([=]
 	{
-		prepared->page = *source;
-		prepared->page.part = false;
-		prepared->page.views = 0;
-		prepared->premiumBlocked = !session->premium()
-			&& Iv::RichPageUsesPremiumFormatting(prepared->page);
+		const auto current = weakSession.get();
+		if (!current || cancelled()) {
+			return;
+		}
+		auto limits = RichTraversalLimits();
+		prepared->valid = collectMedia(
+			current,
+			source->blocks,
+			prepared->media,
+			limits);
+		if (!prepared->valid) {
+			return;
+		}
+		prepared->premiumBlocked = !current->premium()
+			&& Iv::RichPageUsesPremiumFormatting(*source);
 		if (!prepared->premiumBlocked) {
-			collectMedia(session, prepared->page.blocks, prepared->media);
+			prepared->page = *source;
+			prepared->page.part = false;
+			prepared->page.views = 0;
 		}
 	});
-	if (!preparedOk || prepared->premiumBlocked || cancelled()) {
+	if (!preparedOk
+		|| prepared->premiumBlocked
+		|| !prepared->valid
+		|| cancelled()) {
 		return false;
 	}
 
 	const auto uploaded = reuploadMedia(
 		session,
-		action.history->peer,
+		peerId,
 		itemId,
 		prepared->media,
 		cancelled);
@@ -406,12 +659,24 @@ bool forwardRichMessage(
 	const auto serialized = std::make_shared<std::optional<MTPInputRichMessage>>();
 	const auto serializedOk = runOnMainSync([=]
 	{
-		pruneBlocks(session, prepared->page.blocks, uploaded);
+		const auto current = weakSession.get();
+		if (!current || cancelled()) {
+			return;
+		}
+		auto limits = RichTraversalLimits();
+		if (!pruneBlocks(
+				current,
+				prepared->page.blocks,
+				uploaded,
+				limits,
+				0)) {
+			return;
+		}
 		if (prepared->page.blocks.empty()) {
 			return;
 		}
 		const auto result = Iv::SerializeInputRichMessage(
-			session,
+			current,
 			prepared->page,
 			Iv::SerializeInputRichMessageMode::FinalSubmit);
 		if (result.status == Iv::SerializeInputRichMessageStatus::Success) {
@@ -422,7 +687,11 @@ bool forwardRichMessage(
 		return false;
 	}
 
-	return AyuSync::sendRichMessageSync(session, **serialized, action);
+	return AyuSync::sendRichMessageSync(
+		session,
+		**serialized,
+		action,
+		std::move(targetHistory));
 }
 
 } // namespace AyuForward

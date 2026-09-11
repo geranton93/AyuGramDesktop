@@ -1,4 +1,4 @@
-﻿// This is the source code of AyuGram for Desktop.
+// This is the source code of AyuGram for Desktop.
 //
 // We do not and cannot prevent the use of our code,
 // but be respectful and credit the original author.
@@ -10,23 +10,70 @@
 #include "ayu/utils/ayu_mapper.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/unixtime.h"
+#include "data/data_document.h"
 #include "data/data_forum_topic.h"
+#include "data/data_media_types.h"
+#include "data/data_photo.h"
 #include "data/data_session.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_components.h"
+#include "lang/lang_keys.h"
 #include "main/main_session.h"
+
+#include <algorithm>
+#include <new>
 
 namespace AyuMessages {
 
+namespace {
+
+constexpr auto kMaxArchivedMessageBatch = std::size_t(64);
+
+[[nodiscard]] std::string DeletedMediaText(not_null<HistoryItem*> item) {
+	const auto media = item->media();
+	if (!media) {
+		return {};
+	}
+	if (media->photo()) {
+		return tr::lng_in_dlg_photo(tr::now).toStdString();
+	}
+
+	const auto document = media->document();
+	if (!document) {
+		return {};
+	}
+	if (document->isVideoMessage()) {
+		return tr::lng_in_dlg_video_message(tr::now).toStdString();
+	} else if (document->isAnimation()) {
+		return u"GIF"_q.toStdString();
+	} else if (document->isVideoFile()) {
+		return tr::lng_in_dlg_video(tr::now).toStdString();
+	} else if (document->isVoiceMessage()) {
+		return tr::lng_in_dlg_audio(tr::now).toStdString();
+	} else if (document->sticker()) {
+		return tr::lng_in_dlg_sticker(tr::now).toStdString();
+	} else if (document->isAudioFile()) {
+		return tr::lng_in_dlg_audio_file(tr::now).toStdString();
+	}
+	return tr::lng_in_dlg_file(tr::now).toStdString();
+}
+
+} // namespace
+
 template<typename DerivedMessage>
 std::vector<AyuMessageBase> convertToBase(const std::vector<DerivedMessage> &messages) {
-	std::vector<AyuMessageBase> based;
-	based.reserve(messages.size());
-	for (const auto &msg : messages) {
-		based.push_back(static_cast<AyuMessageBase>(msg));
+	try {
+		std::vector<AyuMessageBase> based;
+		based.reserve(messages.size());
+		for (const auto &msg : messages) {
+			based.push_back(static_cast<AyuMessageBase>(msg));
+		}
+		return based;
+	} catch (const std::bad_alloc &) {
+		LOG(("AyuMessages: Failed to materialize archived messages"));
+		return {};
 	}
-	return based;
 }
 
 void map(not_null<HistoryItem*> item, AyuMessageBase &message) {
@@ -74,25 +121,22 @@ void map(not_null<HistoryItem*> item, AyuMessageBase &message) {
 	message.text = serializedText.first;
 	message.textEntities = serializedText.second;
 
-	// todo: implement mapping
-	message.mediaPath = "/";
-	// message.hqThumbPath
-	message.documentType = 0; // document type none
-	// message.documentSerialized
-	// message.thumbsSerialized
-	// message.documentAttributesSerialized
-	// message.mimeType
+	AyuMapper::mapMediaToMessage(item, message);
 }
 
 void addEditedMessage(not_null<HistoryItem *> item) {
-	EditedMessage message;
-	map(item, message);
+	try {
+		EditedMessage message;
+		map(item, message);
 
-	if (message.text.empty()) {
-		return;
+		if (message.text.empty()) {
+			return;
+		}
+
+		AyuDatabase::addEditedMessage(message);
+	} catch (const std::bad_alloc &) {
+		LOG(("AyuMessages: Failed to archive edited message"));
 	}
-
-	AyuDatabase::addEditedMessage(message);
 }
 
 std::vector<AyuMessageBase> getEditedMessages(
@@ -122,32 +166,48 @@ bool hasRevisions(not_null<HistoryItem*> item) {
 }
 
 void addDeletedMessage(not_null<HistoryItem*> item) {
-	DeletedMessage message;
-	map(item, message);
+	try {
+		DeletedMessage message;
+		map(item, message);
 
-	if (message.text.empty()) {
-		return;
+		if (message.text.empty()) {
+			message.text = DeletedMediaText(item);
+		}
+		if (message.text.empty()) {
+			return;
+		}
+
+		AyuDatabase::addDeletedMessage(message);
+	} catch (const std::bad_alloc &) {
+		LOG(("AyuMessages: Failed to archive deleted message"));
 	}
-
-	AyuDatabase::addDeletedMessage(message);
 }
 
 void addDeletedMessages(const std::vector<not_null<HistoryItem*>> &items) {
-	// Mapping N items into one batch insert (one SQLite transaction total)
-	// instead of calling addDeletedMessage per item avoids N separate
-	// begin/insert/commit round trips when a single incoming update
-	// deletes many messages at once (bulk/admin deletes).
-	std::vector<DeletedMessage> messages;
-	messages.reserve(items.size());
-	for (const auto &item : items) {
-		DeletedMessage message;
-		map(item, message);
-		if (!message.text.empty()) {
-			messages.push_back(std::move(message));
+	for (auto offset = std::size_t(0); offset < items.size();) {
+		const auto count = std::min(
+			kMaxArchivedMessageBatch,
+			items.size() - offset);
+		try {
+			std::vector<DeletedMessage> messages;
+			messages.reserve(count);
+			for (auto i = offset; i != offset + count; ++i) {
+				DeletedMessage message;
+				map(items[i], message);
+				if (message.text.empty()) {
+					message.text = DeletedMediaText(items[i]);
+				}
+				if (!message.text.empty()) {
+					messages.push_back(std::move(message));
+				}
+			}
+			AyuDatabase::addDeletedMessages(messages);
+		} catch (const std::bad_alloc &) {
+			LOG(("AyuMessages: Failed to archive deleted messages batch"));
+			return;
 		}
+		offset += count;
 	}
-
-	AyuDatabase::addDeletedMessages(messages);
 }
 
 std::vector<AyuMessageBase> getDeletedMessages(

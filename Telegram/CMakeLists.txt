@@ -25,6 +25,48 @@ add_subdirectory(codegen)
 add_subdirectory(lib_icu)
 # AyuGram filters
 
+set(ayu_whisper_dir "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/whisper.cpp")
+if (EXISTS "${ayu_whisper_dir}/CMakeLists.txt"
+    AND EXISTS "${ayu_whisper_dir}/include/whisper.h")
+    block(SCOPE_FOR VARIABLES)
+        set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.13)
+        set(WHISPER_BUILD_TESTS OFF)
+        set(WHISPER_BUILD_EXAMPLES OFF)
+        set(WHISPER_BUILD_SERVER OFF)
+        set(WHISPER_CURL OFF)
+        set(WHISPER_COREML OFF)
+        set(BUILD_SHARED_LIBS OFF)
+        set(GGML_BACKEND_DL OFF)
+        set(GGML_CUDA OFF)
+        set(GGML_VULKAN OFF)
+        set(GGML_METAL OFF)
+        set(GGML_CCACHE OFF)
+        set(GGML_NATIVE OFF)
+        add_subdirectory(ThirdParty/whisper.cpp whisper_build)
+        if (NOT TARGET whisper)
+            message(FATAL_ERROR
+                "Whisper checkout did not provide the expected whisper target.")
+        endif()
+        if (APPLE AND TARGET ggml-base)
+            target_compile_options(ggml-base PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:-include>
+                $<$<COMPILE_LANGUAGE:CXX>:errno.h>)
+        endif()
+        if (APPLE AND TARGET ggml-cpu)
+            target_compile_options(ggml-cpu PRIVATE -Wno-elaborated-enum-base)
+        endif()
+        if (APPLE AND TARGET ggml-blas)
+            target_compile_options(ggml-blas PRIVATE -Wno-elaborated-enum-base)
+        endif()
+        target_link_libraries(Telegram PRIVATE whisper)
+        target_include_directories(Telegram PRIVATE
+            ThirdParty/whisper.cpp/include
+            ThirdParty/whisper.cpp/ggml/include)
+        target_compile_definitions(Telegram PRIVATE HAVE_WHISPER)
+    endblock()
+endif()
+
 get_filename_component(src_loc SourceFiles REALPATH)
 get_filename_component(res_loc Resources REALPATH)
 
@@ -118,6 +160,7 @@ set(ayugram_files
         ayu/ayu_state.h
         ayu/ayu_settings.cpp
         ayu/ayu_settings.h
+        ayu/ghost_mode_peer_exceptions.h
         ayu/ayu_lang.cpp
         ayu/ayu_lang.h
         ayu/ayu_infra.cpp
@@ -199,6 +242,10 @@ set(ayugram_files
         ayu/ui/boxes/donate_info_box.h
         ayu/ui/boxes/plugin_info_box.cpp
         ayu/ui/boxes/plugin_info_box.h
+        ayu/ui/boxes/remove_media_box.cpp
+        ayu/ui/boxes/remove_media_box.h
+        ayu/ui/boxes/delete_my_messages_box.cpp
+        ayu/ui/boxes/delete_my_messages_box.h
         ayu/ui/components/image_view.cpp
         ayu/ui/components/image_view.h
         ayu/ui/components/icon_picker.cpp
@@ -214,6 +261,8 @@ set(ayugram_files
         ayu/libs/sqlite/sqlite3.c
         ayu/libs/sqlite/sqlite3.h
         ayu/libs/sqlite/sqlite_orm.h
+        ayu/features/hidden_folders/hidden_folders.cpp
+        ayu/features/hidden_folders/hidden_folders.h
         ayu/features/streamer_mode/platform/linux/streamer_mode_linux.cpp
         ayu/features/streamer_mode/platform/linux/streamer_mode_linux.h
         ayu/features/streamer_mode/platform/mac/streamer_mode_mac.mm
@@ -229,10 +278,14 @@ set(ayugram_files
         ayu/features/message_shot/message_shot_theme_state.h
         ayu/features/forward/ayu_forward.cpp
         ayu/features/forward/ayu_forward.h
+        ayu/features/forward/ayu_forward_source.cpp
+        ayu/features/forward/ayu_forward_source.h
         ayu/features/forward/ayu_forward_rich.cpp
         ayu/features/forward/ayu_forward_rich.h
         ayu/features/forward/ayu_sync.cpp
         ayu/features/forward/ayu_sync.h
+        ayu/features/forward/ayu_sync_download.cpp
+        ayu/features/forward/ayu_sync_wait.h
         ayu/features/translator/ayu_translator.cpp
         ayu/features/translator/ayu_translator.h
         ayu/features/translator/ayu_translate_provider.cpp
@@ -245,6 +298,14 @@ set(ayugram_files
         ayu/features/translator/implementations/yandex.h
         ayu/features/translator/implementations/base.cpp
         ayu/features/translator/implementations/base.h
+        ayu/features/stt/download_helper.cpp
+        ayu/features/stt/download_helper.h
+        ayu/features/stt/audio_decoder.cpp
+        ayu/features/stt/audio_decoder.h
+        ayu/features/stt/stt_manager.cpp
+        ayu/features/stt/stt_manager.h
+        ayu/features/stt/stt_transcribe_provider.cpp
+        ayu/features/stt/stt_transcribe_provider.h
         ayu/features/filters/filters_controller.cpp
         ayu/features/filters/filters_controller.h
         ayu/features/filters/filters_cache_controller.cpp
@@ -260,6 +321,14 @@ set(ayugram_files
         info/profile/info_profile_music_button.cpp
         info/profile/info_profile_music_button.h
 )
+
+if (TARGET whisper)
+    nice_target_sources(Telegram ${src_loc}
+    PRIVATE
+        ayu/features/stt/whisper_service.cpp
+        ayu/features/stt/whisper_service.h
+    )
+endif()
 
 if (NOT DESKTOP_APP_DISABLE_SWIFT6)
     telegram_add_apple_swift_runtime(Telegram)
@@ -2360,6 +2429,8 @@ if (APPLE)
     nice_target_sources(Telegram ${src_loc}
     PRIVATE
         tray_accounts_menu.cpp
+        ayu/features/stt/platform/stt_mac.mm
+        ayu/features/stt/platform/stt_mac.h
         media/view/media_view_metal_texture.mm
         media/streaming/media_streaming_native_frame_mac.mm
     )
@@ -2443,8 +2514,10 @@ elseif (APPLE)
         target_link_libraries(Telegram PRIVATE desktop-app::external_iconv)
     endif()
 
-    target_link_frameworks(Telegram PRIVATE CoreBluetooth)
-    target_link_frameworks_weak(Telegram PRIVATE UserNotifications)
+	target_link_frameworks(Telegram PRIVATE CoreBluetooth)
+	target_link_frameworks(Telegram PRIVATE AVFoundation)
+	target_link_frameworks_weak(Telegram PRIVATE UserNotifications)
+    target_link_frameworks_weak(Telegram PRIVATE Speech)
 
     set(icons_path ${CMAKE_CURRENT_SOURCE_DIR}/Telegram/Images.xcassets)
     if (CMAKE_GENERATOR STREQUAL Xcode)
