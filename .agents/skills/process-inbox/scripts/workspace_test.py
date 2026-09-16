@@ -1864,12 +1864,26 @@ class MechanicsTest(unittest.TestCase):
 			self.assertTrue((live / workspace.PORTABLE_MARKER).is_file())
 			self.assertFalse((live / "tdata" / "user_file").exists())
 
-			(live / workspace.PORTABLE_MARKER).unlink()
 			self.assertEqual(
 				workspace.setup_test_account(root),
-				"replaced-manual-live",
+				"reused-marked-live",
 			)
 			self.assertTrue((real / "tdata" / "user_file").is_file())
+
+			(live / workspace.PORTABLE_MARKER).unlink()
+			(live / "newer-data").write_bytes(b"not in preserved copy")
+			before = {
+				str(path.relative_to(root)): path.read_bytes()
+				for path in root.rglob("*") if path.is_file()
+			}
+			with self.assertRaisesRegex(workspace.WorkspaceError, "unmarked"):
+				workspace.setup_test_account(root)
+			after = {
+				str(path.relative_to(root)): path.read_bytes()
+				for path in root.rglob("*") if path.is_file()
+			}
+			self.assertEqual(after, before)
+			(live / workspace.PORTABLE_MARKER).write_text("1\n", encoding="utf-8")
 
 			self.assertEqual(
 				workspace.reset_broken_test_account(root),

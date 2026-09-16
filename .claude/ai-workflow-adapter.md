@@ -3,7 +3,9 @@
 Apply this adapter only when a command explicitly loads it. The shared
 `.agents/skills/` workflow remains authoritative for task selection, artifacts,
 source changes, builds, testing, commits, resumability, and AI publication.
-This file adapts harness mechanics and removes unnecessary text normalization.
+Read `.agents/shared/engineering.md` for portable policy. This adapter supplies
+tool mechanics only; it cannot weaken authorization, account safety, evidence,
+review coverage, or independence gates.
 
 ## Delegation
 
@@ -43,12 +45,14 @@ This file adapts harness mechanics and removes unnecessary text normalization.
   receives that report, the performer receives nothing, and the phase is
   stranded until a human or the scheduler resumes it. If a leaf's artifact has
   not landed, relaunch that phase in the foreground and wait for it in-turn.
-- Run independent leaves that truly share one step — the surviving specialist
-  reviews in an iteration, or assessed-disjoint implementation units — as
-  parallel Agent calls in a single message so they run concurrently and all
-  return together. The mandatory general reviewer is not one of them: it runs
-  alone before them to emit the retirement list, and alone again after their
-  reports exist to own the verdict.
+- Use parallel Agent calls for independent leaves in one step. For the initial
+  source-diff review, launch the general reviewer and all five standard lenses
+  independently without sharing findings; under a capacity limit queue all six.
+  No general-first retirement pass may prune initial coverage. Continue the
+  general reviewer for synthesis only after all reports exist. After fixes,
+  use the canonical focused general plus invalidated-specialist re-review.
+  Assessed-disjoint implementation workers own isolated source/output paths and
+  unique reports; only the coordinator updates shared plan/status artifacts.
 - A long Debug build may run as background Bash; the harness re-invokes the
   session when a background command exits, so do not poll its log with sleep
   loops either.
@@ -68,8 +72,10 @@ This file adapts harness mechanics and removes unnecessary text normalization.
   re-read it before acting, and never treat the last block as authoritative
   merely because it is last.
 - If the first real leaf Agent is rejected before work begins because nested
-  delegation is unavailable, use the shared same-session fallback. Do not
-  treat mere presence of the Agent tool as a successful delegation probe.
+  delegation is unavailable, use same-session checklists only for work that
+  does not require independence. Same-session review is self-review, not an
+  independent approval: preserve it as such and request a fresh reviewer or
+  human for the gate. Do not treat tool presence as a successful delegation probe.
 - Whenever an Agent is asked to run `process-inbox`, `perform-task`, split-task
   routing, discovered-task routing, or pending-task consolidation — the
   orchestrating roles — explicitly tell it to read this adapter completely before the
@@ -141,7 +147,8 @@ shared skill, so do not restate or weaken that routing rule in a leaf prompt.
 The shared Computer Use reference describes Codex's driver. In Claude Code,
 treat that particular driver as unavailable unless an equivalent UI-driver
 tool is actually exposed in the current session. Preserve the same policy:
-`auto` uses the already planned overlay fallback, while `required` reports the
+`auto` uses the planned overlay fallback only when it decides the same claim,
+while `required` reports the
 exact unverified interaction. Driver availability never permits skipping the
 selected runtime, overlay, account-safety, evidence, or other safety checks.
 

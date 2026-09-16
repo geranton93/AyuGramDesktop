@@ -1,9 +1,10 @@
 # Adaptive Evidence Loop Protocol
 
-The portable core of autonomous, tested implementation. perform-task wrappers
-own repository setup, commit boundaries, account safety, and host-specific
-drivers. This protocol owns task-derived evidence selection, execution,
-assessment, recovery, and reporting.
+Read `.agents/shared/engineering.md` for portable authorization, account safety,
+review independence, and candidate-bound evidence requirements. This protocol
+owns task-derived evidence selection, execution, assessment, recovery, and
+reporting. perform-task wrappers supply authorized repository/queue setup,
+commit boundaries, and host-specific drivers; they cannot weaken that policy.
 
 ## Vocabulary
 
@@ -15,7 +16,8 @@ assessment, recovery, and reporting.
 - instrument — one direct way to execute or inspect a changed surface;
 - overlay — disposable Debug-only code for a selected Telegram runtime check;
 - golden tdata — the read-only authenticated test account, required only when a
-  selected Telegram launch uses it.
+  selected Telegram launch uses it; account identity and permitted operations
+  must be explicitly authorized, not inferred from a folder name or marker.
 
 ## Inputs
 
@@ -226,16 +228,20 @@ contract those commands implement.
    `test-run` names every moved file and its destination in `stale_crash_cleared`, refuses to
    launch when the report itself cannot be moved, and leaves a minidump it cannot move in place,
    reported with a null destination.
-3. If `TelegramForcePortable` exists without the marker, it is the user's real data: move it to
-   `real_TelegramForcePortable` when that is absent. If `real_...` already exists, the unmarked
-   live folder is the user's manual restore of that same preserved data — recursively delete the
-   live folder only.
+3. If `TelegramForcePortable` exists without the marker, treat it as real data.
+   If `real_TelegramForcePortable` also exists, REFUSE setup without changing
+   either directory. Coexistence does not prove duplication or grant deletion
+   permission; require the user to resolve the ambiguity non-destructively.
+   When `real_...` is absent, move the live folder there only with explicit
+   authorization to preserve it; otherwise stop before any folder operation.
 4. Deep-copy `test_TelegramForcePortable` to `TelegramForcePortable`, then create the marker file
    `TelegramForcePortable/testing` (any content, e.g. `echo 1`). Never rename, modify, or delete
    the golden folder.
 
-Any live/real folder combination is never a blocker. After SETUP the live folder is a marked test
-copy, the golden folder is untouched, and `real_...` may or may not exist.
+An unmarked live folder coexisting with `real_...` is a safety refusal, not a
+recoverable disposable fixture. Do not bypass it by adding a marker. After
+successful authorized SETUP, the live folder is a marked test copy, the golden
+folder is untouched, and `real_...` may or may not exist.
 
 **NO CLEANUP — the flow performs no folder operations after testing, ever.** The marked test copy
 stays live, and the three folders are never copied, moved, or deleted between testing phases. SETUP
@@ -244,8 +250,9 @@ operation. The flow never restores real data to live: when the user wants manual
 `real_...` to `TelegramForcePortable` themselves (keeping `real_...` in place), and the next SETUP
 handles that unmarked live folder by step 3.
 
-Deletion guard — the only folder the flow may ever delete is a live `TelegramForcePortable` that
-either carries the `testing` marker or coexists with `real_...` (step 3). If the test account
+Deletion guard — only a live `TelegramForcePortable` proven to be the authorized
+disposable test copy and carrying the `testing` marker may be deleted. Coexistence
+with `real_...` never authorizes deletion of an unmarked live folder. If the test account
 breaks mid-loop (login screen, `AUTH_KEY_DUPLICATED`), delete the MARKED live folder (that deletion
 takes the Crashpad database under `tdata/dumps/completed/` with it, so copy out any dump worth
 keeping first), re-run SETUP for a fresh golden copy, and retry once; if it is still broken the run
@@ -269,17 +276,22 @@ and takes down the user's unrelated clients. Every "kill stragglers" / "taskkill
 this path-scoped kill. The workspace helper's `test-run` and `test-cleanup` commands implement it
 on every platform; prefer them over hand-written kill shell.
 
-**Avoid account-fatal calls; cloud data is otherwise fair game.** The overlay must never trigger
-logout / session-termination / account-deletion, and must not wipe the account wholesale. Tests that
-genuinely need those use a separate burner account, not this one. (If a permanent destructive-call
-fuse is later added to the debug build, this is enforced in code; until then it is the
-evidence author's responsibility.) Everything short of that is allowed: this is a test-server account,
-so freely CREATE content in any chats (messages, drafts, tables, media) and freely DELETE or clear
-content that test runs created — including leftovers from previous runs and sessions (e.g. clear
-the self-chat rich compose cloud draft before a run instead of designing around accumulated junk;
-the live test copy is reused across runs and tasks, so local AND cloud state accumulate — reset
-whatever state the test depends on at the start of the run). Don't
-delete anything the user placed on the account by hand unless the task says so.
+**Account copies are not a network safety boundary.** Before launch, record the
+explicitly authorized account and environment, permitted operations, exact
+peers/resources, and fixture ownership in the evidence design. A golden folder,
+`testing` marker, test-server label, or burner account grants no cloud mutation
+permission. Prefer isolated `inject` or `mock-api` fixtures. Live reads also
+require authorized account access and protected, redacted evidence.
+
+Live creation, sending, editing, clearing drafts, uploading, or deletion may
+run only within the explicit operation and target scope. Cleanup needs proof
+that the resource is owned by the authorized test and that removal is permitted;
+leftovers from other runs or sessions are not automatically owned. Never
+modify user-created or ambiguously owned data. Never perform real irreversible
+actions (including logout/session termination, account deletion, payments, or
+destructive remote deletion) without separate explicit permission for that
+action. Mock them in this unattended loop; if mocks cannot decide the claim,
+record the missing authorization/capability and stop at that gate.
 
 ## Design evidence from this task
 
@@ -468,10 +480,12 @@ driver of first resort: prefer
 programmatically triggering every required action and judging the saved logs and captures
 afterwards over any external desktop driver, whether or not one is available. Drive the whole
 task-specific flow inside the Debug binary on the event loop, waiting for observable state,
-logging assertions, capturing the rendered target in-process, and quitting. A locked macOS
-session does not reduce required coverage and is never a testing blocker. The scenario runs
-only when `-testagent` was passed AND the live portable folder carries the `testing` marker,
-so it can never run against real account data. The overlay must:
+logging assertions, capturing the rendered target in-process, and quitting.
+A locked macOS session permits this substitute only when it decides the same
+claim; actual OS input, focus, IME, or native interaction remains unverified
+when unavailable. The scenario runs only with `-testagent` and a live portable
+`testing` marker; those gates do not prove account identity or authorize
+network effects. The overlay must:
 
 - Prefer keeping the first run centralized in `test_scenario.cpp`, but never treat that module as
   a sandbox boundary. After a setup or reachability failure, inject probes, fixtures, callbacks,
@@ -484,8 +498,9 @@ so it can never run against real account data. The overlay must:
   change release behavior; harness calls like `Test::Fire` are runtime no-ops and need no
   guard.
 - Pick a **test strategy** and record it in the spec:
-  `live-data` (use real account data) · `live-mutate` (really create an entity — prefer a
-  throwaway target, clean up after) · `inject` (build fake local state without the network) ·
+  `live-data` (read explicitly authorized test-account data) · `live-mutate`
+  (only explicitly authorized operations on exact owned test targets, with
+  separately scoped cleanup) · `inject` (build fake local state without the network) ·
   `mock-api` (intercept specific requests, return canned responses — for payments/destructive).
   Prefer `inject` over `live-mutate` to avoid account/server accumulation and flake.
 - Express the flow as `Runner` stages with **condition-waits over fixed timers** (an `until`
@@ -590,9 +605,11 @@ This section applies only to selected Telegram runtime or overlay checks. Other
 instruments run their assessed command directly and retain the same exact
 command, environment, exit-code, log, artifact and control evidence.
 
-- On macOS, a locked graphical session disables external UI driving only. Launch `EXE` normally,
-  run the in-binary overlay flow, collect its logs and widget/window grabs, assess them, and clean up.
-  Do not try to unlock the session and do not return BLOCKED because the lock screen is present.
+- On macOS, do not drive or try to unlock a locked session. Run authorized
+  in-binary checks that still decide their original claims and collect their
+  logs/captures. Synthetic Qt events and widget grabs do not prove actual OS
+  input or native integration. Preserve those unmet checks as unverified and
+  use the Computer Use unavailable mapping when they are required.
 - Build with `BUILD`. A single changed TU compiles fast; only the overlay-touched files + link
   rebuild between rounds. On Windows, run the shared exact-path proactive cleanup before every
   build. If the build reports `LNK1104`, `C1041`, access denied, or file in use, follow

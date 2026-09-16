@@ -1,6 +1,6 @@
 # Code Review Style Guide
 
-This file contains style and formatting rules that the review subagent must check and fix. These are mechanical issues that should always be caught during code review.
+This file contains style and formatting rules reviewers must check and report. Reviewers are read-only with respect to source, tests, and shared plans; they write only their assigned review artifacts. The implementation owner applies adjudicated fixes. Follow `.agents/shared/engineering.md` for review independence, evidence, and authorization. These mechanical rules do not replace correctness, safety, or integration review.
 
 ## Empty line before closing brace
 

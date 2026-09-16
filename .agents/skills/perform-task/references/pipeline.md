@@ -15,6 +15,11 @@
 
 ## Contract and inputs
 
+Read `.agents/shared/engineering.md` first for portable safety, authorization,
+review independence, and candidate-bound evidence. This pipeline defines queue
+mechanics only when the existing queue and required transition authorization
+are available; explicit no-build/no-commit/no-helper limits still apply.
+
 Run exactly one already selected `ai-tdesktop` task in its Telegram checkout.
 Do not split it, claim other work, process the inbox, or create a second
 stateful runner. Treat the external `task.md`, its referenced inputs, project
@@ -200,8 +205,10 @@ prompts, plus the host-specific orchestration rules.
 
 - The performer is the only stateful task owner.
 - Probe nested mode with the first real leaf phase. If depth, capacity, or
-  policy rejects that spawn before work begins, execute the same prompt
-  checklists in the performer. This is a supported mode, not degraded failure.
+  policy rejects that spawn before work begins, execute same-session checklists
+  only for work not requiring independence. Same-session assessment/review is
+  self-review, never independent approval. Preserve the handoff and obtain a
+  fresh read-only reviewer or human at every independent gate.
 - In nested mode, use a fresh leaf for context-and-plan, assessment, each
   implementation unit, initial standard-lens reviews, general review,
   review-fix, and evidence authoring. Every leaf must be told not to delegate and
@@ -220,7 +227,9 @@ prompts, plus the host-specific orchestration rules.
   only for genuinely unavailable chat-only visual context.
 - Inherit the parent's model and reasoning level. Do not invent tool fields.
 - Keep implementation units sequential unless the assessed plan proves
-  disjoint write sets and capacity makes parallel edits safe.
+  disjoint write sets, isolated source worktrees/build outputs, and safe
+  interfaces. Workers write only owned paths and unique phase reports; the
+  coordinator alone reconciles shared plan/status and owned-path manifests.
 - Never duplicate the performer or an implementation unit with uncertain
   writes.
 
@@ -283,9 +292,10 @@ Run sequentially:
    result may be produced after source edits by the bounded convergence
    assessment when the retained implementation exposes several independently
    shippable/testable boundaries.
-3. **Implement.** Run one leaf per assessed plan phase. Before each edit,
-   update `work/owned-paths.txt`. A leaf edits only its owned paths and its
-   phase status; it does not commit.
+3. **Implement.** Run one leaf per assessed plan phase. Before each edit, the
+   coordinator updates `work/owned-paths.txt`. A leaf edits only its owned
+   paths and unique phase report; it does not commit or update shared
+   plan/status. The coordinator validates the result and updates that status.
 4. **Pre-review validation.** Run the assessed fast validation in the
    performer. App source normally builds the configured Debug Telegram target;
    isolated scripts, generators, libraries and harness code may use a focused
@@ -393,6 +403,11 @@ assessment on a contract it can simply execute. The cost of getting this wrong
 is not theoretical: a no-diff task that runs the full fanout to convergence
 spends hours reviewing a test design before taking a single measurement, and
 ends where it began — with the code unchanged and the behaviour confirmed.
+
+Reviewers are read-only for source, tests, evidence design, and shared plans;
+they write only assigned review reports. Report evidence-design corrections
+for the coordinator/evidence author to apply, rather than editing the oracle
+while approving it. The implementation owner applies adjudicated fixes.
 
 The general reviewer reads every changed file in full and owns correctness,
 completeness, adjacent integration, unintended regressions, proportionality,
@@ -714,9 +729,10 @@ external-task adaptations:
 - Missing `test_TelegramForcePortable` blocks only a selected Telegram launch.
   Never delete, rename, move, or alter the golden or preserved real account.
   Reuse a marked live test copy under the shared account rules.
-- On locked macOS, replace external driving with the complete in-binary overlay
-  flow. The lock is never a test block and does not reduce logged, geometry, or
-  in-process capture coverage.
+- On locked macOS, use the in-binary overlay only for claims it can decide
+  equivalently. Preserve actual OS-input/native-interaction checks as
+  unverified when unavailable and use the Computer Use unavailable mapping
+  when required. Log and in-process capture coverage do not prove OS input.
 - Use Computer Use only when physical input is the subject. Most UI checks stay
   overlay-driven; visible claims still require tight in-process captures.
 - On terminal exit from an overlay run, call
@@ -850,51 +866,29 @@ When `Discovered: present`, preserve complete task blocks in `result.md`. The
 `continue` scheduler must route them through the same independent-testability
 planner into new unclaimed dated tasks before selecting more shared work.
 
-`Unverified:` records what this run **could not** prove, never what it merely did
-not get to. Before writing a non-`none` value, ask whether this checkout could
-take the measurement now. If it could, the answer is another run and not an
-`Unverified:` line: go back to the test loop and take it, however late that is.
-A gap written here becomes a whole new task that must rebuild this task's
-context, branch, overlay and build before it can measure what this process is
-already holding, so writing one you could have closed trades minutes for days.
+Report tested hosts, architectures, toolchains, build configurations, and exact
+check coverage in `Evidence:`; a source read or one green host does not prove
+another host compiles, links, or behaves identically. `Unverified:` records
+concrete in-scope claims not proved, whether blocked, unavailable, unauthorized,
+or not run. Keep the reason distinct. Never suppress a gap because a future
+build might catch it or assume every platform is tested before merge.
 
-What legitimately belongs here is a gap this checkout cannot close: one that
-needs a second account, funded external value, real server-backed cloud state,
-a purpose-built bot, or hardware this machine does not have. Write it to be
-routable — the exact behavior that shipped without verification, and precisely
-what closing it would require — so the scheduler can record it rather than
-queueing work that would be unstartable the moment it entered the queue.
+Take an available in-scope measurement now when authorized and within the
+bounded campaign. Otherwise retain the honest gap and next valid action;
+unavailable accounts, permissions, native input, hardware, or toolchains are
+not reasons to simulate success or expand scope. An unmet required check
+prevents approval; an informational exposure does not automatically create a
+new queue task. Queue routing remains a separately authorized scheduler action.
 
-Another platform or architecture qualifies only when the diff carries
-non-trivial platform-specific code *and* you can state a concrete reason to
-suspect that platform gets it wrong. Having executed on one host is not itself
-a gap, and neither is the bare existence of a platform-specific surface.
-Portable C++, localization values, layout and styling, and pure logic behave
-the same everywhere the project builds, so one green run on any capable host
-verifies them and this line reads `none`. Name the mechanism and the suspicion
-before writing a platform exposure, and only these count:
-
-- code under `#ifdef` or a platform API, including a platform-specific
-  implementation of a portable interface;
-- filesystem path semantics, case sensitivity, file locking, permissions;
-- process, thread, or event-loop ordering, including teardown and shutdown;
-- anything the task's acceptance criteria state per platform.
-
-Whether the change still compiles and links on another platform is never such
-a gap. Every platform is built and tested before anything merges to `dev` or
-ships, and a build or link break is loud, immediate and free to find: the
-compiler names the file and the line the first time that platform builds.
-An `Unverified:` line for it buys a multi-hour task to learn what the next
-build reports in seconds. This holds for a dependency or submodule pin that
-another platform's toolchain consumes, for compiler flags and the diagnostics
-they enable, for CMake platform branches, and for ABI and symbol resolution.
-Say what moved in the result prose if it is worth saying; do not write it here.
-
-A diff with none of these is verified once. Do not write a platform exposure
-for it, and never write one merely because a batch plan named a host other
-than the one that claimed the task. Cross-platform code is verified once,
-approved, and left alone; a second host re-measuring the same portable
-mechanism buys no evidence and costs a whole task.
+Name concrete exposures rather than asserting universal portability or listing
+every untested host as debt. Relevant mechanisms include differing compiler/Qt
+APIs, CMake branches, dependency/submodule pins, ABI/symbol resolution,
+filesystem semantics, font/DPI/layout behavior, threading/event loops,
+teardown, and explicit per-platform acceptance criteria. A demonstrated defect
+or suspicion is not required to report absent compile/link/runtime evidence.
+Conversely, absence of a host alone does not establish a defect or require an
+invented follow-up. State the actually tested scope and justify remaining
+exposures against this diff and its acceptance/risk contract.
 
 Scope it to this task's own change, with its acceptance criteria as the boundary.
 `Unverified:` is for behavior **this diff** shipped without proof — apply the same
@@ -955,9 +949,9 @@ delays finishing the work actually in hand.
 - A Windows file-lock build error follows the shared bounded exact-checkout
   recovery. Only exhaustion or an unsafe/non-owned holder stops the run and
   asks the human; the task remains `in-progress`.
-- A locked macOS session and the resulting unavailable Computer Use driver
-  never stop or block the task; continue with the complete in-binary overlay
-  flow.
+- A locked macOS session permits equivalent overlay checks to continue, not
+  automatic approval of actual OS-input/native-interaction claims. Record unmet
+  required checks through the Computer Use unavailable mapping.
 - Missing optional screenshots or mockups never block.
 - Never silently pass unverified behavior. Surface every blocked or partially
   verified task with exact `work/test.md`, `work/result.md`, and evidence paths.

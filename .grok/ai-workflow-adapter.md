@@ -3,7 +3,9 @@
 Apply this adapter only when a command or shared skill explicitly loads it.
 The shared `.agents/skills/` workflow remains authoritative for task
 selection, artifacts, source changes, builds, testing, commits,
-resumability, and AI publication. This file adapts harness mechanics.
+resumability, and AI publication. Read `.agents/shared/engineering.md` for
+portable policy. This adapter supplies tool mechanics only; it cannot weaken
+authorization, account safety, evidence, review coverage, or independence gates.
 
 ## Delegation
 
@@ -24,8 +26,10 @@ resumability, and AI publication. This file adapts harness mechanics.
   `interrupt_agent`, or `spawn_agent`. Do not invent them. Do not launch
   `grok`, `claude`, or `codex` from Bash.
 - Do not use the `workflow` tool to reimplement this pipeline.
-- Do not pass `isolation: worktree`. The shared `workspace.py` helper owns
-  every AI and inbox worktree.
+- Do not assume `isolation: worktree` exists in the tool schema. Queue helpers
+  own AI/inbox worktrees. If separately authorized isolated source worktrees
+  and output directories cannot be provided for concurrent implementation,
+  serialize implementation; do not waive the shared isolation rule.
 - Omit `model` and any reasoning field so every child inherits this
   session. Do not invent tool arguments the schema does not expose.
 - Use `subagent_type: "general-purpose"` for inbox, performer, routing,
@@ -67,13 +71,17 @@ must also say:
 
 ```text
 You are a Grok subagent at depth 1. Do not call spawn_subagent.
-Run every phase leaf as a same-session checklist from
-.agents/skills/perform-task/references/phase-prompts.md.
+Use same-session checklists from
+.agents/skills/perform-task/references/phase-prompts.md for permitted work.
+A same-session review is self-review, never independent approval. At an
+independent assessment/review gate, save the handoff and stop for a fresh
+reviewer launched by the top-level coordinator or for human review.
 ```
 
-That is the shared same-session fallback, selected from the first
-performer, not a degraded failure. Do not tell a continue-spawned
-performer that it may use bounded leaf delegation.
+This fallback preserves implementation progress but cannot satisfy an
+independence gate. The scheduler must arrange fresh read-only reviews with
+separate report paths or request human review before approval. Do not tell a
+continue-spawned performer that it may use nested leaf delegation.
 
 ### `/perform-task` or `/process-inbox` in this session
 
@@ -81,15 +89,18 @@ This session is the orchestrator and may spawn leaves.
 
 - Run each leaf as one blocking `spawn_subagent` with a self-contained
   prompt. Do not tell leaf phase agents to read this adapter.
-- Spawn independent leaves that truly share one step — the surviving
-  specialist reviews in an iteration, or assessed-disjoint implementation
-  units — as parallel `spawn_subagent` calls in a single message. The
-  mandatory general reviewer is not one of them: it runs alone before them
-  to emit the retirement list, and alone again after their reports exist to
-  own the verdict.
+- Use parallel `spawn_subagent` calls for independent leaves in one step.
+  For the initial source-diff review, launch the general reviewer and all five
+  standard lenses without shared findings; queue all six under a capacity limit.
+  No general-first retirement pass may prune initial coverage. Synthesis waits
+  for all reports. After fixes, use the canonical focused general plus only
+  invalidated specialists. Assessed-disjoint implementation workers own
+  isolated source/output paths and unique reports; only the coordinator
+  updates shared plan/status artifacts.
 - If the first real leaf is rejected before work begins because nested
-  delegation is unavailable, use the shared same-session fallback for
-  the rest of the run.
+  delegation is unavailable, use same-session checklists for permitted work,
+  but stop for a fresh reviewer or human at an independence gate. Never label
+  same-session self-review independent.
 
 ## Text handling
 
@@ -113,7 +124,8 @@ publication gate.
 The shared Computer Use reference describes Codex's driver. In Grok,
 treat that driver as unavailable unless an equivalent UI-driver tool is
 actually exposed in the current session. Preserve the same policy: `auto`
-uses the already planned overlay fallback, while `required` reports the
+uses the planned overlay fallback only when it decides the same claim, while
+`required` reports the
 exact unverified interaction. Driver availability never permits skipping
 selected runtime, overlay, account-safety, evidence, or other safety checks.
 

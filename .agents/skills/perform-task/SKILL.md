@@ -5,6 +5,13 @@ description: Resolve, start or resume, implement, review, test, and publish exac
 
 # Perform One AI Task
 
+Read `.agents/shared/engineering.md` first: it owns portable authorization,
+account safety, independent review, and candidate-bound evidence policy.
+This skill adds queue lifecycle mechanics only when the existing queue and
+required transition authorization are available. Loading it alone authorizes
+no helper execution, source commit, or publication; honor explicit restrictions.
+Runtime adapters change tool mechanics, never these gates.
+
 When running in Grok Build, read `.grok/ai-workflow-adapter.md` completely
 before any other host-specific delegation rule and apply its substitutions.
 
@@ -190,11 +197,11 @@ because the scenario did not start. Apply the shared crash diagnostics and debug
 fallback before changing an account fixture. An empty or unusable dump requires live
 debugging after at most one confirmation run; it never supports a fixture verdict.
 
-A locked macOS session is not an environment stop or evidence blocker for a
-selected Telegram runtime check. Skip interactive Computer Use and complete
-the same coverage through the in-binary overlay: drive the flow, log/assert,
-capture widgets or windows, quit, and assess the saved artifacts. Non-app
-instruments are unaffected.
+A locked macOS session does not block checks whose original claims an
+in-binary overlay can decide. Skip interactive Computer Use, run those checks,
+and assess saved logs/captures. Actual OS input, focus, IME, and native
+interaction remain unverified when unavailable; use the Computer Use unavailable
+mapping for required checks. Never relabel synthetic events as native proof.
 
 A Windows build-output lock is not an immediate environment stop. Follow the
 shared bounded recovery contract, including exact-path cleanup before builds.

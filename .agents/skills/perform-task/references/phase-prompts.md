@@ -15,7 +15,9 @@
 Use these templates as subagent messages on any host. Use them as same-session
 checklists only for intentional current-session build work, Phase 7, the
 small-task fast path, or when delegation is unavailable from the start at the
-current agent depth. Replace
+current agent depth. Read `.agents/shared/engineering.md` for portable policy.
+Same-session assessment/review is self-review, not independent approval; stop
+at an independent gate for a fresh read-only reviewer or human. Replace
 every applicable placeholder: `<TASK>`, `<TASK_ID>`, `<WORK_DIR>`,
 `<PROJECT_FILE>`, `<PREVIOUS_CONTEXT>`, `<BUILD>`, `<N>`,
 `<OWNED_WRITE_SET>`, `<R>`, `<R-1>`, and `<phase-name>`.
@@ -44,7 +46,7 @@ every applicable placeholder: `<TASK>`, `<TASK_ID>`, `<WORK_DIR>`,
   is the completion signal; there is no polling, no heartbeat-mtime ladder,
   and no stall windows. On return, validate the artifact-based completion
   checks below before treating the phase as done.
-- Spawn the independent leaves of one step — the five initial Phase 6 lenses,
+- Spawn the independent leaves of one step — the initial Phase 6 general reviewer and all five lenses,
   or assessed-disjoint Phase 4 units —
   as parallel Agent calls in a single message so they run concurrently.
 - If a returned leaf fails its completion check, retry that disposable phase
@@ -58,12 +60,13 @@ every applicable placeholder: `<TASK>`, `<TASK_ID>`, `<WORK_DIR>`,
 - When this session is a top-level `/perform-task`, run each leaf as one
   blocking `spawn_subagent` (`background: false`). The call returning is
   the completion signal; validate the artifact checks below on return.
-- Spawn the independent leaves of one step — the five initial Phase 6 lenses,
+- Spawn the independent leaves of one step — the initial Phase 6 general reviewer and all five lenses,
   or assessed-disjoint Phase 4
   units — as parallel `spawn_subagent` calls in a single message.
 - When this session is a `/continue` child, do not call `spawn_subagent`.
-  Run every phase as a same-session checklist. That is the supported
-  depth-1 fallback, not a retry.
+  Use same-session checklists only for permitted work. At an independent
+  assessment/review gate, preserve the handoff for a fresh reviewer launched
+  by the top-level coordinator or human review; self-review cannot pass it.
 - If a returned leaf fails its completion check, retry that disposable
   phase once in a fresh `spawn_subagent` with more specific instructions
   before stopping to ask the user.
@@ -126,7 +129,7 @@ Do not restate the full context, plan, diff, or long reasoning in the chat reply
   non-empty. For a `Visual: layout` task, `visual.md` must also satisfy the
   visual design completion check below.
 - Phase 3 is complete only when `plan.md` contains both `Phases:` in the Status section and `Assessed: yes`, records a rejection outcome (`Fast-Path: rejected` or `Approach: rejected`) that sends the performer back to a fresh Phase 1 leaf, or records `Scope: split-required` and has a complete `split-proposal.md` that stops source work for queue rescoping.
-- Phase 4 is complete only when the target phase checkbox changed to checked and the touched-file list matches the owned write set, or the blocker explains any mismatch.
+- Phase 4 is complete only after the coordinator validates the unique phase report and owned touched-file list, then updates the shared phase checkbox; unresolved mismatches are blockers.
 - Phase 5 is complete only when the build outcome is known and the build checkbox is updated on success.
 - An initial Phase 6 lens is complete only when all five `review1-<lens>.md` reports exist with `## Verdict: NOT_APPLICABLE | CLEAN | FINDINGS` and a non-empty `## Checked` section. `NOT_APPLICABLE` must tie its proof to the complete diff; `CLEAN`/`FINDINGS` must name the relevant full files and adjacent surfaces reviewed.
 - Initial Phase 6 general review is complete only when `review1-general.md` and `review1.md` exist with a `## Verdict:` line, a non-empty `## Coverage` section, all five lens reports are accepted or an unsupported bailout has been rerun, and every evidence check is reconciled against the actual diff.
@@ -476,7 +479,10 @@ Do not implement code in this phase.
 
 ## Phase 4: Implementation
 
-Run one implementation unit per plan phase. Keep implementation phases sequential by default. Parallelize only if their write sets are disjoint and the plan makes that safe.
+Run one implementation unit per plan phase. Keep implementation sequential by
+default. Parallelize only with assessed disjoint interfaces/write sets and
+separate authorized source worktrees/build outputs. Only the coordinator writes
+shared plan/status and ownership manifests; workers use unique phase reports.
 
 For each phase in the plan that is not yet marked as done, use this prompt:
 
@@ -499,16 +505,18 @@ Rules:
 - Follow the plan precisely.
 - Follow AGENTS.md coding conventions.
 - You are not alone in the codebase. Respect existing changes and do not revert unrelated work.
-- Do not modify AI task files except the Status section in plan.md and the matching
-  `logs/phase-<phase-name>.progress.md` heartbeat required by this prompt.
-- When done, update plan.md Status section: change `- [ ] Phase <N>: ...` to `- [x] Phase <N>: ...`
+- Do not modify shared AI task files, including plan.md Status. Write only the
+  assigned unique phase report and matching
+  `logs/phase-<phase-name>.progress.md` heartbeat.
+- Report Phase <N> completion and exact touched paths; the coordinator validates
+  them and updates the shared plan checkbox.
 - Do not work on other phases.
 
 When finished, report what you did, which files you changed, and any issues encountered.
 ```
 
 After each implementation phase:
-1. Use a narrow read or search to confirm the status line was updated.
+1. Validate the phase report, then have the coordinator update the shared status line.
 2. Verify the owned write set and touched files with a small diff summary such as `git diff --name-only`.
 3. If more phases remain, run the next implementation phase.
 4. If all phases are done, proceed to pre-review validation.
@@ -543,13 +551,17 @@ Steps:
 2. Run the assessed command from plan.md at the repository root. When it is the
    Telegram Debug build, use `<BUILD>`; on WSL that is the repository Docker
    entry point and native Windows CMake must not touch that tree.
-3. If validation succeeds, update plan.md: change `- [ ] Pre-review validation` to `- [x] Pre-review validation`.
+3. If validation succeeds, report exact command, exit status, and log path; the coordinator verifies the evidence and updates the Pre-review validation checkbox.
 4. If validation fails:
    a. Read the error messages carefully
    b. Read the relevant source files
    c. Fix the errors in accordance with the plan and AGENTS.md conventions
-   d. Rebuild and repeat until the build passes
-   e. Update plan.md status when done
+   d. Allow at most two task-owned repair/rebuild cycles after the first failure.
+      Stop earlier for repeated unchanged failures, unsafe scope, or an
+      unavailable prerequisite. At the cap, return evidence and request
+      independent reassessment or human direction; never loop until pass.
+   e. Report the outcome; the coordinator updates shared plan/status only on
+      verified success. Build-lock retries follow their separate bounded budget.
 
 Rules:
 - Only fix task-owned validation failures. Do not refactor or improve code beyond what is needed for a passing check.
@@ -566,7 +578,7 @@ When finished, report the build result and which files, if any, you changed.
 
 Selection happens with the diff in hand. Assessment records expected surfaces
 and escalation triggers but does not choose reviewers. The mandatory general
-review runs for every task. The optional library is lifetime, reuse, structure,
+review runs for every task. The five standard lenses are lifetime, reuse, structure,
 performance, and security; the general reviewer may add a specialist-<domain>
 review for another material risk.
 
@@ -609,7 +621,9 @@ violation, or a material maintenance defect.
 
 ~~~text
 You are an independent <LENS> specialist reviewing one Telegram Desktop task.
-You are a leaf and must not delegate.
+You are a leaf and must not delegate. Source, tests, evidence design, and
+shared plans are read-only; write only assigned review/progress reports.
+Report fixes and oracle corrections rather than applying them.
 
 Read:
 - the task specification
@@ -656,8 +670,10 @@ Write <WORK_DIR>/review<R>-<LENS>.md:
 For CLEAN/FINDINGS: relevant full files and adjacent surfaces examined.>
 
 ## Findings
-<For each: title, file/line, Severity: BLOCKING | NON_BLOCKING, concrete
-failure, and specific fix. Omit when empty.>
+<For each: title, file/line, Severity: BLOCKING | NON_BLOCKING, trigger,
+causal mechanism, observable impact, evidence, confidence, minimal correction
+direction, and regression oracle. Distinguish confirmed defects from measurement
+hypotheses and optional improvements. Omit when empty.>
 
 ## Verdict: NOT_APPLICABLE | CLEAN | FINDINGS
 ~~~
@@ -753,6 +769,9 @@ from its saved work rather than duplicating it.
 ~~~text
 You are the mandatory general reviewer for one Telegram Desktop task,
 initial review, pass <PASS> of 2. You are a leaf and must not delegate.
+Read source, tests, evidence design, and shared plans without editing them;
+write only assigned review/progress reports. Report corrections for the
+implementation owner or evidence author; do not apply them while reviewing.
 
 Read:
 - the task specification and every referenced input
@@ -834,6 +853,8 @@ reconciliation. NEEDS_CHANGES requires at least one blocking finding.
 ~~~text
 You are the mandatory focused general reviewer for one Telegram Desktop task,
 review round <R> after a blocking fix. You are a leaf and must not delegate.
+Source, tests, evidence design, and shared plans are read-only; write only
+assigned review/progress reports, never fixes or oracle changes.
 
 Read:
 - the task specification, AGENTS.md, and REVIEW.md;
@@ -1133,7 +1154,9 @@ For review iterations, include the iteration and lens in the file name, for exam
    `spawn_subagent` call per leaf — parallel calls in a single message
    for independent leaves of the same step — with self-contained
    prompts and `background: false`. From a `/continue` child, use the
-   same prompt files as same-session checklists and do not spawn.
+   same prompt files as checklists for permitted work and do not spawn.
+   Independent gates require a fresh reviewer from the coordinator or a human;
+   a same-session checklist cannot supply independent approval.
 3. When a spawn returns, or when a same-session checklist finishes,
    validate the expected artifacts or code changes with small shell
    summaries and the completion checks above.

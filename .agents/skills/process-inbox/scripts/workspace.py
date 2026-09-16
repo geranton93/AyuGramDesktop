@@ -1846,8 +1846,10 @@ def setup_test_account(root):
 		return "reused-marked-live"
 	if live.exists():
 		if real.exists():
-			shutil.rmtree(live)
-			state = "replaced-manual-live"
+			raise WorkspaceError(
+				f"Refusing to replace an unmarked live folder: {live}. "
+				f"Preserved data already exists at {real}; resolve ownership manually."
+			)
 		else:
 			live.rename(real)
 			state = "preserved-real"
