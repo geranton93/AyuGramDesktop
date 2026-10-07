@@ -1,0 +1,684 @@
+Telegram/SourceFiles/tests/filter_cache_test.cpp
+  s_4bbdbd385c4b7d::t_48af708ea0d5f5 1-40,49-79,102-124
+  s_4bbdbd385c4b7d::t_7b504f1273db0a 91-92,94-95,97-101
+  s_4bbdbd385c4b7d::t_91a63361907e25 80-90
+  s_4bbdbd385c4b7d::t_723f6d1ab33acb 93,96
+  s_4bbdbd385c4b7d::t_53ebddd4b94cbe 41-48
+  s_4bbdbd385c4b7d::t_c756fd8a67b0a3 125-126
+Telegram/SourceFiles/ayu/utils/telegram_helpers.cpp
+  s_4bbdbd385c4b7d::t_1cf67379495cff 26,587,1707-1709,1718-1734
+  s_4bbdbd385c4b7d::t_9371771a5fb3ad 1735
+Telegram/SourceFiles/ayu/features/forward/ayu_forward.cpp
+  s_4bbdbd385c4b7d::t_85b66b8c4390fe 87,107,121,162,168,221,224,257,305,307,376,490,495,567,582,591,596,632,638,640,645-646,663,669,755,759,767,785,790,807
+Telegram/SourceFiles/ayu/features/forward/ayu_forward_source.cpp
+  s_4bbdbd385c4b7d::t_85b66b8c4390fe 164,167,501
+Telegram/SourceFiles/ayu/features/forward/ayu_forward_rich.cpp
+  s_4bbdbd385c4b7d::t_85b66b8c4390fe 253,292,425-438,495,500-514,608,621
+Telegram/SourceFiles/ayu/features/filters/filter_cache.h
+  s_4bbdbd385c4b7d::t_48af708ea0d5f5 1-22,24-39,41-48,54-57,63-68,72-83,91-113,118-122,169-170,175-197
+  s_4bbdbd385c4b7d::t_1c9bb33ef6098b 49-53
+  s_4bbdbd385c4b7d::t_90161119bef870 114,116-117
+  s_4bbdbd385c4b7d::t_53ebddd4b94cbe 40,58-62,69-71,86-88,125,130-132,134,136,140,146-155,158,162,165-168,171-173
+  s_4bbdbd385c4b7d::t_8791530f151510 23,156-157,159-160,163-164
+  s_4bbdbd385c4b7d::t_7b504f1273db0a 161
+  s_4bbdbd385c4b7d::t_91a63361907e25 84-85,89-90,123-124,126-129,133,135,137-139,141-145,174
+  s_4bbdbd385c4b7d::t_f26c581224c923 115
+.clang-tidy
+  s_4bbdbd385c4b7d::t_89cf8809420765 1-38
+.claude/settings.json
+  s_4bbdbd385c4b7d::t_6192f0bffbb6d3 1-16
+.github/workflows/ayu-ui-checks.yml
+  s_4bbdbd385c4b7d::t_05f1a462080ac3 1-27
+.gitmodules
+  s_4bbdbd385c4b7d::t_e60e844013c983 24
+Telegram/CMakeLists.txt
+  s_4bbdbd385c4b7d::t_3f8590a49e80dd 312-313
+Telegram/Resources/icons/chat/unsupported_plane.svg
+  s_4bbdbd385c4b7d::t_bc646040f8128f 2
+Telegram/Resources/icons/photo_editor/camera.svg
+  s_4bbdbd385c4b7d::t_524d961a200d7e 1-4
+Telegram/Resources/langs/lang.strings
+  s_4bbdbd385c4b7d::t_94cd0ec98c4ea1 1310,1409-1411,5381
+Telegram/Resources/uwp/AppX/AppxManifest.xml
+  s_4bbdbd385c4b7d::t_239a35b0b0709c 13
+Telegram/Resources/winrc/Telegram.rc
+  s_4bbdbd385c4b7d::t_f69759fc4a4967 47-48,65,68
+Telegram/Resources/winrc/Updater.rc
+  s_4bbdbd385c4b7d::t_09fd4249066092 38-39,56,59
+Telegram/SourceFiles/_other/packer.cpp
+  s_4bbdbd385c4b7d::t_16350f6564e752 51
+Telegram/SourceFiles/api/api_sending.cpp
+  s_4bbdbd385c4b7d::t_9ab4b856b02743 192-193,501,761-768,1064-1065,1189,1191,1194,1206,1210-1213,1219,1289-1291,1302,1314
+Telegram/SourceFiles/api/api_suggest_post.cpp
+  s_4bbdbd385c4b7d::t_71e1455dcfb80f 375-379
+Telegram/SourceFiles/api/api_updates.cpp
+  s_4bbdbd385c4b7d::t_0bd8e1dc9a3536 1019-1021,1061-1063,1351,1725
+Telegram/SourceFiles/api/api_user_names.cpp
+  s_4bbdbd385c4b7d::t_cdc41d6fafdf47 86-87,108-109,268,271-272
+Telegram/SourceFiles/apiwrap.cpp
+  s_4bbdbd385c4b7d::t_26349db1c4526d 1457,1467-1469,1471-1472,1505-1507,1509-1510,3897,3901,3919,3923,4295,4543-4544,4550,4796
+Telegram/SourceFiles/ayu/ayu_url_handlers.cpp
+  s_4bbdbd385c4b7d::t_3ac0be22af11e6 236-270
+Telegram/SourceFiles/ayu/ayu_url_handlers.h
+  s_4bbdbd385c4b7d::t_708257f6e01c43 12-13,45-47
+Telegram/SourceFiles/ayu/features/filters/filter_regex.h
+  s_4bbdbd385c4b7d::t_e1ba051e940224 1-34
+Telegram/SourceFiles/ayu/features/filters/filters_cache_controller.cpp
+  s_4bbdbd385c4b7d::t_653a643a6b7f21 10,17,42-46,150-151,156,161-162,176-178,180-181,187-188
+Telegram/SourceFiles/ayu/features/filters/filters_controller.cpp
+  s_4bbdbd385c4b7d::t_3201189e1b43c0 11-12,23,31-35,65-70,73,156,198,202,206
+Telegram/SourceFiles/ayu/features/forward/ayu_forward.h
+  s_4bbdbd385c4b7d::t_bb92abe8d60d53 36,38,51,76,84,90
+Telegram/SourceFiles/ayu/features/forward/ayu_forward_rich.h
+  s_4bbdbd385c4b7d::t_a6c14205e5e258 18
+Telegram/SourceFiles/ayu/features/forward/ayu_forward_source.h
+  s_4bbdbd385c4b7d::t_15b69b8482d4e1 14
+Telegram/SourceFiles/ayu/features/forward/ayu_sync.cpp
+  s_4bbdbd385c4b7d::t_cf287c93138ad1 47,54,60,82,86,91,106,110,143,151,157,176,181,186,198,205,288,295,500,504,601,607,620-621,625-633,635-637,642,645,648,651,654-655,661,666-669,672-674
+Telegram/SourceFiles/ayu/features/forward/ayu_sync.h
+  s_4bbdbd385c4b7d::t_6b29ad186323ec 74,78,82,89,94,97,102,106,111,118,127,130
+Telegram/SourceFiles/ayu/features/forward/ayu_sync_download.cpp
+  s_4bbdbd385c4b7d::t_70f488f0d8656c 273,276,354,357,446,450,486,490,630,634
+Telegram/SourceFiles/ayu/features/translator/ayu_translate_provider.cpp
+  s_4bbdbd385c4b7d::t_b721ec40bb708e 36
+Telegram/SourceFiles/ayu/ui/boxes/plugin_info_box.cpp
+  s_4bbdbd385c4b7d::t_d2b5082c10a850 10,104-108,535
+Telegram/SourceFiles/ayu/ui/context_menu/context_menu.cpp
+  s_4bbdbd385c4b7d::t_9f89560172065a 238,246-248,253-259,276-279,789,793,842,846,856,860,932,945
+Telegram/SourceFiles/ayu/utils/telegram_helpers.h
+  s_4bbdbd385c4b7d::t_adef5b72e6835b 134-138
+Telegram/SourceFiles/boxes/connection_box.cpp
+  s_4bbdbd385c4b7d::t_b2d0405d8a5cdd 124-126,128,137-139,340-345,352-356,1586,1597-1599,1697,1703,1894-1896,2584-2586
+Telegram/SourceFiles/boxes/create_poll_box.cpp
+  s_4bbdbd385c4b7d::t_a4f67df3ea21dd 601-602,3319-3320,3336-3337
+Telegram/SourceFiles/boxes/edit_privacy_box.cpp
+  s_4bbdbd385c4b7d::t_588cf67b798574 1149-1151
+Telegram/SourceFiles/boxes/language_box.cpp
+  s_4bbdbd385c4b7d::t_99a16ff74f6a04 1496
+Telegram/SourceFiles/boxes/peer_list_box.cpp
+  s_4bbdbd385c4b7d::t_39afb0fbc13260 1702-1706,1754-1758
+Telegram/SourceFiles/boxes/peers/add_participants_box.cpp
+  s_4bbdbd385c4b7d::t_8abd2e1aa6507b 841,843
+Telegram/SourceFiles/boxes/peers/edit_participants_box.cpp
+  s_4bbdbd385c4b7d::t_40c9bbbcee606b 825-835,1377-1379,1440-1441,1448-1450
+Telegram/SourceFiles/boxes/peers/edit_participants_box.h
+  s_4bbdbd385c4b7d::t_becffb4a551407 267-269
+Telegram/SourceFiles/boxes/peers/peer_short_info_box.cpp
+  s_4bbdbd385c4b7d::t_9f1afb9318a0e7 290-292,310
+Telegram/SourceFiles/boxes/premium_preview_box.cpp
+  s_4bbdbd385c4b7d::t_b1928d2376f692 1329-1337,1491-1492
+Telegram/SourceFiles/boxes/self_destruction_box.cpp
+  s_4bbdbd385c4b7d::t_6c1f4dd80b239d 133
+Telegram/SourceFiles/boxes/send_files_box.cpp
+  s_4bbdbd385c4b7d::t_684bdc32ccf7fd 1305-1312,1494-1496,2630-2634,2690-2692
+Telegram/SourceFiles/boxes/share_box.cpp
+  s_4bbdbd385c4b7d::t_97d58fae49a737 1027-1032,1205-1206,1343,1350-1352,1377-1378,1898,1902,1934,1938
+Telegram/SourceFiles/boxes/star_gift_box.cpp
+  s_4bbdbd385c4b7d::t_63115a9bd12741 4703
+Telegram/SourceFiles/boxes/star_gift_cover_box.cpp
+  s_4bbdbd385c4b7d::t_84bb90e05192be 1179
+Telegram/SourceFiles/boxes/sticker_creator_box.cpp
+  s_4bbdbd385c4b7d::t_0ff6a9bc4efeee 16,57-61,285,295-299,321,337-338,340,348-349,354-357,363-368,394,537,544,557,634,662,669,697,703-706,723,726-730,736,852,862,887-912
+Telegram/SourceFiles/boxes/sticker_creator_box.h
+  s_4bbdbd385c4b7d::t_03e899c1a0ddd2 40-46
+Telegram/SourceFiles/boxes/sticker_set_box.cpp
+  s_4bbdbd385c4b7d::t_d547c3a301745b 14-15,23-24,26-27,33,35,60-62,64-69,72,77,111-114,120,129,138-139,141-142,145-148,150,152,155-159,166-167,187,208,233-397,430,433,436,493,502,509-511,567,581-582,627-628,634,682,737-743,797-798,835,838,881-883,885,1110,1113,1149,1152,1160-1161,1184,1204,1206-1207,1274-1277,1292-1303,1305-1306,1309-1331,1335-1354,1369-1371,1396-1414,1421,1423,1425-1426,1428,1463-1464,1476,1552,1565,1676-1693,1817,1849-1850,1852,1969,2031-2034,2114-2117,2122,2162-2171,2173-2177,2181,2190-2191,2195-2197,2200,2207-2209,2229,2232,2263,2385-2386,2474,2508,2515,2528,2534,2539-2546,2549,2558,2614,2687,2694-2695,2699,2722,2727,2734-2735,2771-2773,2775,2800,2815-2818,2839,2852-2854,2865,2870-2871,2873,2876,2885,2909,2913-2914,2916,2919,2923-2960,2970,2985,3013
+Telegram/SourceFiles/boxes/sticker_set_box.h
+  s_4bbdbd385c4b7d::t_137035f38e9228 11
+Telegram/SourceFiles/boxes/stickers_box.cpp
+  s_4bbdbd385c4b7d::t_9b8836f4c49726 8,10-16,18,20,22,25-29,33-37,40-41,45,59-64,66-72,110,122-124,141,165-169,173-175,177,191,196-198,204,221,228-229,231,237-239,252-253,267-268,275,286-288,290,378,388,529,532,606-608,628-630,676,766-770,787,790-794,812,825-827,836-846,857-859,861,863,887,903,907,928,966-971,1011,1076,1129-1131,1133,1135,1137-1138,1141-1142,1223,1271-1275,1280,1322,1324,1329,1338-1341,1345-1351,1353,1371-1372,1374-1405,1411-1413,1425-1427,1429-1434,1437-1444,1447,1459,1461-1463,1467-1471,1492,1495-1496,1498-1502,1507,1510-1511,1513-1514,1518,1524-1530,1543,1546-1548,1576-1578,1597-1600,1607,1623,1664,1688,1702-1705,1707-1711,1726-1731,1734-1735,1744-1746,1748-1753,1772-1777,1792-1795,1807,1815,1817,1821-1829,1831-1838,1861-1865,1874-1877,1880,1883,1890,1892,1899,1901-1909,1911-1912,1921-1928,1940-1941,1943-1951,1954-1964,1976-1977,1990-1995,2000-2003,2013,2018-2019,2025-2032,2036,2064-2070,2074,2095,2104,2127,2130,2192,2214-2216,2218-2232,2236-2246,2257-2259,2265-2269,2291-2300,2302,2323,2333,2349-2350,2360-2361,2381,2383,2397-2402,2410,2414,2420,2432-2436,2442-2443,2446-2447,2450-2451,2455,2457,2460-2462,2466,2468-2470,2483-2484,2489,2518-2523,2539-2541,2545-2547,2551-2552,2566,2568-2570,2591,2593,2595-2597,2600,2603,2607-2608,2611,2615,2618,2623-2624,2627-2630,2632,2645,2648-2649,2652-2656,2660-2661,2668,2672,2677-2678,2680,2682,2692-2697,2699-2700,2702-2704,2706-2710,2714-2715,2717,2726-2729,2742,2763,2801-2809,2812,2815,2844-2846,2854-2861,2889-2893
+Telegram/SourceFiles/boxes/stickers_box.h
+  s_4bbdbd385c4b7d::t_23b0aa6f6221c3 11-12,78,87,105,108,121-122,124
+Telegram/SourceFiles/boxes/url_auth_box.cpp
+  s_4bbdbd385c4b7d::t_8c45eef0757f6d 403-404,554,633-636,657,683-686
+Telegram/SourceFiles/calls/calls_call.cpp
+  s_4bbdbd385c4b7d::t_0e6536db3ce674 880-882
+Telegram/SourceFiles/calls/calls_emoji_fingerprint.cpp
+  s_4bbdbd385c4b7d::t_86d5b905505331 437-439
+Telegram/SourceFiles/calls/calls_top_bar.cpp
+  s_4bbdbd385c4b7d::t_f14af20a51245d 796
+Telegram/SourceFiles/calls/calls_userpic.cpp
+  s_4bbdbd385c4b7d::t_7184cac97d655e 191,194
+Telegram/SourceFiles/chat_helpers/chat_helpers.style
+  s_4bbdbd385c4b7d::t_5aa81b6d767131 157,492,635-640,835
+Telegram/SourceFiles/chat_helpers/compose/compose_features.h
+  s_4bbdbd385c4b7d::t_059194a237b64e 25
+Telegram/SourceFiles/chat_helpers/emoji_list_widget.cpp
+  s_4bbdbd385c4b7d::t_67166391f205de 1872,1880,2377,2383,2503,3098,4021-4025
+Telegram/SourceFiles/chat_helpers/field_autocomplete.cpp
+  s_4bbdbd385c4b7d::t_c4388205f7bc28 10-22,26,30-31,33,35,38,40-47,53-54,59,77-86,88-92,127-136,142-144,155-157,166,171,371,373,498-502,506,508-513,518,530-532,534,539,542,544,551,574,578,586,599,601-604,610,615-618,623-625,629,632-633,636-638,640-641,643-649,651,655,657-663,668-669,683-687,700,708,725,730,742-756,767-768,774-776,788-791,794-801,805,838,911-913,915-920,922,924,926,928,930-932,934-947,954,970-974,997-1001,1007,1035,1039,1053-1074,1077-1084,1124,1126-1129,1132-1171,1173-1179,1181-1187,1189,1191-1214,1216-1242,1245-1290,1292-1322,1325-1326,1328-1371,1373,1375-1393,1395-1453,1460-1462,1504,1507,1509,1542-1547,1567-1568,1593-1595,1597-1599,1621,1623-1625,1648-1650,1689,1696-1697,1752-1774,1795,1871,1913-1914,1916-1924,1929-1930,2062-2063,2153-2154
+Telegram/SourceFiles/chat_helpers/field_autocomplete.h
+  s_4bbdbd385c4b7d::t_343225e5bbdba1 11,13-14,72-73,110-111,154,187,195
+Telegram/SourceFiles/chat_helpers/gifs_list_widget.cpp
+  s_4bbdbd385c4b7d::t_8d366104beee90 116,544
+Telegram/SourceFiles/chat_helpers/gifs_list_widget.h
+  s_4bbdbd385c4b7d::t_231571eb05e9aa 64,181
+Telegram/SourceFiles/chat_helpers/message_field.cpp
+  s_4bbdbd385c4b7d::t_ca2b95e7a58e60 1261
+Telegram/SourceFiles/chat_helpers/spellchecker_common.cpp
+  s_4bbdbd385c4b7d::t_a8bbe9c0dc5060 353-354,356,360-366
+Telegram/SourceFiles/chat_helpers/stickers_list_footer.cpp
+  s_4bbdbd385c4b7d::t_feac1a07a43341 682-687,855-858,887,937,975
+Telegram/SourceFiles/chat_helpers/stickers_list_widget.cpp
+  s_4bbdbd385c4b7d::t_06fcaeca7f52f7 249-251,333-336,421,472,486,512,613,618-620,986-1048,1615,1621,1629,1887,2494-2497,2531-2542,2877-2879,2920,3685-3687,3725-3728,3801-3802
+Telegram/SourceFiles/chat_helpers/stickers_list_widget.h
+  s_4bbdbd385c4b7d::t_585821dc08507a 86,108,237-244,252-253,324-326,513-517,556
+Telegram/SourceFiles/chat_helpers/tabbed_panel.cpp
+  s_4bbdbd385c4b7d::t_51f5e6b9dbf767 214-215
+Telegram/SourceFiles/chat_helpers/tabbed_selector.cpp
+  s_4bbdbd385c4b7d::t_a6325c9b1c00cf 405-412,423,654-655,674,685,761-764,852,920-925,941,944-945,975-978,981,983,1329,1362,1365,1367
+Telegram/SourceFiles/chat_helpers/tabbed_selector.h
+  s_4bbdbd385c4b7d::t_3637a27d5b138e 87,89,153,289
+Telegram/SourceFiles/core/application.cpp
+  s_4bbdbd385c4b7d::t_0c1d443125627f 385-387,1247,1253,1497,1516-1517
+Telegram/SourceFiles/core/application.h
+  s_4bbdbd385c4b7d::t_9d465b9b8f1509 182
+Telegram/SourceFiles/core/click_handler_types.cpp
+  s_4bbdbd385c4b7d::t_2edb6d18c62a5a 50,319-322
+Telegram/SourceFiles/core/core_settings.cpp
+  s_4bbdbd385c4b7d::t_704987a2a9d114 363-364,414-415,502-503,551-552
+Telegram/SourceFiles/core/crash_report_window.cpp
+  s_4bbdbd385c4b7d::t_acd4afc109e221 364-367,375-376
+Telegram/SourceFiles/core/external_control.cpp
+  s_4bbdbd385c4b7d::t_072ea4d159ceeb 260-265,269,318
+Telegram/SourceFiles/core/launcher.cpp
+  s_4bbdbd385c4b7d::t_af138c3ed95fec 525-529
+Telegram/SourceFiles/core/sandbox.cpp
+  s_4bbdbd385c4b7d::t_c615326cf1ce34 55-106,350,415-417,553,568-571,573,575-589,591-593,595,597,599,601,603-606,610,612,615-636,643,656,828
+Telegram/SourceFiles/core/sandbox.h
+  s_4bbdbd385c4b7d::t_4d924bd4d159de 84-88
+Telegram/SourceFiles/core/ui_integration.cpp
+  s_4bbdbd385c4b7d::t_4921fa6cd63e32 448-452
+Telegram/SourceFiles/core/version.h
+  s_4bbdbd385c4b7d::t_ed43364885df3d 25-26
+Telegram/SourceFiles/data/components/ephemeral_messages.cpp
+  s_4bbdbd385c4b7d::t_df65aa7f485d96 423
+Telegram/SourceFiles/data/data_chat.h
+  s_4bbdbd385c4b7d::t_ac5107b5e066e3 99
+Telegram/SourceFiles/data/data_messages.cpp
+  s_4bbdbd385c4b7d::t_6b7e6cf710af8e 28-29,267-268
+Telegram/SourceFiles/data/data_pts_waiter.cpp
+  s_4bbdbd385c4b7d::t_40c15f213f2c40 176
+Telegram/SourceFiles/data/stickers/data_stickers.cpp
+  s_4bbdbd385c4b7d::t_9c3bdf13800038 1844
+Telegram/SourceFiles/dialogs/dialogs.style
+  s_4bbdbd385c4b7d::t_1ed6d0119d43d4 215-216
+Telegram/SourceFiles/dialogs/dialogs_inner_widget.cpp
+  s_4bbdbd385c4b7d::t_cfcf890d473b77 1279,1415-1419,1493-1497,1537-1541,1628-1632,1715-1719,2783,2984,3048-3049,3512,3623-3624,3856-3857,4403-4404,5824-5825,5838,5840-5841,5843-5844
+Telegram/SourceFiles/dialogs/dialogs_inner_widget.h
+  s_4bbdbd385c4b7d::t_1608f0a296036d 152,618
+Telegram/SourceFiles/dialogs/dialogs_row.cpp
+  s_4bbdbd385c4b7d::t_46a40c18c769cc 840
+Telegram/SourceFiles/dialogs/dialogs_widget.cpp
+  s_4bbdbd385c4b7d::t_8eed3fb9cda630 44,513-516,903,906-907,909,915,954,1028-1037,1039,1041,1045,1047,2144-2145,2337,2611-2688,2823-2824,3010,4687-4689,4848-4850
+Telegram/SourceFiles/dialogs/dialogs_widget.h
+  s_4bbdbd385c4b7d::t_8d49bbe527bf57 215-221,438,462
+Telegram/SourceFiles/dialogs/ui/dialogs_layout.cpp
+  s_4bbdbd385c4b7d::t_3a1a353c213780 483,489-491,494,1037,1039-1041,1058-1065,1072-1074
+Telegram/SourceFiles/dialogs/ui/dialogs_stories_content.cpp
+  s_4bbdbd385c4b7d::t_0f8d8978ae5266 62-65,77,88
+Telegram/SourceFiles/dialogs/ui/dialogs_stories_list.cpp
+  s_4bbdbd385c4b7d::t_1575b507fea09b 829
+Telegram/SourceFiles/dialogs/ui/top_peers_strip.cpp
+  s_4bbdbd385c4b7d::t_fb2dc849756b4d 227
+Telegram/SourceFiles/editor/controllers/stickers_panel_controller.cpp
+  s_4bbdbd385c4b7d::t_818a92ffe37e66 37,56-59
+Telegram/SourceFiles/editor/controllers/stickers_panel_controller.h
+  s_4bbdbd385c4b7d::t_7a6971da427578 38
+Telegram/SourceFiles/editor/editor_paint.cpp
+  s_4bbdbd385c4b7d::t_b23b77c58bf2c6 11,19,23,42,85,92-93,122-123,175-179,183,185-190,568-573,575-602,605-607,609-631,633-652,654-666,713-730
+Telegram/SourceFiles/editor/editor_paint.h
+  s_4bbdbd385c4b7d::t_b152732b1bf799 22-25,40,73,96-102,114
+Telegram/SourceFiles/editor/photo_editor.cpp
+  s_4bbdbd385c4b7d::t_5d62743da376dd 373-375
+Telegram/SourceFiles/editor/photo_editor_common.cpp
+  s_4bbdbd385c4b7d::t_6d39d44ff904d0 11,191-192,196,203
+Telegram/SourceFiles/editor/photo_editor_common.h
+  s_4bbdbd385c4b7d::t_f79d1f1312c458 47
+Telegram/SourceFiles/editor/photo_editor_content.cpp
+  s_4bbdbd385c4b7d::t_7f232ffa514d3c 16-18,36,54,294-301,305-320,323,331-335,340
+Telegram/SourceFiles/editor/photo_editor_content.h
+  s_4bbdbd385c4b7d::t_6ccb77223564f3 52,56,59-60,70,78
+Telegram/SourceFiles/editor/photo_editor_layer_widget.cpp
+  s_4bbdbd385c4b7d::t_be949b67c4b70a 31-32,71-75
+Telegram/SourceFiles/editor/photo_editor_layer_widget.h
+  s_4bbdbd385c4b7d::t_042b3757cb9277 39-40
+Telegram/SourceFiles/editor/scene/scene.cpp
+  s_4bbdbd385c4b7d::t_aa068e543ca11d 10,689-693,701-702
+Telegram/SourceFiles/editor/scene/scene_item_animated.cpp
+  s_4bbdbd385c4b7d::t_f27be559bab0a7 1-93
+Telegram/SourceFiles/editor/scene/scene_item_animated.h
+  s_4bbdbd385c4b7d::t_7f02df8337daa7 1-48
+Telegram/SourceFiles/editor/scene/scene_item_sticker.cpp
+  s_4bbdbd385c4b7d::t_a641b0d1d4d792 27,153,155-161,213-215
+Telegram/SourceFiles/editor/scene/scene_item_sticker.h
+  s_4bbdbd385c4b7d::t_68e127fcbcec35 10,23,35-39,44-45
+Telegram/SourceFiles/editor/scene/scene_item_video.cpp
+  s_4bbdbd385c4b7d::t_277270c9bdfc26 1-151
+Telegram/SourceFiles/editor/scene/scene_item_video.h
+  s_4bbdbd385c4b7d::t_bc66b5a47ae67a 1-59
+Telegram/SourceFiles/export/view/export_view_progress.cpp
+  s_4bbdbd385c4b7d::t_38396f1f4f0825 211-212
+Telegram/SourceFiles/export/view/export_view_top_bar.cpp
+  s_4bbdbd385c4b7d::t_705c54775c7d78 65
+Telegram/SourceFiles/history/admin_log/history_admin_log_inner.cpp
+  s_4bbdbd385c4b7d::t_ae831e71e3006f 198-200,203-205,244-245,249-251,2493,2498-2504,3123,3127,3180-3181,3185-3186
+Telegram/SourceFiles/history/admin_log/history_admin_log_section.cpp
+  s_4bbdbd385c4b7d::t_fb9e5ebe852ae2 401-402
+Telegram/SourceFiles/history/history_drag_area.cpp
+  s_4bbdbd385c4b7d::t_5a12e48e976f63 192,312-320
+Telegram/SourceFiles/history/history_inner_widget.cpp
+  s_4bbdbd385c4b7d::t_14e30364f435c3 649-665,1154-1156,1159-1161,1214-1215,1219-1221,1273-1276,1280,1795-1797,1841,2035-2042,2090-2099,4568,4622,4624,4626-4627,4634,4872,4881,4883,4885-4886,5619-5623,5672-5676
+Telegram/SourceFiles/history/history_item.cpp
+  s_4bbdbd385c4b7d::t_3834e4b6188988 109-111,554,572,1841-1844,1931,2889-2890,2893,2896-2897,3312,4148-4154,4169
+Telegram/SourceFiles/history/history_item_components.cpp
+  s_4bbdbd385c4b7d::t_7cc17a87ba3fe4 956,967,985,987,1007,1037,1625-1626,1634-1635
+Telegram/SourceFiles/history/history_item_helpers.cpp
+  s_4bbdbd385c4b7d::t_01eff879f749f2 1461
+Telegram/SourceFiles/history/history_view_pull_to_next_channel.cpp
+  s_4bbdbd385c4b7d::t_62dbe98418207f 1047-1049
+Telegram/SourceFiles/history/history_widget.cpp
+  s_4bbdbd385c4b7d::t_43449b1ee93311 1987-1988,7250,7595,9014,11570
+Telegram/SourceFiles/history/view/controls/history_view_compose_controls.cpp
+  s_4bbdbd385c4b7d::t_ae023644807413 154,816,2073,3417-3418,3427,4968,4977,5069-5070,5180
+Telegram/SourceFiles/history/view/history_view_bottom_info.cpp
+  s_4bbdbd385c4b7d::t_60fc00305ae2c4 569,573-574
+Telegram/SourceFiles/history/view/history_view_chat_section.cpp
+  s_4bbdbd385c4b7d::t_8ca928ca7bc6f9 810-817,6090-6098
+Telegram/SourceFiles/history/view/history_view_element.cpp
+  s_4bbdbd385c4b7d::t_d1985a7ae6239f 814,1120,1554,1637-1640
+Telegram/SourceFiles/history/view/history_view_list_widget.cpp
+  s_4bbdbd385c4b7d::t_7ba0a01c238869 403-405,408-410,453-454,458-460,512-515,519,3277-3279,3323,4318-4325,4373-4382,5206-5210,5247-5251,5314
+Telegram/SourceFiles/history/view/history_view_message.cpp
+  s_4bbdbd385c4b7d::t_17379ec838d7bb 1045,1762-1764,2278,2337,2339,6748
+Telegram/SourceFiles/history/view/history_view_reaction_preview.cpp
+  s_4bbdbd385c4b7d::t_273f451f4655d9 13,41,45-46,49-56,58,122,440
+Telegram/SourceFiles/history/view/history_view_read_metrics_tracker.cpp
+  s_4bbdbd385c4b7d::t_37257b72d25a32 320,322,324,327
+Telegram/SourceFiles/history/view/history_view_service_message.cpp
+  s_4bbdbd385c4b7d::t_717e588d0b3662 442,453,538-542,590-594,598,656
+Telegram/SourceFiles/history/view/history_view_top_bar_widget.cpp
+  s_4bbdbd385c4b7d::t_70e0c832c10ab4 1195-1198
+Telegram/SourceFiles/history/view/history_view_welcome_messages_section.cpp
+  s_4bbdbd385c4b7d::t_bdafff3d7e7715 49-51,167-170
+Telegram/SourceFiles/history/view/media/history_view_document.cpp
+  s_4bbdbd385c4b7d::t_41457bbf70676c 420,455-457,1961-1963
+Telegram/SourceFiles/history/view/media/history_view_document.h
+  s_4bbdbd385c4b7d::t_64402e04bde674 185
+Telegram/SourceFiles/history/view/media/history_view_game.cpp
+  s_4bbdbd385c4b7d::t_dea1b2f1a11167 111-113
+Telegram/SourceFiles/history/view/media/history_view_gif.cpp
+  s_4bbdbd385c4b7d::t_93768b55f2ea40 108-109,141-144,294-296,417,425,468,482-487,549,551,621,1009-1011,1356,1367,1369-1370,1462-1464,1539,2012,2363,2430,2745-2747
+Telegram/SourceFiles/history/view/media/history_view_invoice.cpp
+  s_4bbdbd385c4b7d::t_d7d2d050d4e72b 37-38,145,354,367
+Telegram/SourceFiles/history/view/media/history_view_location.cpp
+  s_4bbdbd385c4b7d::t_fecf7e3597f93c 310-311,315-319,322-326,368-372,375-379,427-429,436-438,715-717,731-733
+Telegram/SourceFiles/history/view/media/history_view_media.cpp
+  s_4bbdbd385c4b7d::t_cea3f94107ef89 223
+Telegram/SourceFiles/history/view/media/history_view_media_common.cpp
+  s_4bbdbd385c4b7d::t_1cfbdcf07d3707 339
+Telegram/SourceFiles/history/view/media/history_view_photo.cpp
+  s_4bbdbd385c4b7d::t_eb22a14caa623a 76-77,257-259,264-269,289,292,306-307,315,318-320,327,347
+Telegram/SourceFiles/history/view/media/history_view_web_page.cpp
+  s_4bbdbd385c4b7d::t_28860e945e8e68 1107
+Telegram/SourceFiles/history/view/reactions/history_view_reactions.cpp
+  s_4bbdbd385c4b7d::t_55e9ef47bfbcf7 640-641
+Telegram/SourceFiles/info/bot/starref/info_bot_starref_common.cpp
+  s_4bbdbd385c4b7d::t_ae1188df89222f 182
+Telegram/SourceFiles/info/common_groups/info_common_groups_inner_widget.cpp
+  s_4bbdbd385c4b7d::t_8eeb6899721f29 234-235,237
+Telegram/SourceFiles/info/global_media/info_global_media_provider.cpp
+  s_4bbdbd385c4b7d::t_4a0d187f5c61fa 238
+Telegram/SourceFiles/info/info_content_widget.cpp
+  s_4bbdbd385c4b7d::t_5a0815bd9e1f10 113-119,204-210,378-392
+Telegram/SourceFiles/info/info_content_widget.h
+  s_4bbdbd385c4b7d::t_eb6c10303a51a0 231,259-260
+Telegram/SourceFiles/info/info_layer_widget.cpp
+  s_4bbdbd385c4b7d::t_28cedc31c6e8a6 207
+Telegram/SourceFiles/info/media/info_media_grid_zoom.cpp
+  s_4bbdbd385c4b7d::t_b2c90e1e3948d1 210-211
+Telegram/SourceFiles/info/media/info_media_list_section.cpp
+  s_4bbdbd385c4b7d::t_520f49c55894af 179-180
+Telegram/SourceFiles/info/media/info_media_list_widget.cpp
+  s_4bbdbd385c4b7d::t_8daf23feecdb60 2140,2244-2245
+Telegram/SourceFiles/info/media/info_media_provider.cpp
+  s_4bbdbd385c4b7d::t_b3abe4c5170d7b 252
+Telegram/SourceFiles/info/polls/info_polls_results_inner_widget.cpp
+  s_4bbdbd385c4b7d::t_391abd0411dcfc 747
+Telegram/SourceFiles/info/profile/info_profile_actions.cpp
+  s_4bbdbd385c4b7d::t_eee42c84c1ebaa 1529,1536,1540,1557-1583,1586-1588,1594-1596,1598-1599,1779,1972,2980,2990-2991,2994
+Telegram/SourceFiles/info/profile/info_profile_inner_widget.cpp
+  s_4bbdbd385c4b7d::t_0e05cf33c13276 513,525
+Telegram/SourceFiles/info/profile/info_profile_members.cpp
+  s_4bbdbd385c4b7d::t_130c3c93186455 76
+Telegram/SourceFiles/info/profile/info_profile_top_bar.cpp
+  s_4bbdbd385c4b7d::t_dd04d8d96eed03 578-583,2829-2833,2837-2839
+Telegram/SourceFiles/info/profile/info_profile_widget.cpp
+  s_4bbdbd385c4b7d::t_dbaf81549eb5fa 97-104,136
+Telegram/SourceFiles/info/profile/info_profile_widget.h
+  s_4bbdbd385c4b7d::t_2c0cf45348b9b8 23,59-60,73
+Telegram/SourceFiles/info/profile/tabs/adapters/info_profile_tab_members.cpp
+  s_4bbdbd385c4b7d::t_a1bfdcff749a5f 23-26,116-127
+Telegram/SourceFiles/info/profile/tabs/info_profile_tab_content.h
+  s_4bbdbd385c4b7d::t_ac0522818b9265 43-46,69-70,72
+Telegram/SourceFiles/info/profile/tabs/info_profile_tabs_host.cpp
+  s_4bbdbd385c4b7d::t_4c09b893ee8e04 490-518,612-617
+Telegram/SourceFiles/info/profile/tabs/info_profile_tabs_host.h
+  s_4bbdbd385c4b7d::t_e2b64ef9a4c109 31-36,69-71,133
+Telegram/SourceFiles/info/reactions_list/info_reactions_list_widget.cpp
+  s_4bbdbd385c4b7d::t_df59840404a0e8 149
+Telegram/SourceFiles/info/requests_list/info_requests_list_widget.cpp
+  s_4bbdbd385c4b7d::t_b3457e28275a56 119
+Telegram/SourceFiles/info/saved/info_saved_music_provider.cpp
+  s_4bbdbd385c4b7d::t_bd72c8cde63a39 145
+Telegram/SourceFiles/info/similar_peers/info_similar_peers_widget.cpp
+  s_4bbdbd385c4b7d::t_ca9b0f881094c5 361
+Telegram/SourceFiles/info/stories/info_stories_provider.cpp
+  s_4bbdbd385c4b7d::t_d48d962680c425 161
+Telegram/SourceFiles/info/stories/info_stories_widget.cpp
+  s_4bbdbd385c4b7d::t_d998ab125fb835 101
+Telegram/SourceFiles/inline_bots/bot_attach_web_view.cpp
+  s_4bbdbd385c4b7d::t_25dcb2c81e6839 1347
+Telegram/SourceFiles/inline_bots/inline_bot_layout_internal.cpp
+  s_4bbdbd385c4b7d::t_6abce8076b0a66 139,605-606,696,845-847,889-891,948-949,1292-1293,1323,1348,1412-1413,1482-1484,1487-1489,1493,1510,1555-1557,1564-1566,1585,1589,1628-1629,1650-1651,1730-1732,1735-1737,1756,1844-1846,1909-1910
+Telegram/SourceFiles/inline_bots/inline_results_widget.cpp
+  s_4bbdbd385c4b7d::t_6820afac985e00 100-102
+Telegram/SourceFiles/intro/intro_step.cpp
+  s_4bbdbd385c4b7d::t_90dd18930a423d 471-472,474-475,500
+Telegram/SourceFiles/iv/editor/iv_editor_session.cpp
+  s_4bbdbd385c4b7d::t_0d455625444f20 113,131,153-160,162,915,2046,2062,2086
+Telegram/SourceFiles/iv/editor/iv_editor_widget.cpp
+  s_4bbdbd385c4b7d::t_250e33b4aa15bd 8972-8976
+Telegram/SourceFiles/iv/markdown/iv_markdown_view.cpp
+  s_4bbdbd385c4b7d::t_6e056ec0b08cb8 966-967
+Telegram/SourceFiles/lang/lang_tag.cpp
+  s_4bbdbd385c4b7d::t_482d15ccb8d722 993,1015
+Telegram/SourceFiles/layout/abstract_layout_item.cpp
+  s_4bbdbd385c4b7d::t_829d1db4227b5c 21
+Telegram/SourceFiles/logs.cpp
+  s_4bbdbd385c4b7d::t_26380906c1db00 281
+Telegram/SourceFiles/main/main_session.cpp
+  s_4bbdbd385c4b7d::t_a77730bd5e5abc 189,194-198,202,204
+Telegram/SourceFiles/mainwidget.cpp
+  s_4bbdbd385c4b7d::t_d87150d10bd6b7 2736,3268
+Telegram/SourceFiles/mainwidget.h
+  s_4bbdbd385c4b7d::t_c23716f04bcf48 132
+Telegram/SourceFiles/mainwindow.cpp
+  s_4bbdbd385c4b7d::t_615e141e196f8b 773,780
+Telegram/SourceFiles/mainwindow.h
+  s_4bbdbd385c4b7d::t_8ab866aa0c980f 78
+Telegram/SourceFiles/media/audio/media_audio.cpp
+  s_4bbdbd385c4b7d::t_27238994a99226 320,907-910,1073,1081,1600,1604-1606
+Telegram/SourceFiles/media/audio/media_audio.h
+  s_4bbdbd385c4b7d::t_e901a05b0ed384 406,410
+Telegram/SourceFiles/media/audio/media_audio_capture.cpp
+  s_4bbdbd385c4b7d::t_4fea6275e4701f 69,73,75,247-249,516,668,670-673,726-728,730-734,739,745
+Telegram/SourceFiles/media/audio/media_audio_ffmpeg_loader.cpp
+  s_4bbdbd385c4b7d::t_f1432c740c0af0 100-102,135-137
+Telegram/SourceFiles/media/audio/media_audio_loaders.cpp
+  s_4bbdbd385c4b7d::t_e15fc6cce21814 354-356
+Telegram/SourceFiles/media/clip/media_clip_ffmpeg.cpp
+  s_4bbdbd385c4b7d::t_b1df95e086c55c 168,221-226
+Telegram/SourceFiles/media/clip/media_clip_reader.cpp
+  s_4bbdbd385c4b7d::t_5b128c1e8e9632 83-96,100-105
+Telegram/SourceFiles/media/clip/media_clip_reader.h
+  s_4bbdbd385c4b7d::t_459ad2211c0576 199
+Telegram/SourceFiles/media/player/media_player_button.cpp
+  s_4bbdbd385c4b7d::t_3507e8acb47dd7 49,67
+Telegram/SourceFiles/media/player/media_player_float.cpp
+  s_4bbdbd385c4b7d::t_703f12fc682546 263
+Telegram/SourceFiles/media/player/media_player_panel.cpp
+  s_4bbdbd385c4b7d::t_a980a2d94028e2 100,133-136
+Telegram/SourceFiles/media/player/media_player_widget.cpp
+  s_4bbdbd385c4b7d::t_e4eed6595597c0 681-682
+Telegram/SourceFiles/media/stories/media_stories_reactions.cpp
+  s_4bbdbd385c4b7d::t_4c4449caf37d4d 752
+Telegram/SourceFiles/media/streaming/media_streaming_reader.cpp
+  s_4bbdbd385c4b7d::t_dad08a54175261 1332
+Telegram/SourceFiles/media/streaming/media_streaming_video_track.cpp
+  s_4bbdbd385c4b7d::t_8e93bdf8698ec8 33-40,331-334,891,921-923,1000-1001
+Telegram/SourceFiles/media/streaming/media_streaming_video_track.h
+  s_4bbdbd385c4b7d::t_62b12ecb168f3d 124
+Telegram/SourceFiles/media/system_media_controls_manager.cpp
+  s_4bbdbd385c4b7d::t_c612a5f4eef5f7 153,183,276
+Telegram/SourceFiles/media/system_media_controls_manager.h
+  s_4bbdbd385c4b7d::t_5d55490487b43d 56
+Telegram/SourceFiles/media/view/media_view.style
+  s_4bbdbd385c4b7d::t_af5b5fbef19c02 664-667,989-998
+Telegram/SourceFiles/media/view/media_view_overlay_opengl.cpp
+  s_4bbdbd385c4b7d::t_35e115ff9515d9 172
+Telegram/SourceFiles/media/view/media_view_overlay_rhi.cpp
+  s_4bbdbd385c4b7d::t_cd943e7235b144 483-484
+Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp
+  s_4bbdbd385c4b7d::t_63eb3f4b880e40 165-172,1334-1337,1867,2229,2823-2824,2826-2827,2926-2927,2943-2944,2963-2966,2977-2978,2980-2981,4222,4530-4534,4913,4941-4947,5639-5641,6104,6376,7034,7324,7509,7648-7651,7653-7656,8746
+Telegram/SourceFiles/media/view/media_view_playback_progress.cpp
+  s_4bbdbd385c4b7d::t_e2d8a78fb913dc 66-68,101
+Telegram/SourceFiles/menu/menu_item_download_files.cpp
+  s_4bbdbd385c4b7d::t_546f41e00be5f9 261-263,293-295
+Telegram/SourceFiles/menu/menu_mark_as_read.cpp
+  s_4bbdbd385c4b7d::t_2ebf44320a3734 18,75-84,201,203,205-208,222
+Telegram/SourceFiles/menu/menu_mark_as_read.h
+  s_4bbdbd385c4b7d::t_c5d7b7669e665e 40-45,61,63
+Telegram/SourceFiles/mtproto/connection_resolving.cpp
+  s_4bbdbd385c4b7d::t_bb1329cf0128d9 188-189
+Telegram/SourceFiles/mtproto/mtp_instance.cpp
+  s_4bbdbd385c4b7d::t_c3cce8ad58f7a0 676,688,1003,1108,1486,1560,1610
+Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
+  s_4bbdbd385c4b7d::t_290bbb7707050c 16,175-177,180,182-187,196-264,307-308,328-358,363,366,370,372-379,389-473,482-483,485
+Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
+  s_4bbdbd385c4b7d::t_bb274b344ba9b3 42-51,69-74
+Telegram/SourceFiles/mtproto/session_private.cpp
+  s_4bbdbd385c4b7d::t_92a6b1d171b916 1177
+Telegram/SourceFiles/mtproto/web_proxy/web_proxy_transport.cpp
+  s_4bbdbd385c4b7d::t_b2885b5c7977a3 1603,1609-1611,1623,1675,1683
+Telegram/SourceFiles/mtproto/web_proxy/web_proxy_webview.cpp
+  s_4bbdbd385c4b7d::t_62329ceb97f448 58,398
+Telegram/SourceFiles/overview/overview_layout.cpp
+  s_4bbdbd385c4b7d::t_5372458085e200 436,440,443-445,698,702,705-707,947,2152-2153,2250-2254,2257-2260,2264,2278-2282,2285-2288,2316-2321,2328,2338-2343,2492-2497,2503,2507-2512,2576
+Telegram/SourceFiles/passport/ui/passport_details_row.cpp
+  s_4bbdbd385c4b7d::t_d1d72275f2b49f 729-734
+Telegram/SourceFiles/payments/ui/payments_reaction_box.cpp
+  s_4bbdbd385c4b7d::t_39a7ed122d8083 212-213
+Telegram/SourceFiles/platform/mac/global_menu_mac.mm
+  s_4bbdbd385c4b7d::t_9bd4a9c35a90d3 59-63,344-345,361-364,401-403,409-413
+Telegram/SourceFiles/platform/mac/main_window_mac.mm
+  s_4bbdbd385c4b7d::t_07500082df37e2 187-189
+Telegram/SourceFiles/platform/mac/specific_mac.mm
+  s_4bbdbd385c4b7d::t_4db5d09625daf0 503,518
+Telegram/SourceFiles/platform/win/specific_win.cpp
+  s_4bbdbd385c4b7d::t_e0750202eb3176 536,545
+Telegram/SourceFiles/poll/poll_media_upload.cpp
+  s_4bbdbd385c4b7d::t_cc33718824d5e3 448,628,684
+Telegram/SourceFiles/poll/poll_media_upload.h
+  s_4bbdbd385c4b7d::t_0b5b6549c420e1 11,219
+Telegram/SourceFiles/settings/business/settings_recipients_helper.cpp
+  s_4bbdbd385c4b7d::t_f18b583b531cc4 340-342
+Telegram/SourceFiles/settings/detailed_settings_button.cpp
+  s_4bbdbd385c4b7d::t_73d3abde2c1edb 189
+Telegram/SourceFiles/settings/sections/settings_chat.cpp
+  s_4bbdbd385c4b7d::t_892dd93527993b 553,555,2529,2533,2552
+Telegram/SourceFiles/settings/sections/settings_local_storage.cpp
+  s_4bbdbd385c4b7d::t_0d75ba669a7668 889-890
+Telegram/SourceFiles/settings/sections/settings_notifications.cpp
+  s_4bbdbd385c4b7d::t_826d420d930934 591
+Telegram/SourceFiles/settings/settings_intro.cpp
+  s_4bbdbd385c4b7d::t_eefc7bf13dce21 460
+Telegram/SourceFiles/storage/details/storage_file_utilities.cpp
+  s_4bbdbd385c4b7d::t_fb99dbd20da646 497
+Telegram/SourceFiles/storage/details/storage_settings_scheme.cpp
+  s_4bbdbd385c4b7d::t_49dd92b54e55f0 1008,1027
+Telegram/SourceFiles/storage/localimageloader.cpp
+  s_4bbdbd385c4b7d::t_5239d9e1950fa9 531,630,632,643-650,769,773,924
+Telegram/SourceFiles/storage/localimageloader.h
+  s_4bbdbd385c4b7d::t_4e86288566cf69 194,248-250,272,347
+Telegram/SourceFiles/storage/localstorage.cpp
+  s_4bbdbd385c4b7d::t_70c1191bd4bd00 1399,1409,1412,1419,1424
+Telegram/SourceFiles/storage/serialize_common.h
+  s_4bbdbd385c4b7d::t_9775e4a0d6ee90 120
+Telegram/SourceFiles/storage/storage_account.cpp
+  s_4bbdbd385c4b7d::t_d31b173496bb3e 1041,2569,2572,2850,2857
+Telegram/SourceFiles/storage/storage_media_prepare.cpp
+  s_4bbdbd385c4b7d::t_a990faf9bf9794 80-82,95-97,104-134
+Telegram/SourceFiles/storage/storage_media_prepare.h
+  s_4bbdbd385c4b7d::t_6a4c37b1fdd5a0 41,54-72
+Telegram/SourceFiles/storage/storage_sparse_ids_list.cpp
+  s_4bbdbd385c4b7d::t_167e50709d332a 36-37,277-278
+Telegram/SourceFiles/storage/storage_user_photos.cpp
+  s_4bbdbd385c4b7d::t_5fcbf900c4ecda 121-124
+Telegram/SourceFiles/tests/filter_regex_test.cpp
+  s_4bbdbd385c4b7d::t_aacf715362071f 1-46
+Telegram/SourceFiles/tests/test_main.cpp
+  s_4bbdbd385c4b7d::t_7f41ae5559ccda 184
+Telegram/SourceFiles/tests/test_text.cpp
+  s_4bbdbd385c4b7d::t_97708b2583fab4 272-273,275-276,619,621
+Telegram/SourceFiles/ui/boxes/calendar_box.cpp
+  s_4bbdbd385c4b7d::t_f9288f81cceace 38-39
+Telegram/SourceFiles/ui/boxes/country_select_box.cpp
+  s_4bbdbd385c4b7d::t_0a7d8cf6eceb82 20,34,41-42,66-68,86-91,99,102-103,157-159,165-166,244,264-265,283,294-295,306,347-349,353,356-359,362-380,387-388,391-399,402,404,407-415,428,432,449,462-475,480,483-486,529,533-534,536-538,541,546-550,555,562-565,575-579,583-586,598,602-605,607-609,631,664,671-672,764
+Telegram/SourceFiles/ui/boxes/edit_invite_link.cpp
+  s_4bbdbd385c4b7d::t_4f527e09fa3f41 147-150
+Telegram/SourceFiles/ui/boxes/peer_qr_box.cpp
+  s_4bbdbd385c4b7d::t_522747f71211b7 919,962
+Telegram/SourceFiles/ui/chat/attach/attach_abstract_single_media_preview.cpp
+  s_4bbdbd385c4b7d::t_bac95406d11245 114-115,140,142-145,147,149,151
+Telegram/SourceFiles/ui/chat/attach/attach_bot_webview.cpp
+  s_4bbdbd385c4b7d::t_6eb512c590331a 52,390-401,800-805,831-839,843-862,864-865,876-878,1265,1923-1926,1955-1957,2201,2204,2635-2637
+Telegram/SourceFiles/ui/chat/attach/attach_bot_webview_linux_shell.cpp
+  s_4bbdbd385c4b7d::t_5a645dba8271e1 161-165,167,169,171,180,185-186,189-196,206-207,210
+Telegram/SourceFiles/ui/chat/attach/attach_bot_webview_linux_shell.h
+  s_4bbdbd385c4b7d::t_4e18f153381ccd 10-11,26-37
+Telegram/SourceFiles/ui/chat/chat.style
+  s_4bbdbd385c4b7d::t_319ee3ef67ab74 783-784
+Telegram/SourceFiles/ui/chat/unsupported_notice.cpp
+  s_4bbdbd385c4b7d::t_fa45a1cf6c34bf 35,40-43,68-87,91-95,114,116-117,128
+Telegram/SourceFiles/ui/controls/labeled_emoji_tabs.cpp
+  s_4bbdbd385c4b7d::t_ace26007e7ae32 707-708
+Telegram/SourceFiles/ui/controls/peer_list_dummy.cpp
+  s_4bbdbd385c4b7d::t_4f1bd813d9ea53 11,29-32
+Telegram/SourceFiles/ui/controls/swipe_handler_data.h
+  s_4bbdbd385c4b7d::t_f696e584fe8d8c 23-26
+Telegram/SourceFiles/ui/controls/tabbed_search.cpp
+  s_4bbdbd385c4b7d::t_9c7df2a038d03d 515
+Telegram/SourceFiles/ui/effects/credits_graphics.cpp
+  s_4bbdbd385c4b7d::t_09e96e64e898d2 349,399
+Telegram/SourceFiles/ui/effects/round_checkbox.cpp
+  s_4bbdbd385c4b7d::t_f5ba9ebeb484fe 144,420,422
+Telegram/SourceFiles/ui/image/image.cpp
+  s_4bbdbd385c4b7d::t_863a71c7c29bc1 118,143-154,156-161
+Telegram/SourceFiles/ui/image/image_location.h
+  s_4bbdbd385c4b7d::t_14af95d4b7684c 654,656,659,662
+Telegram/SourceFiles/ui/peer/video_userpic_player.cpp
+  s_4bbdbd385c4b7d::t_aeb44e0e42d75f 53-56,112-114
+Telegram/SourceFiles/ui/peer/video_userpic_player.h
+  s_4bbdbd385c4b7d::t_a22301d97171b3 30-33
+Telegram/SourceFiles/ui/unread_badge.cpp
+  s_4bbdbd385c4b7d::t_e769455f182749 394,418,432,508
+Telegram/SourceFiles/ui/widgets/chat_filters_tabs_strip.cpp
+  s_4bbdbd385c4b7d::t_4d1385928cda15 94,114,116
+Telegram/SourceFiles/ui/widgets/color_editor.h
+  s_4bbdbd385c4b7d::t_1f1691b72fb943 67,70
+Telegram/SourceFiles/ui/widgets/continuous_sliders.cpp
+  s_4bbdbd385c4b7d::t_bde4462161906d 130,247,377,379-380,382,513-514
+Telegram/SourceFiles/ui/widgets/continuous_sliders.h
+  s_4bbdbd385c4b7d::t_c1a7b31391774f 66-67
+Telegram/SourceFiles/ui/widgets/discrete_sliders.cpp
+  s_4bbdbd385c4b7d::t_dd6b41f5dcabe4 338
+Telegram/SourceFiles/ui/widgets/fields/special_fields.cpp
+  s_4bbdbd385c4b7d::t_c7221691141419 426-429
+Telegram/SourceFiles/ui/widgets/multi_select.cpp
+  s_4bbdbd385c4b7d::t_37c74e01b5ec3f 162,663,897,899,1020-1022,1057
+Telegram/SourceFiles/window/main_window.cpp
+  s_4bbdbd385c4b7d::t_c063200f438888 783
+Telegram/SourceFiles/window/notifications_manager.cpp
+  s_4bbdbd385c4b7d::t_24f43d60bdff51 917-919,1427-1430
+Telegram/SourceFiles/window/notifications_manager_default.cpp
+  s_4bbdbd385c4b7d::t_aa5e3a17a0f9c3 632
+Telegram/SourceFiles/window/section_widget.cpp
+  s_4bbdbd385c4b7d::t_66d351622135f1 488,505-508
+Telegram/SourceFiles/window/themes/window_theme_editor.cpp
+  s_4bbdbd385c4b7d::t_6f5a5e05a5e054 536-539
+Telegram/SourceFiles/window/themes/window_theme_preview.cpp
+  s_4bbdbd385c4b7d::t_0eb5d517a318ff 306-308,337-339,497,499-500,502,947,949-951
+Telegram/SourceFiles/window/window_filters_menu.cpp
+  s_4bbdbd385c4b7d::t_78579e30d0ed5a 285-287,840,859,861
+Telegram/SourceFiles/window/window_main_menu.cpp
+  s_4bbdbd385c4b7d::t_b2b674d5de1c69 1158,1177
+Telegram/SourceFiles/window/window_peer_menu.cpp
+  s_4bbdbd385c4b7d::t_cc3e11f9993acb 2079,2346-2351,3003-3006,3555-3557
+Telegram/SourceFiles/window/window_saved_windows.cpp
+  s_4bbdbd385c4b7d::t_91cc727c56e8ce 95-135,366,1002-1012,1019,1028-1046,1414,1530
+Telegram/SourceFiles/window/window_saved_windows.h
+  s_4bbdbd385c4b7d::t_ef38b59c90423f 120
+Telegram/SourceFiles/window/window_separate_id.cpp
+  s_4bbdbd385c4b7d::t_0a4a76f2469ece 10,21,99-114
+Telegram/SourceFiles/window/window_separate_id.h
+  s_4bbdbd385c4b7d::t_c51fe41c69b834 86-89
+Telegram/SourceFiles/window/window_session_controller.cpp
+  s_4bbdbd385c4b7d::t_1466fc69e7b48a 856-865,2691,3110
+Telegram/SourceFiles/window/window_top_bar_wrap.h
+  s_4bbdbd385c4b7d::t_c8a02a813dad86 46
+Telegram/build/build.sh
+  s_4bbdbd385c4b7d::t_fb7414831fc62a 449
+Telegram/build/docker/centos_env/Dockerfile
+  s_4bbdbd385c4b7d::t_9bd2fbc9eb64b0 163,1004-1031,1074
+Telegram/build/prepare/prepare.py
+  s_4bbdbd385c4b7d::t_c7d03cd08adcdf 461,523-544,1928-1977
+Telegram/build/setup.iss
+  s_4bbdbd385c4b7d::t_2129540c272d4b 4,27,41,43,45,81
+Telegram/build/tests/forward_worker_boundary_test.py
+  s_4bbdbd385c4b7d::t_b865566dbf9be3 1-46
+Telegram/build/tests/test_ayu_ui_lifetimes.py
+  s_4bbdbd385c4b7d::t_03739081d7dec3 1-165
+Telegram/build/tests/test_streaming_prefetch_selection.py
+  s_4bbdbd385c4b7d::t_fe964259c47755 1-114
+Telegram/build/version
+  s_4bbdbd385c4b7d::t_3407da1d3a86fe 1,3-5,7
+Telegram/cmake/td_ui.cmake
+  s_4bbdbd385c4b7d::t_02cf6860fbf183 194-195,208-209
+Telegram/cmake/tests.cmake
+  s_4bbdbd385c4b7d::t_1fde03ae6b0b18 104-132
+Telegram/codegen
+  s_4bbdbd385c4b7d::t_6bb6efdc97de79 1
+Telegram/lib_base
+  s_4bbdbd385c4b7d::t_ffcc1203529de5 1
+Telegram/lib_lottie
+  s_4bbdbd385c4b7d::t_7d98153127a4e9 1
+Telegram/lib_spellcheck
+  s_4bbdbd385c4b7d::t_3b74da2647d7a9 1
+Telegram/lib_tl
+  s_4bbdbd385c4b7d::t_23c024008a43df 1
+Telegram/lib_ui
+  s_4bbdbd385c4b7d::t_ac50395505f37d 1
+Telegram/lib_webview
+  s_4bbdbd385c4b7d::t_61ae187997c28d 1
+changelog.txt
+  s_4bbdbd385c4b7d::t_c2bc582dd0c6f2 1-12
+cmake
+  s_4bbdbd385c4b7d::t_8e7d4cb66090c9 1
+docs/web-proxy-plan.md
+  s_4bbdbd385c4b7d::t_ad9004dc7c6763 20,54-55,91,94-96,102-138,459,474-476,479-484,487-490,493-498,531-532,536,545,549-550,553-562,576-577,599-601
+tools/clangtidy/README.md
+  s_4bbdbd385c4b7d::t_2685a2fe2b8909 1-22
+tools/clangtidy/compile_db.py
+  s_4bbdbd385c4b7d::t_09d0dd901d5839 1-137
+tools/rules/hook.py
+  s_4bbdbd385c4b7d::t_cd8d4bd357e8e1 1-179,181-188,190-215
+tools/rules/test_hook.py
+  s_4bbdbd385c4b7d::t_ec701d58614ac9 1-258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "677e29a6c15a85300ccf32cb18be1baea841edcd",
+  "prompts": {},
+  "sessions": {
+    "s_4bbdbd385c4b7d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a112ab-cfda-7e31-aac6-0b3b48e46669",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
