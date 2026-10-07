@@ -23,6 +23,7 @@
 #include "base/unixtime.h"
 #include "base/weak_ptr.h"
 #include "core/mime_type.h"
+#include "data/components/ephemeral_messages.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_document.h"
@@ -583,21 +584,12 @@ void readHistory(not_null<HistoryItem*> message) {
 
 void markReadAfterAction(not_null<History*> history) {
 	const auto &ghost = AyuSettings::ghost(&history->session());
-	if (ghost.shouldSendReadMessages(history->peer)
-		|| !ghost.markReadAfterAction()) {
+	if (ghost.sendReadMessages() || !ghost.markReadAfterAction()) {
 		return;
 	}
 	if (const auto last = history->lastServerMessage()) {
 		readHistory(last);
 	}
-}
-
-QString formatTTL(int time, bool isDoc) {
-	if (time == 0x7FFFFFFF) {
-		return isDoc ? tr::ayu_OnePlayTTL(tr::now) : tr::ayu_OneViewTTL(tr::now);
-	}
-
-	return QString("%1s").arg(time);
 }
 
 QString getDCName(int dc) {
@@ -851,15 +843,6 @@ bool isMessageSavable(const not_null<HistoryItem*> item) {
 	const auto &settings = AyuSettings::getInstance();
 
 	if (!settings.saveDeletedMessages()) {
-		return false;
-	}
-
-	// Mirrors the exclusion Session::updateEditedMessage already applies
-	// for edit-history archival (data_session.cpp). Without it, deleting
-	// your own messages -- including via the "Delete my messages" cleanup
-	// feature, whose whole point is to erase your own history -- silently
-	// archived every one of them locally instead.
-	if (item->author()->isSelf()) {
 		return false;
 	}
 
@@ -1721,6 +1704,9 @@ void applyGhostScheduling(
 		not_null<Main::Session*> session,
 		Api::SendOptions &options,
 		int delaySeconds) {
+	if (options.welcomeTemplate) {
+		return;
+	}
 	const auto &ghost = AyuSettings::ghost(session);
 	if (ghost.isUseScheduledMessages() && !options.scheduled) {
 		const auto delay = Core::App().settings().proxy().isEnabled()
@@ -1728,4 +1714,22 @@ void applyGhostScheduling(
 			: delaySeconds;
 		options.scheduled = base::unixtime::now() + delay;
 	}
+}
+
+void applyGhostScheduling(
+		Api::SendAction &action,
+		const QString &text,
+		int delaySeconds) {
+	const auto history = action.history;
+	const auto session = &history->session();
+	const auto replyTo = action.replyTo.messageId
+		? session->data().message(action.replyTo.messageId)
+		: nullptr;
+	if ((replyTo && replyTo->isEphemeral())
+		|| session->ephemeralMessages().hasEphemeralCommand(
+			history->peer,
+			text)) {
+		return;
+	}
+	applyGhostScheduling(session, action.options, delaySeconds);
 }

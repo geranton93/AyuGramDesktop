@@ -807,16 +807,14 @@ ChatWidget::ChatWidget(
 				}
 			}
 			if (action.options.scheduled) {
-				const auto &ghost = AyuSettings::ghost(&session());
-				if (_topic) {
-					if (!ghost.isUseScheduledMessages()) {
-						crl::on_main(this, [=, t = _topic] {
-							controller->showSection(
-								std::make_shared<HistoryView::ScheduledMemento>(t));
-						});
-					}
-				} else if (mode() == Mode::History
-						&& !ghost.isUseScheduledMessages()) {
+				if (AyuSettings::ghost(&session()).isUseScheduledMessages()) {
+					_composeControls->cancelReplyMessage();
+				} else if (_topic) {
+					crl::on_main(this, [=, t = _topic] {
+						controller->showSection(
+							std::make_shared<HistoryView::ScheduledMemento>(t));
+					});
+				} else if (mode() == Mode::History) {
 					crl::on_main(this, [=, history = action.history] {
 						controller->showSection(
 							std::make_shared<HistoryView::ScheduledMemento>(
@@ -6089,17 +6087,15 @@ void ChatWidget::setupShortcuts() {
 						_history));
 				return true;
 			});
-		if (mode() == Mode::History) {
-			const auto channel = _peer->asChannel();
-			const auto hasRecentActions = channel
-				&& (channel->hasAdminRights() || channel->amCreator());
-			if (hasRecentActions) {
-				request->check(Command::ShowAdminLog, 1) && request->handle([=] {
-					controller()->showSection(
-						std::make_shared<AdminLog::SectionMemento>(channel));
-					return true;
-				});
-			}
+		const auto channel = _sublist ? nullptr : _peer->asChannel();
+		const auto hasRecentActions = channel
+			&& (channel->hasAdminRights() || channel->amCreator());
+		if (hasRecentActions) {
+			request->check(Command::ShowAdminLog, 1) && request->handle([=] {
+				controller()->showSection(
+					std::make_shared<AdminLog::SectionMemento>(channel));
+				return true;
+			});
 		}
 		if ((mode() == Mode::History) && session().supportMode()) {
 			request->check(Command::SupportToggleMuted)

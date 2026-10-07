@@ -134,7 +134,6 @@ PRIVATE
     desktop-app::lib_webview
     desktop-app::lib_ffmpeg
     desktop-app::lib_stripe
-    desktop-app::external_rlottie
     desktop-app::external_zlib
     desktop-app::external_minizip
     desktop-app::external_kcoreaddons
@@ -310,6 +309,8 @@ set(ayugram_files
         ayu/features/filters/filters_controller.h
         ayu/features/filters/filters_cache_controller.cpp
         ayu/features/filters/filters_cache_controller.h
+        ayu/features/filters/filter_cache.h
+        ayu/features/filters/filter_regex.h
         ayu/features/filters/filters_utils.cpp
         ayu/features/filters/filters_utils.h
         ayu/data/messages_storage.cpp

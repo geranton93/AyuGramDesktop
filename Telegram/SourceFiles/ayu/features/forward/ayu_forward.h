@@ -33,9 +33,9 @@ public:
 
 	explicit ForwardState(
 		int totalChunks,
-		not_null<Main::Session*> session)
+		const base::weak_ptr<Main::Session> &session)
 	: totalChunks(totalChunks)
-	, owner(base::make_weak(session)) {
+	, owner(session) {
 	}
 
 	ForwardState(const ForwardState &other)
@@ -48,7 +48,7 @@ public:
 	, stopRequested(other.stopRequested.load()) {
 	}
 
-	void updateBottomBar(const Main::Session &session, const PeerId *peer, const State &st);
+	void updateBottomBar(const PeerId *peer, const State &st);
 
 	// Written from a crl::async background thread (forwardMessages /
 	// intelligentForward) and read from the main thread (isForwarding,
@@ -73,7 +73,7 @@ struct ForwardTargetSnapshot {
 };
 
 [[nodiscard]] std::optional<ForwardTargetSnapshot> SnapshotForwardTarget(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const base::weak_ptr<History> &targetHistory);
 
 bool isAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items);
@@ -81,13 +81,13 @@ bool isAyuForwardNeeded(not_null<HistoryItem*> item);
 bool isFullAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items);
 bool isFullAyuForwardNeeded(not_null<HistoryItem*> item);
 void intelligentForward(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const Api::SendAction &action,
 	const MessageIdsList &itemIds,
 	Data::ForwardOptions options,
 	base::weak_ptr<History> targetHistory);
 void forwardMessages(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const Api::SendAction &action,
 	bool forwardState,
 	const MessageIdsList &itemIds,

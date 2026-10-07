@@ -101,3 +101,32 @@ set_target_properties(test_ayu_ghost_mode_peer_exceptions PROPERTIES
 )
 
 add_dependencies(Telegram test_ayu_ghost_mode_peer_exceptions)
+
+add_executable(test_filter_cache)
+init_target(test_filter_cache "(tests)")
+target_include_directories(test_filter_cache PRIVATE ${src_loc})
+nice_target_sources(test_filter_cache ${src_loc}
+PRIVATE
+    tests/filter_cache_test.cpp
+)
+target_link_libraries(test_filter_cache PRIVATE
+    desktop-app::lib_base
+    desktop-app::external_qt
+)
+set_target_properties(test_filter_cache PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+add_dependencies(Telegram test_filter_cache)
+
+add_executable(test_filter_regex)
+init_target(test_filter_regex "(tests)")
+target_include_directories(test_filter_regex PRIVATE ${src_loc})
+nice_target_sources(test_filter_regex ${src_loc}
+PRIVATE
+    tests/filter_regex_test.cpp
+)
+target_link_libraries(test_filter_regex PRIVATE ayugram::lib_icu)
+set_target_properties(test_filter_regex PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+add_dependencies(Telegram test_filter_regex)

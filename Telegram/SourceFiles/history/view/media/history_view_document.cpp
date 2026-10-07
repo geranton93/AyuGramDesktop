@@ -417,6 +417,7 @@ Document::Document(
 					base::take(lifetime)->destroy();
 				}
 			}, *lifetime);
+			_ttlLifetime = lifetime;
 			_drawTtl = CreateTtlPaintCallback(lifetime, [=] { repaint(); });
 		} else if (!_parent->data()->out()) {
 			const auto &data = &_parent->data()->history()->owner();
@@ -451,6 +452,9 @@ Document::Document(
 }
 
 Document::~Document() {
+	if (const auto lifetime = base::take(_ttlLifetime)) {
+		lifetime->destroy();
+	}
 	if (_dataMedia) {
 		_data->owner().keepAlive(base::take(_dataMedia));
 		_parent->checkHeavyPart();
@@ -1954,7 +1958,9 @@ bool Document::voiceProgressAnimationCallback(crl::time now) {
 				voice->playback->progressAnimation.stop();
 				voice->playback->progress.finish();
 			} else {
-				voice->playback->progress.update(qMin(dt, 1.), anim::linear);
+				voice->playback->progress.update(
+					std::min(dt, 1.),
+					anim::linear);
 			}
 			repaint();
 			return (dt < 1.);

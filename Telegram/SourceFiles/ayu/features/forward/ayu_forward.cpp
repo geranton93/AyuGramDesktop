@@ -84,9 +84,7 @@ void FinishForward(
 		const std::shared_ptr<ForwardState> &state,
 		const PeerId &peerId) {
 	state->state = ForwardState::State::Finished;
-	if (const auto current = weakSession.get()) {
-		state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-	}
+	state->updateBottomBar(&peerId, ForwardState::State::Finished);
 }
 
 void ShowForwardStartFailure(
@@ -106,7 +104,7 @@ void ShowForwardStartFailure(
 		return nullptr;
 	}
 	const auto owner = it->second->owner.get();
-	if (!owner || owner->uniqueId() != key.sessionUniqueId) {
+	if (!owner) {
 		forwardStates.erase(it);
 		return nullptr;
 	}
@@ -120,7 +118,7 @@ void ShowForwardStartFailure(
 	if (const auto existing = forwardStates.find(key);
 		existing != forwardStates.end()) {
 		const auto owner = existing->second->owner.get();
-		if (owner && owner->uniqueId() == key.sessionUniqueId
+		if (owner
 			&& existing->second->state.load()
 				!= ForwardState::State::Finished) {
 			return false;
@@ -161,13 +159,13 @@ struct ForwardItem {
 };
 
 [[nodiscard]] std::vector<ForwardItem> SnapshotForwardItems(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const MessageIdsList &itemIds) {
 	if (itemIds.empty() || itemIds.size() > kMaxForwardItems) {
 		return {};
 	}
 	auto result = std::vector<ForwardItem>();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	try {
 		crl::on_main_sync([&] {
 			const auto current = weakSession.get();
@@ -188,7 +186,6 @@ struct ForwardItem {
 				snapshot.groupId = item->groupId().value;
 				snapshot.invertMedia = item->invertMedia();
 				snapshot.needsAyuForward = item->isDeleted()
-					|| item->unsupportedTTL()
 					|| (item->media() && item->media()->ttlSeconds())
 					|| isSourceForwardRestricted(item);
 				if (const auto media = item->media()) {
@@ -221,10 +218,10 @@ struct ForwardItem {
 } // namespace
 
 std::optional<ForwardTargetSnapshot> SnapshotForwardTarget(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const base::weak_ptr<History> &targetHistory) {
 	auto result = std::optional<ForwardTargetSnapshot>();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	crl::on_main_sync([&] {
 		const auto current = weakSession.get();
 		const auto history = targetHistory.get();
@@ -257,7 +254,7 @@ void cancelForward(const PeerId &id, const Main::Session &session) {
 	const auto state = FindForwardState({ session.uniqueId(), id });
 	if (state) {
 		state->stopRequested = true;
-		state->updateBottomBar(session, &id, ForwardState::State::Finished);
+		state->updateBottomBar(&id, ForwardState::State::Finished);
 	}
 }
 
@@ -305,9 +302,9 @@ std::pair<QString, QString> stateName(
 	return std::make_pair(status, partString);
 }
 
-void ForwardState::updateBottomBar(const Main::Session &session, const PeerId *peer, const State &st) {
+void ForwardState::updateBottomBar(const PeerId *peer, const State &st) {
 	state = st;
-	const auto weakSession = base::make_weak(&session);
+	const auto weakSession = owner;
 	if (!weakSession) {
 		return;
 	}
@@ -376,7 +373,7 @@ static Ui::PreparedList prepareMedia(
 }
 
 void sendMedia(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const std::shared_ptr<Ui::PreparedBundle> &bundle,
 	const ForwardMedia &primaryMedia,
 	Api::MessageToSend &&message,
@@ -468,7 +465,6 @@ bool isAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items) {
 
 bool isAyuForwardNeeded(not_null<HistoryItem*> item) {
 	if (item->isDeleted()
-		|| item->unsupportedTTL()
 		|| (item->media() && item->media()->ttlSeconds())) {
 		return true;
 	}
@@ -491,12 +487,12 @@ struct ForwardChunk
 };
 
 void ContinueIntelligentForward(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		const Api::SendAction &action,
 		MessageIdsList resolvedIds,
 		Data::ForwardOptions options,
 		base::weak_ptr<History> targetHistory) {
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	if (!weakSession) {
 		return;
 	}
@@ -568,9 +564,7 @@ void ContinueIntelligentForward(
 		} else {
 			state->totalMessages = static_cast<int>(chunk.itemIds.size());
 			state->sentMessages = 0;
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Sending);
-			}
+			state->updateBottomBar(&peerId, ForwardState::State::Sending);
 
 			AyuSync::forwardMessagesSync(
 				session,
@@ -585,9 +579,7 @@ void ContinueIntelligentForward(
 
 			state->sentMessages = state->totalMessages.load();
 
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-			}
+			state->updateBottomBar(&peerId, ForwardState::State::Sending);
 		}
 		state->currentChunk++;
 	}
@@ -596,12 +588,12 @@ void ContinueIntelligentForward(
 }
 
 void intelligentForward(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		const Api::SendAction &action,
 		const MessageIdsList &itemIds,
 		Data::ForwardOptions options,
 		base::weak_ptr<History> targetHistory) {
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	if (!weakSession) {
 		return;
 	}
@@ -637,19 +629,21 @@ void intelligentForward(
 					return;
 				}
 				try {
-					crl::on_main([
+					crl::async([
 							weakSession,
 							action,
 							resolvedIds = std::move(resolvedIds),
 							options,
 							targetHistory]() mutable {
-						if (const auto current = weakSession.get()) {
+						try {
 							ContinueIntelligentForward(
-								not_null<Main::Session*>(current),
+								weakSession,
 								action,
 								std::move(resolvedIds),
 								options,
 								targetHistory);
+						} catch (...) {
+							ShowForwardStartFailure(weakSession);
 						}
 					});
 				} catch (...) {
@@ -666,13 +660,13 @@ void intelligentForward(
 }
 
 void forwardMessages(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const Api::SendAction &action,
 	bool forwardState,
 	const MessageIdsList &itemIds,
 	Data::ForwardOptions options,
 	base::weak_ptr<History> targetHistory) {
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	if (!weakSession) {
 		return;
 	}
@@ -758,13 +752,11 @@ void forwardMessages(
 	auto documentPaths = AyuSync::DocumentPaths();
 	if (!toBeDownloaded.empty()) {
 		state->state = ForwardState::State::Downloading;
-		if (const auto current = weakSession.get()) {
-			state->updateBottomBar(*current, &peerId, ForwardState::State::Downloading);
-		}
+		state->updateBottomBar(&peerId, ForwardState::State::Downloading);
 		documentPaths = AyuSync::loadDocuments(
 			session,
 			toBeDownloaded,
-			[state] { return state->stopRequested.load(); });
+			[state, weakSession] { return IsForwardStopped(weakSession, *state); });
 	}
 	if (IsForwardStopped(weakSession, *state)) {
 		FinishForward(weakSession, state, peerId);
@@ -772,9 +764,7 @@ void forwardMessages(
 	}
 
 	state->sentMessages = 0;
-	if (const auto current = weakSession.get()) {
-		state->updateBottomBar(*current, &peerId, ForwardState::State::Sending);
-	}
+	state->updateBottomBar(&peerId, ForwardState::State::Sending);
 
 	for (int i = 0; i < static_cast<int>(items.size()); i++) {
 		if (!weakSession) {
@@ -792,18 +782,12 @@ void forwardMessages(
 				return;
 			}
 			state->sentMessages = i + 1;
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(
-					*current,
-					&peerId,
+			state->updateBottomBar(&peerId,
 					ForwardState::State::Sending);
-			}
 		});
 
 		if (item.richPage) {
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Downloading);
-			}
+			state->updateBottomBar(&peerId, ForwardState::State::Downloading);
 
 			const auto sent = forwardRichMessage(
 				session,
@@ -820,9 +804,7 @@ void forwardMessages(
 				return;
 			}
 
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Sending);
-			}
+			state->updateBottomBar(&peerId, ForwardState::State::Sending);
 
 			if (sent) {
 				continue;

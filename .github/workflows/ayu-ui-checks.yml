@@ -1,0 +1,27 @@
+name: Ayu UI source contracts
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contracts:
+    name: UI lifetime source guards (not native tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check UI lifetime contracts and guard mutations
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest Telegram/build/tests/test_ayu_ui_lifetimes.py -v

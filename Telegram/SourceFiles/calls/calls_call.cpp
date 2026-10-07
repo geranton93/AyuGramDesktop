@@ -877,7 +877,9 @@ bool Call::handleUpdate(const MTPPhoneCall &call) {
 				)).send();
 			}
 		}
-		// AyuGram: never request a post-call rating prompt.
+		if (false && data.is_need_rating() && _id && _accessHash) {
+			_ratingRequested = true;
+		}
 		if (const auto duration = data.vduration()) {
 			_discardedDuration = duration->v;
 		}

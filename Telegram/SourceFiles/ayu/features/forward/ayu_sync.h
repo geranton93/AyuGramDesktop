@@ -71,51 +71,51 @@ qint64 fileSize(const QString &path);
 	not_null<PhotoData*> photo);
 [[nodiscard]] DocumentSnapshot snapshotDocument(not_null<DocumentData*> document);
 [[nodiscard]] DocumentPaths loadDocuments(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const std::vector<DownloadItem> &items,
 	const Fn<bool()> &cancelled);
 void sendMessageSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	Api::MessageToSend &&message,
 	base::weak_ptr<History> targetHistory);
 
-void sendDocumentSync(not_null<Main::Session*> session,
+void sendDocumentSync(const base::weak_ptr<Main::Session> &session,
 					  Ui::PreparedGroup &group,
 					  SendMediaType type,
 					  TextWithTags &&caption,
 					  const Api::SendAction &action,
 					  base::weak_ptr<History> targetHistory);
 
-void sendStickerSync(not_null<Main::Session*> session,
+void sendStickerSync(const base::weak_ptr<Main::Session> &session,
 						 Api::MessageToSend &&message,
 						 DocumentId documentId,
 						 base::weak_ptr<History> targetHistory);
 void waitForMsgSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	base::weak_ptr<History> targetHistory);
 void loadPhotoSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const PhotoSnapshot &photo,
 	Data::FileOrigin origin,
 	const Fn<bool()> &cancelled);
 [[nodiscard]] QString loadDocumentSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const DocumentSnapshot &document,
 	Data::FileOrigin origin,
 	const Fn<bool()> &cancelled);
-void forwardMessagesSync(not_null<Main::Session*> session,
+void forwardMessagesSync(const base::weak_ptr<Main::Session> &session,
 						 const MessageIdsList &itemIds,
 						 const ApiWrap::SendAction &action,
 						 Data::ForwardOptions options,
 						 base::weak_ptr<History> targetHistory);
-void sendVoiceSync(not_null<Main::Session*> session,
+void sendVoiceSync(const base::weak_ptr<Main::Session> &session,
 				   const QByteArray &data,
 				   int64_t duration,
 				   bool video,
 				   Api::MessageToSend &&message,
 				   base::weak_ptr<History> targetHistory);
 
-UploadedFile uploadFileSync(not_null<Main::Session*> session,
+UploadedFile uploadFileSync(const base::weak_ptr<Main::Session> &session,
 							PeerId peerId,
 							const QString &path,
 							SendMediaType type,
@@ -124,10 +124,10 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 							const Fn<bool()> &cancelled = {});
 
 std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	FullMsgId itemId);
 
-bool sendRichMessageSync(not_null<Main::Session*> session,
+bool sendRichMessageSync(const base::weak_ptr<Main::Session> &session,
 						 const MTPInputRichMessage &richMessage,
 						 const Api::SendAction &action,
 						 base::weak_ptr<History> targetHistory);

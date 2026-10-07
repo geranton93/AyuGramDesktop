@@ -110,7 +110,7 @@ constexpr auto kRichDraftAutosaveTimeout = crl::time(10 * 1000);
 class ArticleSession;
 
 struct ComposeThreadKey {
-	Main::Session *session = nullptr;
+	uint64 sessionId = 0;
 	PeerId peerId = 0;
 	::Data::DraftKey draftKey = ::Data::DraftKey::None();
 
@@ -128,7 +128,7 @@ struct ComposeThreadEntry {
 		MsgId topicRootId,
 		PeerId monoforumPeerId) {
 	return {
-		.session = session.get(),
+		.sessionId = session->uniqueId(),
 		.peerId = peerId,
 		.draftKey = ::Data::DraftKey::Cloud(topicRootId, monoforumPeerId),
 	};
@@ -148,32 +148,18 @@ struct ComposeThreadEntry {
 	return result;
 }
 
-[[nodiscard]] auto &ComposeThreadsSweptSessions() {
-	static auto result = base::flat_set<Main::Session*>();
-	return result;
-}
-
-void SweepComposeThreadsFor(not_null<Main::Session*> session) {
-	auto &threads = ComposeThreads();
-	for (auto i = begin(threads); i != end(threads);) {
-		if (i->first.session == session.get()) {
-			i = threads.erase(i);
-		} else {
-			++i;
-		}
-	}
-	ComposeThreadsSweptSessions().remove(session.get());
-}
-
 [[nodiscard]] ComposeThreadEntry &ComposeThreadEntryFor(
 		const ComposeThreadKey &key) {
-	if (const auto session = key.session
-			; session && ComposeThreadsSweptSessions().emplace(session).second) {
-		session->lifetime().add([session] {
-			SweepComposeThreadsFor(session);
-		});
+	auto &threads = ComposeThreads();
+	if (const auto i = threads.find(key); i != end(threads)) {
+		return i->second;
 	}
-	return ComposeThreads()[key];
+	for (auto i = begin(threads); i != end(threads);) {
+		i = SessionByUniqueId(i->first.sessionId)
+			? (i + 1)
+			: threads.erase(i);
+	}
+	return threads[key];
 }
 
 [[nodiscard]] ComposeThreadEntry *LookupComposeThreadEntry(
@@ -926,7 +912,7 @@ private:
 		entry.fieldVisible.force_assign(true);
 	}
 
-	void releaseComposeThreadWindow(bool sessionTearingDown = false) {
+	void releaseComposeThreadWindow() {
 		if (!_composeThreadKey) {
 			return;
 		}
@@ -935,10 +921,6 @@ private:
 			if (current.get() != this) {
 				return;
 			}
-		}
-		if (sessionTearingDown) {
-			ComposeThreads().erase(*_composeThreadKey);
-			return;
 		}
 		entry.articleSession.reset();
 		entry.fieldVisible.force_assign(false);
@@ -2061,7 +2043,7 @@ private:
 			// dropping the self-hold inside forceClose() doesn't run
 			// ~ArticleSession re-entrantly while this handler is on the stack.
 			if (const auto strong = weak.lock()) {
-				strong->forceClose(true);
+				strong->forceClose();
 			}
 		}, _lifetime);
 	}
@@ -2077,7 +2059,7 @@ private:
 	// and mirrored to the local draft / input field, while the server
 	// save is only scheduled (it fires after unlock and simply never
 	// happens during logout or shutdown).
-	void forceClose(bool sessionTearingDown = false) {
+	void forceClose() {
 		if (!_windowHost && !_backgroundHold) {
 			return;
 		}
@@ -2101,7 +2083,7 @@ private:
 					&*prepared);
 			}
 		}
-		releaseComposeThreadWindow(sessionTearingDown);
+		releaseComposeThreadWindow();
 		_editor = nullptr;
 		_submitButton = nullptr;
 		_windowHost = nullptr;
@@ -3682,10 +3664,8 @@ private:
 		const auto erasedUploadId = i->uploadId;
 		const auto state = i->state;
 		const auto finalizationRequestId = i->finalizationRequestId;
-		const auto localMediaId = i->localMediaId;
 		detachMediaBatchUpload(erasedUploadId);
 		_attachments.erase(i);
-		_originalMediaImages.erase(localMediaId);
 		if (state != AttachmentState::Ready) {
 			_session->uploader().cancel(erasedUploadId);
 		}

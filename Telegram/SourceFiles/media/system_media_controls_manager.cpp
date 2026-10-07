@@ -150,12 +150,7 @@ void SystemMediaControlsManager::applyPlayerTrack(AudioMsgId::Type audioType) {
 	} else if (document && document->isSongWithCover()) {
 		const auto view = document->createMediaView();
 		view->thumbnailWanted(current.contextId());
-		_cachedMediaView.push_back(view);
-		if (_cachedMediaView.size() > 2) {
-			_cachedMediaView.erase(
-				_cachedMediaView.begin(),
-				_cachedMediaView.end() - 2);
-		}
+		_cachedMediaView = view;
 		if (const auto imagePtr = view->thumbnail()) {
 			_controls->setThumbnail(imagePtr->original());
 		} else {
@@ -185,7 +180,7 @@ void SystemMediaControlsManager::syncPlayerStateToControls() {
 		: AudioMsgId::Type::Voice;
 	const auto current = mediaPlayer->current(type);
 	if (!current) {
-		_cachedMediaView.clear();
+		_cachedMediaView = nullptr;
 		_streamed = nullptr;
 		_controls->setEnabled(false);
 		_controls->clearMetadata();
@@ -278,7 +273,7 @@ SystemMediaControlsManager::SystemMediaControlsManager()
 			_controls->setPlaybackStatus(PlaybackStatus::Playing);
 			_controls->updateDisplay();
 		} else {
-			_cachedMediaView.clear();
+			_cachedMediaView = nullptr;
 			_streamed = nullptr;
 			_controls->clearMetadata();
 		}

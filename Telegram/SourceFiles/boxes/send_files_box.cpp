@@ -702,7 +702,6 @@ SendFilesBox::SendFilesBox(QWidget*, SendFilesBoxDescriptor &&descriptor)
 	? *descriptor.stOverride
 	: st::defaultComposeControls)
 , _sendType(descriptor.sendType)
-, _welcomeTemplate(descriptor.welcomeTemplate)
 , _titleHeight(st::boxTitleHeight)
 , _list(std::move(descriptor.list))
 , _limits(descriptor.limits)
@@ -1273,13 +1272,6 @@ void SendFilesBox::addMenuButton() {
 		_menu = base::make_unique_q<Ui::PopupMenu>(top, tabbed.menu);
 		_menu->setForcedOrigin(Ui::PanelAnimation::Origin::TopRight);
 		const auto position = QCursor::pos();
-		const auto result = SendMenu::FillSendMenu(
-			_menu.get(),
-			_show,
-			_sendMenuDetails(),
-			_sendMenuCallback,
-			&_st.tabbed.icons,
-			position);
 
 		using ImageInfo = Ui::PreparedFileInformation::Image;
 		if (_list.files.size() == 1 && std::get_if<ImageInfo>(&_list.files[0].information->media)) {
@@ -1310,6 +1302,14 @@ void SendFilesBox::addMenuButton() {
 				},
 				&st::menuIconStickers);
 		}
+
+		const auto result = SendMenu::FillSendMenu(
+			_menu.get(),
+			_show,
+			_sendMenuDetails(),
+			_sendMenuCallback,
+			&_st.tabbed.icons,
+			position);
 		if (result != SendMenu::FillMenuResult::Prepared) {
 			_menu = nullptr;
 			return true;
@@ -1491,7 +1491,9 @@ void SendFilesBox::pushBlock(int from, int till) {
 			&_list.files[index],
 			st::sendMediaPreviewSize,
 			std::move(done),
-			PhotoSideLimit(true));
+			PhotoSideLimit(true),
+			QSize(),
+			true);
 	};
 	const auto replaceAttachment = [=, show = _show](int index) {
 		applyBlockChanges();
@@ -2625,19 +2627,16 @@ bool SendFilesBox::validateLength(const QString &text) const {
 void SendFilesBox::send(
 		Api::SendOptions options,
 		bool ctrlShiftEnter) {
+	const auto sumSize = ranges::accumulate(
+		_list.files, int64(0),
+		[](int64 sum, const auto &file) { return sum + file.size; });
+	applyGhostScheduling(&_show->session(), options, getScheduleTime(sumSize));
+
 	if (options.scheduled
 		&& ranges::any_of(_list.files, &Ui::PreparedFile::ttlSeconds)) {
 		showToast(tr::lng_ttl_no_schedule(tr::now));
 		return;
 	}
-
-	if (!_welcomeTemplate) {
-		const auto sumSize = ranges::accumulate(
-			_list.files, int64(0),
-			[](int64 sum, const auto &file) { return sum + file.size; });
-		applyGhostScheduling(&_show->session(), options, getScheduleTime(sumSize));
-	}
-
 	if ((_sendType == Api::SendType::Scheduled
 		|| _sendType == Api::SendType::ScheduledToUser)
 		&& !options.scheduled) {
@@ -2688,7 +2687,9 @@ void SendFilesBox::send(
 				return;
 			}
 		}
-		Storage::ApplyModifications(_list, true);
+		const auto animated = (_limits & SendFilesAllow::Gifs)
+			|| (_limits & SendFilesAllow::Videos);
+		Storage::ApplyModifications(_list, animated);
 		saveSendWaySettings(_wayRemember && _wayRemember->checked());
 		options.invertCaption = _invertCaption;
 		options.price = hasPrice() ? _price.current() : 0;

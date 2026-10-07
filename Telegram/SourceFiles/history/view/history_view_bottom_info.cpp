@@ -566,12 +566,12 @@ void BottomInfo::layoutDateText() {
 			Ui::NameTextOptions(),
 			helper.context());
 	} else {
-		const auto editedIcon = !editedPrimary
+		const auto editedIcon = !updated && !editedPrimary
 			&& (_data.flags & Data::Flag::Edited);
 
 		TextWithEntities edited;
-		if (!editedPrimary && updated) {
-			edited = TextWithEntities{ tr::lng_ephemeral_updated(tr::now) + ' ' };
+		if (updated) {
+			edited.append(tr::lng_ephemeral_updated(tr::now)).append(' ');
 		} else if (editedIcon) {
 			edited = Ui::Text::IconEmoji(&st::editedIcon);
 			edited.append(' ');

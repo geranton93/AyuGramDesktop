@@ -250,6 +250,7 @@ struct RichTraversalLimits {
 			break;
 		case BlockKind::Video:
 		case BlockKind::Audio:
+		case BlockKind::File:
 			mediaAccepted = addDocument(block.documentId);
 			break;
 		case BlockKind::GroupedMedia:
@@ -288,7 +289,7 @@ struct RichTraversalLimits {
 }
 
 [[nodiscard]] UploadedRichMedia reuploadMedia(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		PeerId peerId,
 		Data::FileOrigin origin,
 		const RichMedia &source,
@@ -421,6 +422,20 @@ void sanitizeRichText(Iv::RichPage::RichText &text) {
 	text.text.entities.erase(removed.begin(), removed.end());
 }
 
+[[nodiscard]] bool isSerializableButton(const HistoryMessageMarkupButton &button) {
+	using Type = HistoryMessageMarkupButton::Type;
+	switch (button.type) {
+	case Type::Url:
+	case Type::CopyText:
+	case Type::Disabled:
+		return true;
+	case Type::UserProfile:
+		return button.data.toULongLong() != 0;
+	default:
+		return false;
+	}
+}
+
 [[nodiscard]] bool pruneBlocks(
 	not_null<Main::Session*> session,
 	std::vector<Block> &blocks,
@@ -477,10 +492,26 @@ void sanitizeRichText(Iv::RichPage::RichText &text) {
 		break;
 	case BlockKind::Video:
 	case BlockKind::Audio:
+	case BlockKind::File:
 		if (!remapDocument(block.documentId, block.document)) {
 			return false;
 		}
 		break;
+	case BlockKind::ButtonRow: {
+		auto &buttons = block.buttons;
+		const auto removed = std::ranges::remove_if(buttons, [](
+				const Iv::RichPage::Button &button) {
+			return !isSerializableButton(button.button);
+		});
+		buttons.erase(removed.begin(), removed.end());
+		if (buttons.empty()) {
+			return false;
+		}
+		for (auto &button : buttons) {
+			sanitizeRichText(button.text);
+		}
+		break;
+	}
 	case BlockKind::GroupedMedia: {
 		auto &items = block.mediaItems;
 		for (auto i = items.begin(); i != items.end();) {
@@ -574,7 +605,7 @@ void sanitizeRichText(Iv::RichPage::RichText &text) {
 } // namespace
 
 bool forwardRichMessage(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	FullMsgId itemId,
 	const Api::SendAction &action,
 	base::weak_ptr<History> targetHistory,
@@ -587,7 +618,7 @@ bool forwardRichMessage(
 	// every bail-out point already in this function -- and every deeper
 	// AyuSync::*Sync call that periodically polls cancelled() -- also
 	// catches that case, without needing a guard at each of them.
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	auto userCancelled = cancelled
 		? std::move(cancelled)
 		: Fn<bool()>([] { return false; });

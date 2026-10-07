@@ -270,10 +270,10 @@ void ReleaseDocumentDownloadConsumer(
 }
 
 [[nodiscard]] QString LoadedDocumentPath(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	DocumentId documentId) {
 	auto result = QString();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	crl::on_main_sync([&] {
 		if (const auto current = weakSession.get()) {
 			result = current->data().document(documentId)->filepath(true);
@@ -351,10 +351,10 @@ void CompleteDocumentDownload(
 }
 
 [[nodiscard]] QString NextDocumentPath(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	DocumentId documentId) {
 	auto result = QString();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	crl::on_main_sync([&] {
 		if (const auto current = weakSession.get()) {
 			const auto document = current->data().document(documentId);
@@ -443,11 +443,11 @@ DocumentSnapshot snapshotDocument(not_null<DocumentData*> document) {
 }
 
 DocumentPaths loadDocuments(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		const std::vector<DownloadItem> &items,
 		const Fn<bool()> &cancelled) {
 	auto result = DocumentPaths();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	for (const auto &item : items) {
 		if (!weakSession || (cancelled && cancelled())) {
 			break;
@@ -483,11 +483,11 @@ DocumentPaths loadDocuments(
 }
 
 QString loadDocumentSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 		const DocumentSnapshot &document,
 		Data::FileOrigin origin,
 		const Fn<bool()> &cancelled) {
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	if (!weakSession
 		|| !isValidDocumentSnapshot(document)
 		|| (cancelled && cancelled())) {
@@ -627,11 +627,11 @@ QString loadDocumentSync(
 }
 
 void loadPhotoSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const PhotoSnapshot &photo,
 	Data::FileOrigin origin,
 	const Fn<bool()> &cancelled) {
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	if (!weakSession || !isValidPhotoSnapshot(photo)) {
 		return;
 	}

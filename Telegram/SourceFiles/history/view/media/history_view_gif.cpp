@@ -70,8 +70,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QApplication>
 
 // AyuGram includes
-#include "ayu/ayu_settings.h"
-#include "ayu/features/stt/stt_manager.h"
 #include "ayu/features/message_shot/message_shot.h"
 
 
@@ -107,8 +105,8 @@ using ::Media::ValidFrameSize;
 	return (scale == 1.)
 		? size
 		: QSize(
-			std::max(qRound(size.width() * scale), 1),
-			std::max(qRound(size.height() * scale), 1));
+			std::max(int(base::SafeRound(size.width() * scale)), 1),
+			std::max(int(base::SafeRound(size.height() * scale)), 1));
 }
 
 [[nodiscard]] QSize HostedInstantViewForcedSize(
@@ -140,10 +138,10 @@ using ::Media::ValidFrameSize;
 		const auto centerRect = r - centerMargins;
 		const auto &icon = context.imageStyle()->historyVideoMessageTtlIcon;
 		const auto iconRect = QRect(
-			rect::right(centerRect) - icon.width() * 1.2,
-			rect::bottom(centerRect) - icon.height() * 1.2,
-			icon.width() / 3,
-			icon.height() / 3);
+			rect::right(centerRect) - icon.width() * 0.75,
+			rect::bottom(centerRect) - icon.height() * 0.75,
+			icon.width(),
+			icon.height());
 		{
 			auto hq = PainterHighQualityEnabler(p);
 			auto path = QPainterPath();
@@ -293,6 +291,9 @@ Gif::~Gif() {
 			_parent->checkHeavyPart();
 		}
 	}
+	if (_videoCoverMedia) {
+		_data->owner().keepAlive(base::take(_videoCoverMedia));
+	}
 	togglePollingStory(false);
 }
 
@@ -413,7 +414,7 @@ QSize Gif::countOptimalSize() {
 	auto maxWidth = std::min(
 		std::max(scaled.width(), minWidth),
 		thumbMaxWidth);
-	auto minHeight = qMax(scaled.height(), st::minPhotoSize);
+	auto minHeight = std::max(scaled.height(), st::minPhotoSize);
 	if (!activeCurrentStreamed()) {
 		accumulate_max(
 			maxWidth,
@@ -421,7 +422,7 @@ QSize Gif::countOptimalSize() {
 				+ 2 * (st::msgDateImgDelta + st::msgDateImgPadding.x()));
 	}
 	if (_parent->hasBubble()) {
-		maxWidth = qMax(maxWidth, _parent->textualMaxWidth());
+		maxWidth = std::max(maxWidth, _parent->textualMaxWidth());
 		minHeight = adjustHeightForLessCrop(
 			scaled,
 			{ maxWidth, minHeight });
@@ -464,7 +465,7 @@ QSize Gif::countCurrentSize(int newWidth) {
 		std::max(scaled.width(), minWidthByInfo),
 		minPhotoWidth,
 		thumbMaxWidth);
-	auto newHeight = qMax(scaled.height(), st::minPhotoSize);
+	auto newHeight = std::max(scaled.height(), st::minPhotoSize);
 	if (!activeCurrentStreamed()) {
 		accumulate_max(
 			newWidth,
@@ -478,8 +479,12 @@ QSize Gif::countCurrentSize(int newWidth) {
 		if (botTop) {
 			accumulate_max(captionMaxWidth, botTop->maxWidth);
 		}
-		const auto maxWithCaption = qMin(st::msgMaxWidth, captionMaxWidth);
-		newWidth = qMin(qMax(newWidth, maxWithCaption), thumbMaxWidth);
+		const auto maxWithCaption = std::min(
+			st::msgMaxWidth,
+			captionMaxWidth);
+		newWidth = std::min(
+			std::max(newWidth, maxWithCaption),
+			thumbMaxWidth);
 		newHeight = adjustHeightForLessCrop(
 			scaled,
 			{ newWidth, newHeight });
@@ -541,9 +546,9 @@ int Gif::adjustHeightForLessCrop(QSize dimensions, QSize current) const {
 	}
 	// Allow some more vertical space for less cropping,
 	// but not more than 1.33 * existing height.
-	return qMax(
+	return std::max(
 		current.height(),
-		qMin(
+		std::min(
 			current.width() * dimensions.height() / dimensions.width(),
 			current.height() * 4 / 3));
 }
@@ -613,10 +618,7 @@ float64 Gif::revealedProgress() const {
 		&& item->media()->ttlSeconds()
 		&& !inTTLViewer)
 		? 0.
-		: (!isRound
-			&& _spoiler
-			&& (!AyuSettings::getInstance().revealAllSpoilers()
-				|| _sensitiveSpoiler))
+		: (!isRound && _spoiler)
 		? _spoiler->revealAnimation.value(_spoiler->revealed ? 1. : 0.)
 		: 1.;
 }
@@ -1004,7 +1006,9 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			auto innerw = rectw - (st::msgReplyPadding.left() + st::msgReplyPadding.right());
 			auto recth = 0;
 			auto forwardedHeightReal = forwarded ? forwarded->text.countHeight(innerw) : 0;
-			auto forwardedHeight = qMin(forwardedHeightReal, kMaxGifForwardedBarLines * st::msgServiceNameFont->height);
+			auto forwardedHeight = std::min(
+				forwardedHeightReal,
+				kMaxGifForwardedBarLines * st::msgServiceNameFont->height);
 			if (forwarded) {
 				recth += st::msgReplyPadding.top() + forwardedHeight;
 			} else if (via) {
@@ -1347,11 +1351,9 @@ void Gif::drawCornerStatus(
 		return;
 	}
 	const auto own = activeOwnStreamed();
-	const auto isTakingShot = AyuFeatures::MessageShot::isTakingShot();
 	const auto download = downloadInCorner()
 		&& !dataLoaded()
-		&& !_data->loadedInMediaCache()
-		&& !isTakingShot;
+		&& !_data->loadedInMediaCache();
 	PaintVideoCornerStatus(p, context, {
 		.text = ((own && !own->frozenStatusText.isEmpty())
 			? own->frozenStatusText
@@ -1362,9 +1364,10 @@ void Gif::drawCornerStatus(
 		.radial = ((_animation && _animation->radial.animating())
 			? &_animation->radial
 			: nullptr),
-		.download = download,
+		.download = download && !AyuFeatures::MessageShot::isTakingShot(),
 		.loading = _data->loading(),
-		.mute = (_streamed && _data->isVideoFile() && !download && !isTakingShot),
+		.mute = (_streamed && _data->isVideoFile() && !download
+			&& !AyuFeatures::MessageShot::isTakingShot()),
 	});
 }
 
@@ -1456,7 +1459,9 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 		auto innerw = rectw - (st::msgReplyPadding.left() + st::msgReplyPadding.right());
 		auto recth = 0;
 		auto forwardedHeightReal = forwarded ? forwarded->text.countHeight(innerw) : 0;
-		auto forwardedHeight = qMin(forwardedHeightReal, kMaxGifForwardedBarLines * st::msgServiceNameFont->height);
+		auto forwardedHeight = std::min(
+			forwardedHeightReal,
+			kMaxGifForwardedBarLines * st::msgServiceNameFont->height);
 		if (forwarded) {
 			recth += st::msgReplyPadding.top() + forwardedHeight;
 		} else if (via) {
@@ -1531,10 +1536,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	}
 	if (QRect(usex + paintx, painty, usew, painth).contains(point)) {
 		ensureDataMediaCreated();
-		if (_spoiler
-			&& !_spoiler->revealed
-			&& (!AyuSettings::getInstance().revealAllSpoilers()
-				|| _sensitiveSpoiler)) {
+		if (_spoiler && !_spoiler->revealed) {
 			const auto media = _parent->data()->media();
 			result.link = _sensitiveSpoiler
 				? spoilerTagLink()
@@ -2007,10 +2009,7 @@ TextState Gif::getStateGrouped(
 	}
 	ensureDataMediaCreated();
 
-	auto link = (_spoiler
-		&& !_spoiler->revealed
-		&& (!AyuSettings::getInstance().revealAllSpoilers()
-			|| _sensitiveSpoiler))
+	auto link = (_spoiler && !_spoiler->revealed)
 		? (_sensitiveSpoiler ? spoilerTagLink() : _spoiler->link)
 		: currentVideoLink(fullFeatured);
 	return TextState(_parent, std::move(link));
@@ -2361,6 +2360,7 @@ bool Gif::hasHeavyPart() const {
 void Gif::unloadHeavyPart() {
 	stopAnimation();
 	_dataMedia = nullptr;
+	_videoCoverMedia = nullptr;
 	if (_spoiler) {
 		_spoiler->background = _spoiler->cornerCache = QImage();
 		_spoiler->animation = nullptr;
@@ -2427,7 +2427,7 @@ int Gif::surroundingHeight(
 	const auto forwardedHeightReal = forwarded
 		? forwarded->text.countHeight(innerw)
 		: 0;
-	const auto forwardedHeight = qMin(
+	const auto forwardedHeight = std::min(
 		forwardedHeightReal,
 		kMaxGifForwardedBarLines * st::msgServiceNameFont->height);
 	if (forwarded) {
@@ -2742,11 +2742,9 @@ void Gif::ensureTranscribeButton() const {
 	if (_data->isVideoMessage()
 		&& (!media || !media->ttlSeconds())
 		&& !_parent->data()->isScheduled()
-			&& !_parent->data()->isAdminLogEntry()
-			&& (_data->session().premium()
-				|| (AyuSettings::getInstance().sttEnabled()
-					&& Ayu::STT::STTManager::localEngineAvailable())
-				|| _data->session().api().transcribes().trialsSupport())) {
+		&& !_parent->data()->isAdminLogEntry()
+		&& (_data->session().premium()
+			|| _data->session().api().transcribes().trialsSupport())) {
 		if (!_transcribe) {
 			_transcribe = std::make_unique<TranscribeButton>(
 				_realParent,

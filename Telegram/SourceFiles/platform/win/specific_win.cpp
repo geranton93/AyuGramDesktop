@@ -533,7 +533,7 @@ bool AmbientScreenshotProtectionSupported() {
 }
 
 void SetWindowScreenshotProtection(not_null<QWidget*> window, bool enabled) {
-	const auto handle = window->internalWinId();
+	/*const auto handle = window->internalWinId();
 	if (!handle) {
 		return;
 	}
@@ -542,7 +542,7 @@ void SetWindowScreenshotProtection(not_null<QWidget*> window, bool enabled) {
 		SetWindowDisplayAffinity(hwnd, WDA_NONE);
 	} else if (!SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)) {
 		SetWindowDisplayAffinity(hwnd, WDA_MONITOR);
-	}
+	}*/
 }
 
 void SetWindowPriority(not_null<QWidget*> window, uint32 priority) {

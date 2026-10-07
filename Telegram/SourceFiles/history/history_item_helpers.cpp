@@ -1097,12 +1097,6 @@ MediaCheckResult CheckMessageMedia(const MTPMessageMedia &media) {
 				? Result::HasExpiredMediaTimeToLive
 				: Result::Empty;
 		}
-		// A still-alive self-destructing photo: AyuGram doesn't render
-		// these inline, so flag it as unsupported (drives the ayu hint
-		// and the anti-forward/anti-save checks) instead of Good.
-		if (data.vttl_seconds()) {
-			return Result::HasUnsupportedTimeToLive;
-		}
 		return photo->match([](const MTPDphoto &) {
 			return Result::Good;
 		}, [&](const MTPDphotoEmpty &) {
@@ -1116,11 +1110,6 @@ MediaCheckResult CheckMessageMedia(const MTPMessageMedia &media) {
 			return data.vttl_seconds()
 				? Result::HasExpiredMediaTimeToLive
 				: Result::Empty;
-		}
-		// Only self-destructing round videos are unsupported this way;
-		// TTL voice notes render fine and stay Good.
-		if (data.vttl_seconds() && data.is_video()) {
-			return Result::HasUnsupportedTimeToLive;
 		}
 		return document->match([](const MTPDdocument &) {
 			return Result::Good;
@@ -1469,8 +1458,7 @@ bool CanHoldItemNotification(not_null<const HistoryItem*> item) {
 }
 
 [[nodiscard]] TextWithEntities UnsupportedMessageText() {
-	const auto siteLink =
-		u"https://github.com/geranton93/AyuGramDesktop/releases"_q;
+	const auto siteLink = u"https://t.me/AyuGramReleases"_q;
 	auto result = TextWithEntities{
 		tr::lng_message_unsupported(tr::now, lt_link, siteLink).replace("Telegram", "AyuGram")
 	};
@@ -1478,21 +1466,6 @@ bool CanHoldItemNotification(not_null<const HistoryItem*> item) {
 	result.entities.push_front(
 		EntityInText(EntityType::Italic, 0, result.text.size()));
 	return result;
-}
-
-HistoryMessageMarkupData UnsupportedMessageMarkup() {
-	using Button = HistoryMessageMarkupButton;
-	auto markup = HistoryMessageMarkupData();
-	markup.flags = ReplyMarkupFlag::Inline;
-	auto row = std::vector<Button>();
-	row.emplace_back(
-		Button::Type::Url,
-		tr::lng_update_telegram(tr::now).replace("Telegram", "AyuGram"),
-		Button::Visual(),
-		QByteArray(
-			"https://github.com/geranton93/AyuGramDesktop/releases"));
-	markup.rows.push_back(std::move(row));
-	return markup;
 }
 
 void ShowTrialTranscribesToast(int left, TimeId until) {

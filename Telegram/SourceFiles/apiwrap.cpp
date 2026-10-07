@@ -1454,6 +1454,7 @@ void ApiWrap::migrateFail(not_null<PeerData*> peer, const QString &error) {
 
 void ApiWrap::markContentsRead(
 		const base::flat_set<not_null<HistoryItem*>> &items) {
+	const auto &settings = AyuSettings::getInstance();
 	const auto &ghost = AyuSettings::ghost(&session());
 
 	auto markedIds = QVector<MTPint>();
@@ -1463,8 +1464,12 @@ void ApiWrap::markContentsRead(
 	markedIds.reserve(items.size());
 	for (const auto &item : items) {
 		const auto passthrough = (item->isUnreadMention() || item->hasUnreadReaction()) && !item->isUnreadMedia();
+		const auto keepUnread = settings.saveDeletedMessages()
+			&& item->isIncomingUnreadMedia()
+			&& item->media()->ttlSeconds();
 
-		if (!item->markContentsRead(true) || !item->isRegular()) {
+		if ((!keepUnread && !item->markContentsRead(true))
+			|| !item->isRegular()) {
 			continue;
 		}
 
@@ -1497,8 +1502,12 @@ void ApiWrap::markContentsRead(
 
 void ApiWrap::markContentsRead(not_null<HistoryItem*> item) {
 	const auto passthrough = (item->isUnreadMention() || item->hasUnreadReaction()) && !item->isUnreadMedia();
+	const auto keepUnread = AyuSettings::getInstance().saveDeletedMessages()
+		&& item->isIncomingUnreadMedia()
+		&& item->media()->ttlSeconds();
 
-	if (!item->markContentsRead(true) || !item->isRegular()) {
+	if ((!keepUnread && !item->markContentsRead(true))
+		|| !item->isRegular()) {
 		return;
 	}
 
@@ -3885,12 +3894,11 @@ void ApiWrap::forwardMessages(
 				itemIds,
 				forwardOptions,
 				targetHistory] {
-			const auto session = sourceSession.get();
-			if (!session) {
+			if (!sourceSession) {
 				return;
 			}
 			AyuForward::forwardMessages(
-				not_null<Main::Session*>(session),
+				sourceSession,
 				action,
 				false,
 				itemIds,
@@ -3908,12 +3916,11 @@ void ApiWrap::forwardMessages(
 				itemIds,
 				forwardOptions,
 				targetHistory] {
-			const auto session = sourceSession.get();
-			if (!session) {
+			if (!sourceSession) {
 				return;
 			}
 			AyuForward::intelligentForward(
-				not_null<Main::Session*>(session),
+				sourceSession,
 				action,
 				itemIds,
 				forwardOptions,
@@ -4285,7 +4292,7 @@ void ApiWrap::sendVoiceMessage(
 		bool video,
 		const SendAction &action) {
 	auto scheduledAction = action;
-	applyGhostScheduling(_session, scheduledAction.options, 17);
+	applyGhostScheduling(scheduledAction, QString(), 17);
 	const auto caption = TextWithTags();
 	const auto to = FileLoadTaskOptions(scheduledAction);
 	_fileLoader->addTask(
@@ -4533,12 +4540,14 @@ void ApiWrap::sendRichMessage(
 
 	const auto history = action.history;
 	const auto peer = history->peer;
+	const auto summary = Iv::FlattenRichPageSummary(page).text;
+	applyGhostScheduling(action, summary);
 	const auto ephemeral = !action.options.scheduled
 		&& !action.options.shortcutId
 		&& _session->ephemeralMessages().wouldSendMedia(
 			peer,
 			action.replyTo,
-			Iv::FlattenRichPageSummary(page).text);
+			summary);
 	if (!ephemeral) {
 		StripEphemeralReply(_session, action.replyTo);
 	}
@@ -4784,7 +4793,7 @@ void ApiWrap::sendRichMessage(
 void ApiWrap::sendMessage(
 		MessageToSend &&message,
 		std::optional<MsgId> localMessageId) {
-	applyGhostScheduling(_session, message.action.options);
+	applyGhostScheduling(message.action, message.textWithTags.text);
 	const auto clearReplyTo = prependPseudoReply(message);
 
 	const auto history = message.action.history;

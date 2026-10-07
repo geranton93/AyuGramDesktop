@@ -7,6 +7,7 @@
 #include "ayu/ui/boxes/plugin_info_box.h"
 
 #include "apiwrap.h"
+#include "ayu/ayu_url_handlers.h"
 #include "core/file_utilities.h"
 #include "core/ui_integration.h"
 #include "data/data_document.h"
@@ -98,6 +99,11 @@ TextWithEntities ParsePluginDescriptionLinks(const QString &text) {
 		const auto match = matches.next();
 		const auto url = match.capturedView(2);
 		if (!Ui::InputField::IsValidMarkdownLink(url)) {
+			continue;
+		}
+		const auto parsed = QUrl(url.toString());
+		if (!AyuUrlHandlers::IsWebUrl(parsed)
+			&& parsed.scheme().compare(u"tg"_q, Qt::CaseInsensitive) != 0) {
 			continue;
 		}
 		result.append(ParsePluginDescriptionPlain(
@@ -526,27 +532,7 @@ void ShowPluginInfoBox(
 					 {
 					 });
 
-		if (!doc) {
-			showBox(std::move(*shared), nullptr);
-			return;
-		}
-
-		const auto media = doc->createMediaView();
-		media->checkStickerLarge();
-
-		if (media->loaded()) {
-			showBox(std::move(*shared), doc);
-			return;
-		}
-
-		rpl::single() | rpl::then(
-			session->downloaderTaskFinished()
-		) | rpl::filter([=] {
-			return media->loaded();
-		}) | rpl::take(1) | rpl::on_next(crl::guard(controller, [=] {
-			showBox(std::move(*shared), doc);
-		}), session->lifetime());
-		media->automaticLoad(doc->stickerSetOrigin(), nullptr);
+		showBox(std::move(*shared), doc);
 	})).fail(crl::guard(controller, [=](const MTP::Error &)
 	{
 		showBox(std::move(*shared), nullptr);
