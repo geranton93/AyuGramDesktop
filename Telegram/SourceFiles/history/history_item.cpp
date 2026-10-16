@@ -555,14 +555,15 @@ HistoryItem::HistoryItem(
 			setMedia(*media);
 		}
 		if (const auto media = _media.get()) {
-			if (media->ttlSeconds()
-				&& hasUnreadMediaFlag()
-				&& isTtlCoveredMedia()) {
-				setSelfDestruct(
-					(media->photo()
-						? HistoryServiceSelfDestruct::Type::Photo
-						: HistoryServiceSelfDestruct::Type::Video),
-					TimeId(media->ttlSeconds()));
+			if (const auto ttl = media->ttlSeconds(); ttl) {
+				if (hasUnreadMediaFlag() && isTtlCoveredMedia()) {
+					setSelfDestruct(
+						(media->photo()
+							? HistoryServiceSelfDestruct::Type::Photo
+							: HistoryServiceSelfDestruct::Type::Video),
+						TimeId(ttl));
+				}
+				setAyuHint(formatTTL(ttl, !media->photo()));
 			}
 		}
 		if (const auto richMessage = data.vrich_message()) {
