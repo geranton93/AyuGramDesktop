@@ -1,0 +1,20 @@
+Telegram/SourceFiles/ayu/libs/sqlite/sqlite_orm.h
+  s_c5ed9cd4e03e75::t_69f01074b0182d 17423-17424
+  s_c5ed9cd4e03e75::t_d322d1e4f209d8 17425
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a90a6c058e6349002537a3cd35b5b5733389900",
+  "prompts": {},
+  "sessions": {
+    "s_c5ed9cd4e03e75": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "56c6fdac-2806-43b4-a9ca-d37f01a2d8d1",
+        "model": "MiniMax-M3.1-Flash-Preview"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
