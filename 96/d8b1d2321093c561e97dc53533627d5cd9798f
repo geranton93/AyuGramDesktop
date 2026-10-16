@@ -1,0 +1,21 @@
+Telegram/SourceFiles/tests/test_text.cpp
+  s_c5ed9cd4e03e75::t_6faed50b865c36 740-743
+  s_c5ed9cd4e03e75::t_1af20c123ec7e1 737-739,744
+  s_c5ed9cd4e03e75::t_fb0cd89d8eb2f5 610-616
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "96d8b1d2321093c561e97dc53533627d5cd9798f",
+  "prompts": {},
+  "sessions": {
+    "s_c5ed9cd4e03e75": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "56c6fdac-2806-43b4-a9ca-d37f01a2d8d1",
+        "model": "MiniMax-M3.1-Flash-Preview"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
