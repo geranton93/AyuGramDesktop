@@ -310,6 +310,8 @@ set(ayugram_files
         ayu/features/filters/filters_controller.h
         ayu/features/filters/filters_cache_controller.cpp
         ayu/features/filters/filters_cache_controller.h
+        ayu/features/filters/filter_cache.h
+        ayu/features/filters/filter_regex.h
         ayu/features/filters/filters_utils.cpp
         ayu/features/filters/filters_utils.h
         ayu/data/messages_storage.cpp

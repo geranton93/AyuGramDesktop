@@ -44,20 +44,20 @@
 
 namespace AyuSync {
 
-void forwardMessagesSync(not_null<Main::Session*> session,
+void forwardMessagesSync(const base::weak_ptr<Main::Session> &session,
 							 const MessageIdsList &itemIds,
 							 const ApiWrap::SendAction &action,
 							 Data::ForwardOptions options,
 							 base::weak_ptr<History> targetHistory) {
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
 	const auto forwardIds = itemIds;
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 
 	crl::on_main([=]
 	{
 		const auto current = weakSession.get();
 		const auto history = targetHistory.get();
-		if (current && history) {
+		if (current && history && &history->session() == current) {
 			auto safeAction = action;
 			safeAction.history = history;
 			const auto forwardItems = current->data().idsToItems(forwardIds);
@@ -79,16 +79,16 @@ void forwardMessagesSync(not_null<Main::Session*> session,
 }
 
 void sendMessageSync(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		Api::MessageToSend &&message,
 		base::weak_ptr<History> targetHistory) {
 	const auto action = message.action;
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	crl::on_main([=, message = std::move(message)]() mutable
 	{
 		const auto current = weakSession.get();
 		const auto history = targetHistory.get();
-		if (current && history) {
+		if (current && history && &history->session() == current) {
 			message.action.history = history;
 			// we cannot send events to objects
 			// owned by a different thread
@@ -103,11 +103,11 @@ void sendMessageSync(
 }
 
 void waitForMsgSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 		base::weak_ptr<History> targetHistory) {
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
 	auto lifetime = std::make_shared<rpl::lifetime>();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	const auto target = AyuForward::SnapshotForwardTarget(
 		session,
 		targetHistory);
@@ -140,7 +140,7 @@ void waitForMsgSync(
 	});
 }
 
-void sendDocumentSync(not_null<Main::Session*> session,
+void sendDocumentSync(const base::weak_ptr<Main::Session> &session,
 					  Ui::PreparedGroup &group,
 					  SendMediaType type,
 					  TextWithTags &&caption,
@@ -148,13 +148,13 @@ void sendDocumentSync(not_null<Main::Session*> session,
 					  base::weak_ptr<History> targetHistory) {
 	auto groupId = std::make_shared<SendingAlbum>();
 	groupId->groupId = base::RandomValue<uint64>();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 
 	crl::on_main([=, lst = std::move(group.list), caption = std::move(caption)]() mutable
 	{
 		const auto current = weakSession.get();
 		const auto history = targetHistory.get();
-		if (!current || !history) {
+		if (!current || !history || &history->session() != current) {
 			return;
 		}
 		auto safeAction = action;
@@ -173,17 +173,17 @@ void sendDocumentSync(not_null<Main::Session*> session,
 	waitForMsgSync(session, std::move(targetHistory));
 }
 
-void sendStickerSync(not_null<Main::Session*> session,
+void sendStickerSync(const base::weak_ptr<Main::Session> &session,
 						 Api::MessageToSend &&message,
 						 DocumentId documentId,
 						 base::weak_ptr<History> targetHistory) {
 	const auto action = message.action;
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	crl::on_main([=, message = std::move(message)]() mutable
 	{
 		const auto current = weakSession.get();
 		const auto history = targetHistory.get();
-		if (current && history && documentId) {
+		if (current && history && &history->session() == current && documentId) {
 			message.action.history = history;
 			Api::SendExistingDocument(
 				std::move(message),
@@ -195,14 +195,14 @@ void sendStickerSync(not_null<Main::Session*> session,
 	waitForMsgSync(session, std::move(targetHistory));
 }
 
-void sendVoiceSync(not_null<Main::Session*> session,
+void sendVoiceSync(const base::weak_ptr<Main::Session> &session,
 					   const QByteArray &data,
 					   int64_t duration,
 					   bool video,
 					   Api::MessageToSend &&message,
 					   base::weak_ptr<History> targetHistory) {
 	const auto action = message.action;
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	const auto target = AyuForward::SnapshotForwardTarget(
 		session,
 		targetHistory);
@@ -285,14 +285,14 @@ namespace {
 
 } // namespace
 
-UploadedFile uploadFileSync(not_null<Main::Session*> session,
+UploadedFile uploadFileSync(const base::weak_ptr<Main::Session> &session,
 							PeerId peerId,
 							const QString &path,
 							SendMediaType type,
 							bool forceFile,
 							const QString &displayName,
 							const Fn<bool()> &cancelled) {
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	if (!weakSession) {
 		return {};
 	}
@@ -497,11 +497,11 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 }
 
 std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	FullMsgId itemId) {
 	const auto resolved = std::make_shared<std::shared_ptr<const Iv::RichPage>>();
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 
 	crl::on_main([=]
 	{
@@ -598,13 +598,13 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 	return finished ? *resolved : nullptr;
 }
 
-bool sendRichMessageSync(not_null<Main::Session*> session,
+bool sendRichMessageSync(const base::weak_ptr<Main::Session> &session,
 						 const MTPInputRichMessage &richMessage,
 						 const Api::SendAction &action,
 						 base::weak_ptr<History> targetHistory) {
 	const auto sent = std::make_shared<bool>(false);
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	const auto target = AyuForward::SnapshotForwardTarget(
 		session,
 		targetHistory);
@@ -617,7 +617,8 @@ bool sendRichMessageSync(not_null<Main::Session*> session,
 	{
 		const auto current = weakSession.get();
 		const auto currentHistory = targetHistory.get();
-		if (!current || !currentHistory) {
+		if (!current || !currentHistory
+			|| &currentHistory->session() != current) {
 			latch->countDown();
 			return;
 		}

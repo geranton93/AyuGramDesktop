@@ -15,7 +15,7 @@
 namespace AyuForward {
 
 bool forwardRichMessage(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	FullMsgId itemId,
 	const Api::SendAction &action,
 	base::weak_ptr<History> targetHistory,

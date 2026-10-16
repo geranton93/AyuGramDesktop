@@ -1329,9 +1329,7 @@ Reader::FillState Reader::fill(
 Reader::FillState Reader::fillFromSlices(uint32 offset, bytes::span buffer) {
 	using namespace rpl::mappers;
 
-	const auto firstLoadingOffset = _loadingOffsets.front();
-	const auto seek = (_lastFillEnd && (*_lastFillEnd != offset))
-		|| (firstLoadingOffset && (*firstLoadingOffset != offset));
+	const auto seek = _lastFillEnd && (*_lastFillEnd != offset);
 	const auto lastDownloadAt = _lastDownloadAt.load(
 		std::memory_order_acquire);
 	const auto downloadStatsStale = !lastDownloadAt

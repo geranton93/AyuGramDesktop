@@ -1887,12 +1887,11 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					existingIds,
 					forwardOptions] {
 				for (auto i = 0; i != targetActions.size(); ++i) {
-					const auto session = sourceSession.get();
-					if (!session) {
+					if (!sourceSession) {
 						return;
 					}
 					AyuForward::forwardMessages(
-						not_null<Main::Session*>(session),
+						sourceSession,
 						targetActions[i],
 						false,
 						existingIds,
@@ -1924,12 +1923,11 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					forwardOptions]
 			{
 				for (auto i = 0; i != targetActions.size(); ++i) {
-					const auto session = sourceSession.get();
-					if (!session) {
+					if (!sourceSession) {
 						return;
 					}
 					AyuForward::intelligentForward(
-						not_null<Main::Session*>(session),
+						sourceSession,
 						targetActions[i],
 						existingIds,
 						forwardOptions,

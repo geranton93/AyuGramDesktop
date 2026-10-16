@@ -3885,12 +3885,11 @@ void ApiWrap::forwardMessages(
 				itemIds,
 				forwardOptions,
 				targetHistory] {
-			const auto session = sourceSession.get();
-			if (!session) {
+			if (!sourceSession) {
 				return;
 			}
 			AyuForward::forwardMessages(
-				not_null<Main::Session*>(session),
+				sourceSession,
 				action,
 				false,
 				itemIds,
@@ -3908,12 +3907,11 @@ void ApiWrap::forwardMessages(
 				itemIds,
 				forwardOptions,
 				targetHistory] {
-			const auto session = sourceSession.get();
-			if (!session) {
+			if (!sourceSession) {
 				return;
 			}
 			AyuForward::intelligentForward(
-				not_null<Main::Session*>(session),
+				sourceSession,
 				action,
 				itemIds,
 				forwardOptions,

@@ -526,27 +526,7 @@ void ShowPluginInfoBox(
 					 {
 					 });
 
-		if (!doc) {
-			showBox(std::move(*shared), nullptr);
-			return;
-		}
-
-		const auto media = doc->createMediaView();
-		media->checkStickerLarge();
-
-		if (media->loaded()) {
-			showBox(std::move(*shared), doc);
-			return;
-		}
-
-		rpl::single() | rpl::then(
-			session->downloaderTaskFinished()
-		) | rpl::filter([=] {
-			return media->loaded();
-		}) | rpl::take(1) | rpl::on_next(crl::guard(controller, [=] {
-			showBox(std::move(*shared), doc);
-		}), session->lifetime());
-		media->automaticLoad(doc->stickerSetOrigin(), nullptr);
+		showBox(std::move(*shared), doc);
 	})).fail(crl::guard(controller, [=](const MTP::Error &)
 	{
 		showBox(std::move(*shared), nullptr);

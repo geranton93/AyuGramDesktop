@@ -288,7 +288,7 @@ struct RichTraversalLimits {
 }
 
 [[nodiscard]] UploadedRichMedia reuploadMedia(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		PeerId peerId,
 		Data::FileOrigin origin,
 		const RichMedia &source,
@@ -574,7 +574,7 @@ void sanitizeRichText(Iv::RichPage::RichText &text) {
 } // namespace
 
 bool forwardRichMessage(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	FullMsgId itemId,
 	const Api::SendAction &action,
 	base::weak_ptr<History> targetHistory,
@@ -587,7 +587,7 @@ bool forwardRichMessage(
 	// every bail-out point already in this function -- and every deeper
 	// AyuSync::*Sync call that periodically polls cancelled() -- also
 	// catches that case, without needing a guard at each of them.
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	auto userCancelled = cancelled
 		? std::move(cancelled)
 		: Fn<bool()>([] { return false; });
