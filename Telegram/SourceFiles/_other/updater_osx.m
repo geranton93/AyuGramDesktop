@@ -264,15 +264,25 @@ int main(int argc, const char * argv[]) {
 	writeLog([[NSArray arrayWithObjects:@"Running application '", appPath, @"' with args '", [args componentsJoinedByString:@"' '"], @"'..", nil] componentsJoinedByString:@""]);
 
 	for (int i = 0; i < 5; ++i) {
-		NSError *error = nil;
-		NSRunningApplication *result = [[NSWorkspace sharedWorkspace]
-					launchApplicationAtURL:[NSURL fileURLWithPath:appPath]
-					options:NSWorkspaceLaunchDefault
-					configuration:[NSDictionary
-								   dictionaryWithObject:args
-								   forKey:NSWorkspaceLaunchConfigurationArguments]
-					error:&error];
-		if (result) {
+		__block NSError *error = nil;
+		__block BOOL launched = NO;
+		// launchApplicationAtURL:options:configuration:error: is deprecated
+		// since macOS 10.3. openApplicationAtURL:configuration: replaces it
+		// but is asynchronous, so a semaphore keeps this call synchronous.
+		NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+		configuration.arguments = args;
+		configuration.activates = NO;
+		dispatch_semaphore_t launchedSemaphore = dispatch_semaphore_create(0);
+		[[NSWorkspace sharedWorkspace]
+			openApplicationAtURL:[NSURL fileURLWithPath:appPath]
+			configuration:configuration
+			completionHandler:^(NSRunningApplication *runningApplication, NSError *openError) {
+				launched = (runningApplication != nil);
+				error = openError;
+				dispatch_semaphore_signal(launchedSemaphore);
+			}];
+		dispatch_semaphore_wait(launchedSemaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+		if (launched) {
 			closeLog();
 			return 0;
 		}
