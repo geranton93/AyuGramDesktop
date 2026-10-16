@@ -17420,7 +17420,9 @@ namespace sqlite_orm {
 
         // safety net of doing a triple check at runtime
         inline void proxy_assert_args_count(sqlite3_context* context, int argsCount) {
-            udf_proxy* proxy;
+            // WHY: the assignment below sits inside assert(), which NDEBUG turns
+            // into a no-op, so assert_args_count() would read it uninitialized.
+            udf_proxy* proxy = nullptr;
             assert((proxy = static_cast<udf_proxy*>(sqlite3_user_data(context))) != nullptr);
             assert_args_count(proxy, argsCount);
             (void)context;
