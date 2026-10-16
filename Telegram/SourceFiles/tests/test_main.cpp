@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/rp_window.h"
 #include "ui/emoji_config.h"
 #include "ui/painter.h"
+#include "ui/style/style_core_font.h"
 
 #include <QApplication>
 #include <QAbstractNativeEventFilter>
@@ -203,6 +204,10 @@ int main(int argc, char *argv[]) {
 
 	InvokeQueued(&app, [=] {
 		new Ui::Animations::Manager();
+		// WHY: Open Sans is bundled in lib_ui's :/gui/fonts and is registered
+		// here only; application.cpp does the same. Without it these tests lay
+		// text out in whatever font the system substitutes and drift a pixel.
+		style::internal::StartFonts();
 		style::StartManager(chosen);
 
 		Ui::Emoji::Init();
