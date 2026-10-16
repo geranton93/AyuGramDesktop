@@ -120,9 +120,9 @@ elif (mac):
     environment.update({
         'SPECIAL_TARGET': 'mac',
         'MAKE_THREADS_CNT': '-j' + str(os.cpu_count()),
-        'MACOSX_DEPLOYMENT_TARGET': '10.13',
+        'MACOSX_DEPLOYMENT_TARGET': '14.4',
         'UNGUARDED': '-Werror=unguarded-availability-new',
-        'MIN_VER': '-mmacosx-version-min=10.13',
+        'MIN_VER': '-mmacosx-version-min=14.4',
         'CMAKE_GENERATOR': 'Ninja',
     })
 
@@ -173,6 +173,14 @@ def computeCacheKey(stage):
         stage['version'],
         stage['commands']
     ]
+    for requiredName in stage['requires']:
+        requiredStage = next(
+            (item for item in stages if item['name'] == requiredName),
+            None
+        )
+        if requiredStage is None or not 'key' in requiredStage:
+            error('Required stage key is not set: ' + requiredName)
+        objects.append('stage:' + requiredName + ':' + requiredStage['key'])
     for pattern in stage['dependencies']:
         pathlist = glob.glob(os.path.join(libsDir, pattern))
         items = [pattern]
@@ -269,7 +277,7 @@ def filterByPlatform(commands):
                     result = result + command + '\n'
     return [result, dependencies, version]
 
-def stage(name, commands, location = 'Libraries'):
+def stage(name, commands, location = 'Libraries', requires = ()):
     if location == 'Libraries':
         directory = libsDir
     elif location == 'ThirdParty':
@@ -284,8 +292,37 @@ def stage(name, commands, location = 'Libraries'):
             'directory': directory,
             'commands': commands,
             'version': version,
-            'dependencies': dependencies
+            'dependencies': dependencies,
+            'requires': requires
         })
+
+def resolveSelectedStages(requestedStages, stages):
+    selectedStages = set(requestedStages)
+    stagesByName = {stage['name']: stage for stage in stages}
+    stageIndexes = {stage['name']: index for index, stage in enumerate(stages)}
+    pendingStages = list(requestedStages)
+    while pendingStages:
+        stageName = pendingStages.pop()
+        currentStage = stagesByName.get(stageName)
+        if currentStage is None:
+            raise ValueError('Unknown requested stage: ' + stageName)
+        for requiredName in currentStage['requires']:
+            requiredStage = stagesByName.get(requiredName)
+            if requiredStage is None:
+                raise ValueError('Unknown required stage: ' + requiredName)
+            if stageIndexes[requiredName] >= stageIndexes[stageName]:
+                raise ValueError('Required stage must be declared first: ' + requiredName)
+            if requiredName not in selectedStages:
+                selectedStages.add(requiredName)
+                pendingStages.append(requiredName)
+    return selectedStages
+
+def unmetRequiredStages(stage, completedStages):
+    return [
+        name
+        for name in stage['requires']
+        if name not in completedStages
+    ]
 
 def winFailOnEach(command):
     commands = command.split('\n')
@@ -381,19 +418,38 @@ def runStages():
                 break
         if not found:
             error('Unknown argument: ' + arg)
+    requestedStages = set(onlyStages)
+    try:
+        selectedStages = resolveSelectedStages(requestedStages, stages)
+    except ValueError as exception:
+        error(str(exception))
+    onlyStages = selectedStages
+    forcedStages = requestedStages
     count = len(stages)
     index = 0
+    completedStages = set()
     for stage in stages:
         if len(onlyStages) > 0 and not stage['name'] in onlyStages:
             continue
+        missingRequiredStages = unmetRequiredStages(stage, completedStages)
+        if missingRequiredStages:
+            error(
+                'Required stages were not completed: '
+                + ', '.join(missingRequiredStages)
+            )
         index = index + 1
         version = ('#' + str(stage['version'])) if (stage['version'] != '0') else ''
         prefix = '[' + str(index) + '/' + str(count) + '](' + stage['location'] + '/' + stage['name'] + version + ')'
         print(prefix + ': ', end = '', flush=True)
         stage['key'] = computeCacheKey(stage)
         commands = removeDir(stage['name']) + '\n' + stage['commands']
-        checkResult = 'Forced' if len(onlyStages) > 0 else checkCacheKey(stage)
+        checkResult = (
+            'Forced'
+            if stage['name'] in forcedStages
+            else checkCacheKey(stage)
+        )
         if checkResult == 'Good':
+            completedStages.add(stage['name'])
             print('SKIPPING')
             continue
         elif checkResult == 'NotFound':
@@ -435,6 +491,7 @@ def runStages():
             print(prefix + ': FAILED')
             finish(1)
         writeCacheKey(stage)
+        completedStages.add(stage['name'])
 
 if customRunCommand:
     os.chdir(executePath)
@@ -458,7 +515,7 @@ if customRunCommand:
 stage('patches', """
     git clone https://github.com/desktop-app/patches.git
     cd patches
-    git checkout c2cc44fca4a8d0e20d1ef0f40884d717c750f0a4
+    git checkout ebcd707f1763651089e3e7220ddd4f97cbcf87e0
 mac:
     git clone https://github.com/desktop-app/qt6_highsierra_patches.git qt6_highsierra
     cd qt6_highsierra
@@ -471,7 +528,7 @@ win:
     SET CHERE_INVOKING=enabled_from_arguments
     SET MSYS2_PATH_TYPE=inherit
 
-    powershell -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2025-08-30/msys2-base-x86_64-20250830.sfx.exe"
+    powershell -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.sfx.exe"
     msys64.exe
     del msys64.exe
 
@@ -535,7 +592,7 @@ release:
 
 stage('xz', """
 !win:
-    git clone -b v5.4.5 https://github.com/tukaani-project/xz.git
+    git clone -b v5.8.4 https://github.com/tukaani-project/xz.git
     cd xz
     sed -i '' '\\@check_symbol_exists(futimens "sys/types.h;sys/stat.h" HAVE_FUTIMENS)@d' CMakeLists.txt
     CFLAGS="$UNGUARDED" CPPFLAGS="$UNGUARDED" cmake -B build . \\
@@ -548,7 +605,7 @@ stage('xz', """
 stage('zlib', """
     git clone https://github.com/madler/zlib.git
     cd zlib
-    git checkout e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca
+    git checkout da607da739fa6047df13e66a2af6b8bec7c2a498
 win:
     cmake . ^
         -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
@@ -557,7 +614,7 @@ win:
         -DZLIB_BUILD_TESTING=OFF ^
         -DZLIB_BUILD_MINIZIP=ON ^
         -DZLIB_MINIZIP_BUILD_SHARED=OFF ^
-        -DZLIB_MINIZIP_BUILD_TESTING=OFF
+        -DMINIZIP_BUILD_TESTING=OFF
     cmake --build . --config Debug
 release:
     cmake --build . --config Release
@@ -621,7 +678,7 @@ mac:
 """)
 
 stage('openssl3', """
-    git clone -b openssl-3.2.1 https://github.com/openssl/openssl openssl3
+    git clone -b openssl-3.6.5 https://github.com/openssl/openssl openssl3
     cd openssl3
 win32:
     perl Configure no-shared no-tests debug-VC-WIN32 /FS
@@ -668,7 +725,7 @@ mac:
 """)
 
 stage('opus', """
-    git clone -b v1.5.2 https://github.com/xiph/opus.git
+    git clone -b v1.6.1 https://github.com/xiph/opus.git
     cd opus
 win:
     cmake -B out . ^
@@ -715,9 +772,10 @@ release:
 
 stage('libiconv', """
 mac:
-    VERSION=1.18
+    VERSION=1.19
     rm -f libiconv.tar.gz
     wget --timeout=30 --tries=2 -O libiconv.tar.gz ftp://ftp.gnu.org/gnu/libiconv/libiconv-$VERSION.tar.gz || wget -O libiconv.tar.gz https://ftp.gnu.org/pub/gnu/libiconv/libiconv-$VERSION.tar.gz
+    echo "88dd96a8c0464eca144fc791ae60cd31cd8ee78321e67397e25fc095c4a19aa6  libiconv.tar.gz" | shasum -a 256 -c -
     rm -rf libiconv-$VERSION
     tar -xvzf libiconv.tar.gz
     rm libiconv.tar.gz
@@ -808,7 +866,7 @@ mac:
     buildOneArch x86_64 build
 
     lipo -create build.arm64/libdav1d.a build/libdav1d.a -output ${USED_PREFIX}/lib/libdav1d.a
-""")
+""", requires=('patches',))
 
 stage('openh264', """
     git clone -b v2.6.0 https://github.com/cisco/openh264.git
@@ -866,7 +924,7 @@ mac:
     buildOneArch x86_64 build.x86_64
 
     lipo -create build.aarch64/libopenh264.a build.x86_64/libopenh264.a -output ${USED_PREFIX}/lib/libopenh264.a
-""")
+""", requires=('patches',))
 
 stage('libavif', """
     git clone -b v1.4.2 https://github.com/AOMediaCodec/libavif.git
@@ -893,38 +951,6 @@ mac:
         -D AVIF_ENABLE_WERROR=OFF \\
         -D AVIF_CODEC_DAV1D=SYSTEM \\
         -D AVIF_LIBYUV=OFF
-    cmake --build . --config MinSizeRel
-    cmake --install . --config MinSizeRel
-""")
-
-stage('libde265', """
-    git clone -b v1.1.1 https://github.com/strukturag/libde265.git
-    cd libde265
-win:
-    cmake . ^
-        -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
-        -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
-        -DCMAKE_C_FLAGS="/DLIBDE265_STATIC_BUILD" ^
-        -DCMAKE_CXX_FLAGS="/DLIBDE265_STATIC_BUILD" ^
-        -DENABLE_SDL=OFF ^
-        -DBUILD_SHARED_LIBS=OFF ^
-        -DENABLE_DECODER=OFF ^
-        -DENABLE_ENCODER=OFF
-    cmake --build . --config Debug
-    cmake --install . --config Debug
-release:
-    cmake --build . --config Release
-    cmake --install . --config Release
-mac:
-    cmake . \\
-        -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
-        -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
-        -D DISABLE_SSE=ON \\
-        -D ENABLE_SDL=OFF \\
-        -D BUILD_SHARED_LIBS=OFF \\
-        -D ENABLE_DECODER=ON \\
-        -D ENABLE_ENCODER=OFF
     cmake --build . --config MinSizeRel
     cmake --install . --config MinSizeRel
 """)
@@ -966,66 +992,6 @@ mac:
     lipo -create build.arm64/libwebpdemux.a build/libwebpdemux.a -output build/libwebpdemux.a
     lipo -create build.arm64/libwebpmux.a build/libwebpmux.a -output build/libwebpmux.a
     cmake --install build
-""")
-
-stage('libheif', """
-    git clone -b v1.23.1 https://github.com/strukturag/libheif.git
-    cd libheif
-win:
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/LIBHEIF_EXPORTS/LIBDE265_STATIC_BUILD/g' libheif/CMakeLists.txt
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' libheif/CMakeLists.txt
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/LIBHEIF_EXPORTS/LIBDE265_STATIC_BUILD/g' heifio/CMakeLists.txt
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' heifio/CMakeLists.txt
-    cmake . ^
-        -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
-        -DBUILD_SHARED_LIBS=OFF ^
-        -DBUILD_DOCUMENTATION=OFF ^
-        -DBUILD_TESTING=OFF ^
-        -DENABLE_PLUGIN_LOADING=OFF ^
-        -DWITH_LIBDE265=ON ^
-        -DWITH_X264=OFF ^
-        -DWITH_OpenH264_DECODER=OFF ^
-        -DWITH_SvtEnc=OFF ^
-        -DWITH_SvtEnc_PLUGIN=OFF ^
-        -DWITH_RAV1E=OFF ^
-        -DWITH_RAV1E_PLUGIN=OFF ^
-        -DWITH_LIBSHARPYUV=OFF ^
-        -DCMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE ^
-        -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE ^
-        -DCMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE ^
-        -DWITH_EXAMPLES=OFF
-    cmake --build . --config Debug
-    cmake --install . --config Debug
-release:
-    cmake --build . --config Release
-    cmake --install . --config Release
-mac:
-    cmake . \\
-        -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
-        -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
-        -D BUILD_SHARED_LIBS=OFF \\
-        -D BUILD_DOCUMENTATION=OFF \\
-        -D BUILD_TESTING=OFF \\
-        -D ENABLE_PLUGIN_LOADING=OFF \\
-        -D WITH_AOM_ENCODER=OFF \\
-        -D WITH_AOM_DECODER=OFF \\
-        -D WITH_X265=OFF \\
-        -D WITH_X264=OFF \\
-        -D WITH_OpenH264_DECODER=OFF \\
-        -D WITH_SvtEnc=OFF \\
-        -D WITH_RAV1E=OFF \\
-        -D WITH_DAV1D=ON \\
-        -D WITH_LIBDE265=ON \\
-        -D LIBDE265_INCLUDE_DIR=$USED_PREFIX/include/ \\
-        -D LIBDE265_LIBRARY=$USED_PREFIX/lib/libde265.a \\
-        -D WITH_LIBSHARPYUV=OFF \\
-        -D CMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE \\
-        -D CMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE \\
-        -D CMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE \\
-        -D WITH_EXAMPLES=OFF
-    cmake --build . --config MinSizeRel
-    cmake --install . --config MinSizeRel
 """)
 
 stage('libjxl', """
@@ -1073,11 +1039,11 @@ mac:
 
 stage('libvpx', """
     git clone https://github.com/webmproject/libvpx.git
-depends:patches/libvpx/*.patch
+depends:patches/libvpx/000[123]-*.patch
     cd libvpx
-    git checkout v1.14.1
+    git checkout 6df3ec34557879fff673706f4a1d9fbd0f3a6f0e
 win:
-    for /r %%i in (..\\patches\\libvpx\\*) do git apply %%i
+    for %%i in (..\\patches\\libvpx\\0001-*.patch ..\\patches\\libvpx\\0002-*.patch ..\\patches\\libvpx\\0003-*.patch) do git apply %%i
 
     SET PATH=%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
     SET CHERE_INVOKING=enabled_from_arguments
@@ -1088,12 +1054,12 @@ win32:
 win64:
     SET "TOOLCHAIN=x86_64-win64-vs17"
 winarm:
-    SET "TOOLCHAIN=arm64-win64-vs17-v145"
+    SET "TOOLCHAIN=arm64-win64-vs18"
 win:
 depends:patches/build_libvpx_win.sh
     bash --login ../patches/build_libvpx_win.sh
 mac:
-    find ../patches/libvpx -type f -print0 | sort -z | xargs -0 git apply
+    for patch in ../patches/libvpx/000[123]-*.patch; do git apply "$patch"; done
 
     ./configure --prefix=$USED_PREFIX \
     --target=arm64-darwin20-gcc \
@@ -1131,10 +1097,10 @@ mac:
     lipo -create out.arm64/libvpx.a out.x86_64/libvpx.a -output libvpx.a
 
     make install
-""")
+""", requires=('patches',))
 
 stage('liblcms2', """
-    git clone -b lcms2.16 https://github.com/mm2/Little-CMS.git liblcms2
+    git clone -b lcms2.19.1 https://github.com/mm2/Little-CMS.git liblcms2
     cd liblcms2
 win:
 depends:python/Scripts/activate.bat
@@ -1165,23 +1131,21 @@ mac:
     buildOneArch x86_64 build
 
     lipo -create build.arm64/liblcms2.a build/liblcms2.a -output ${USED_PREFIX}/lib/liblcms2.a
-""")
+""", requires=('patches',))
 
 stage('nv-codec-headers', """
 win:
-    git clone -b n12.1.14.0 https://github.com/FFmpeg/nv-codec-headers.git
+    git clone -b n13.1.15.0 https://github.com/FFmpeg/nv-codec-headers.git
 """)
 
 stage('regex', """
-    git clone -b boost-1.83.0 https://github.com/boostorg/regex.git
+    git clone -b boost-1.92.0 https://github.com/boostorg/regex.git
 """)
 
 stage('ffmpeg', """
-    git clone -b n6.1.6 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+    git clone -b n9.0.2 https://github.com/FFmpeg/FFmpeg.git ffmpeg
     cd ffmpeg
 win:
-depends:patches/ffmpeg.patch
-    git apply ../patches/ffmpeg.patch
 
     SET PATH=%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
     SET CHERE_INVOKING=enabled_from_arguments
@@ -1356,7 +1320,118 @@ mac:
     lipo -create out.arm64/libavutil.a out.x86_64/libavutil.a -output libavutil/libavutil.a
 
     make install
+""", requires=(
+    'patches',
+    'dav1d',
+    'openh264',
+    'opus',
+    'libvpx',
+    'nv-codec-headers',
+) if win else (
+    'patches',
+    'dav1d',
+    'openh264',
+    'opus',
+    'libvpx',
+))
+
+stage('libde265', """
+    git clone -b v1.1.3 https://github.com/strukturag/libde265.git
+    cd libde265
+win:
+    cmake . ^
+        -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
+        -DCMAKE_C_FLAGS="/DLIBDE265_STATIC_BUILD" ^
+        -DCMAKE_CXX_FLAGS="/DLIBDE265_STATIC_BUILD" ^
+        -DENABLE_SDL=OFF ^
+        -DBUILD_SHARED_LIBS=OFF ^
+        -DENABLE_DECODER=OFF ^
+        -DENABLE_ENCODER=OFF
+    cmake --build . --config Debug
+    cmake --install . --config Debug
+release:
+    cmake --build . --config Release
+    cmake --install . --config Release
+mac:
+    cmake . \\
+        -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
+        -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
+        -D DISABLE_SSE=ON \\
+        -D ENABLE_SDL=OFF \\
+        -D BUILD_SHARED_LIBS=OFF \\
+        -D ENABLE_DECODER=ON \\
+        -D ENABLE_ENCODER=OFF
+    cmake --build . --config MinSizeRel
+    cmake --install . --config MinSizeRel
 """)
+
+stage('libheif', """
+depends:patches/libheif.patch
+    git clone -b v1.23.5 https://github.com/strukturag/libheif.git
+    cd libheif
+    git apply ../patches/libheif.patch
+win:
+    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' libheif/CMakeLists.txt
+    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' heifio/CMakeLists.txt
+    SET "PKG_CONFIG_PATH=%LIBS_DIR%/local/lib/pkgconfig"
+    cmake . ^
+        -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DBUILD_SHARED_LIBS=OFF ^
+        -DBUILD_DOCUMENTATION=OFF ^
+        -DBUILD_TESTING=OFF ^
+        -DENABLE_PLUGIN_LOADING=OFF ^
+        -DWITH_LIBDE265=ON ^
+        -DWITH_FFMPEG_DECODER=ON ^
+        -DFFMPEG_ROOT=%LIBS_DIR%/local ^
+        -DWITH_X264=OFF ^
+        -DWITH_OpenH264_DECODER=OFF ^
+        -DWITH_SvtEnc=OFF ^
+        -DWITH_SvtEnc_PLUGIN=OFF ^
+        -DWITH_RAV1E=OFF ^
+        -DWITH_RAV1E_PLUGIN=OFF ^
+        -DWITH_LIBSHARPYUV=OFF ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE ^
+        -DWITH_EXAMPLES=OFF
+    cmake --build . --config Debug
+    cmake --install . --config Debug
+release:
+    cmake --build . --config Release
+    cmake --install . --config Release
+mac:
+    export PKG_CONFIG_PATH=$USED_PREFIX/lib/pkgconfig
+    cmake . \\
+        -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
+        -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
+        -D BUILD_SHARED_LIBS=OFF \\
+        -D BUILD_DOCUMENTATION=OFF \\
+        -D BUILD_TESTING=OFF \\
+        -D ENABLE_PLUGIN_LOADING=OFF \\
+        -D WITH_AOM_ENCODER=OFF \\
+        -D WITH_AOM_DECODER=OFF \\
+        -D WITH_X265=OFF \\
+        -D WITH_X264=OFF \\
+        -D WITH_OpenH264_DECODER=OFF \\
+        -D WITH_SvtEnc=OFF \\
+        -D WITH_RAV1E=OFF \\
+        -D WITH_DAV1D=OFF \\
+        -D WITH_LIBDE265=ON \\
+        -D LIBDE265_INCLUDE_DIR=$USED_PREFIX/include/ \\
+        -D LIBDE265_LIBRARY=$USED_PREFIX/lib/libde265.a \\
+        -D WITH_FFMPEG_DECODER=ON \\
+        -D FFMPEG_ROOT=$USED_PREFIX \\
+        -D WITH_LIBSHARPYUV=OFF \\
+        -D CMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE \\
+        -D CMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE \\
+        -D CMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE \\
+        -D WITH_EXAMPLES=OFF
+    cmake --build . --config MinSizeRel
+    cmake --install . --config MinSizeRel
+""", requires=('patches', 'ffmpeg', 'libde265'))
 
 stage('openal-soft', """
     git clone https://github.com/telegramdesktop/openal-soft.git
@@ -1394,7 +1469,7 @@ mac:
     git checkout dfcb7b6799
 depends:patches/breakpad.diff
     git apply ../patches/breakpad.diff
-    git clone -b release-1.11.0 https://github.com/google/googletest src/testing
+    git clone -b v1.18.0 https://github.com/google/googletest src/testing
     git clone https://chromium.googlesource.com/linux-syscall-support src/third_party/lss
     cd src/third_party/lss
     git checkout e1e7b0ad8e
@@ -1402,7 +1477,7 @@ depends:patches/breakpad.diff
     PYTHONPATH=$THIRDPARTY_DIR/gyp python3 gyp_breakpad
     cd ../processor
     xcodebuild -project processor.xcodeproj -target minidump_stackwalk -configuration Release build
-""")
+""", requires=('patches',))
 
 stage('breakpad', """
     git clone https://chromium.googlesource.com/breakpad/breakpad
@@ -1410,7 +1485,7 @@ stage('breakpad', """
     git checkout dfcb7b6799
 depends:patches/breakpad.diff
     git apply ../patches/breakpad.diff
-    git clone -b release-1.11.0 https://github.com/google/googletest src/testing
+    git clone -b v1.18.0 https://github.com/google/googletest src/testing
 win:
     SET "PYTHONUTF8=1"
     SET "FolderPostfix="
@@ -1445,7 +1520,7 @@ release:
     xcodebuild -project Breakpad.xcodeproj -target Breakpad -configuration Release build
     cd ../../tools/mac/dump_syms
     xcodebuild -project dump_syms.xcodeproj -target dump_syms -configuration Release build
-""")
+""", requires=('patches',))
 
 stage('crashpad', """
 mac:
@@ -1588,7 +1663,7 @@ win:
     rem build is incremental, so simply retrying picks up where it stopped.
     jom -j%NUMBER_OF_PROCESSORS% || jom -j%NUMBER_OF_PROCESSORS%
     jom -j%NUMBER_OF_PROCESSORS% install
-""")
+""", requires=('patches',))
 else: # qt > '6'
     branch = 'v$QT' + ('-lts-lgpl' if qt.startswith('6.2.') else '')
     stage('qt_' + qt, """
@@ -1704,7 +1779,7 @@ win:
     cmake --install . --config Debug
     cmake --build .
     cmake --install .
-""")
+""", requires=('patches',))
 
 stage('tg_owt', """
     git clone https://github.com/desktop-app/tg_owt.git
@@ -1805,7 +1880,7 @@ release:
 """)
 
 stage('ada', """
-    git clone -b v3.2.4 https://github.com/ada-url/ada.git
+    git clone -b v4.0.0 https://github.com/ada-url/ada.git
     cd ada
 win:
     cmake -B out . ^
@@ -1819,6 +1894,7 @@ mac:
     CFLAGS="$UNGUARDED" CPPFLAGS="$UNGUARDED" cmake -B build . \\
         -D ADA_TESTING=OFF \\
         -D ADA_TOOLS=OFF \\
+        -D ADA_INCLUDE_URL_PATTERN=OFF \\
         -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
         -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX
     cmake --build build

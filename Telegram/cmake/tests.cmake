@@ -101,3 +101,67 @@ set_target_properties(test_ayu_ghost_mode_peer_exceptions PROPERTIES
 )
 
 add_dependencies(Telegram test_ayu_ghost_mode_peer_exceptions)
+
+if (APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+    add_executable(test_media_streaming_benchmark)
+    init_target(test_media_streaming_benchmark "(tests)")
+    add_dependencies(test_media_streaming_benchmark td_scheme_scheme)
+    set(streaming_benchmark_source_loc ${src_loc})
+    if (DEFINED TDESKTOP_STREAMING_BENCHMARK_SOURCE_ROOT)
+        set(streaming_benchmark_source_loc
+            ${TDESKTOP_STREAMING_BENCHMARK_SOURCE_ROOT}
+        )
+        target_include_directories(test_media_streaming_benchmark BEFORE
+            PRIVATE ${streaming_benchmark_source_loc}
+        )
+    endif()
+    target_precompile_headers(test_media_streaming_benchmark PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:${src_loc}/tests/streaming_benchmark_pch.h>
+    )
+    target_include_directories(test_media_streaming_benchmark PRIVATE
+        ${src_loc}
+        ${CMAKE_SOURCE_DIR}/Telegram/lib_tl
+        ${CMAKE_BINARY_DIR}/Telegram/gen
+    )
+    target_compile_options(test_media_streaming_benchmark PRIVATE
+        "-I${CMAKE_SOURCE_DIR}/Telegram/lib_tl"
+        "-I${libs_loc}/local/include/AL"
+    )
+    nice_target_sources(test_media_streaming_benchmark ${src_loc}
+    PRIVATE
+        tests/streaming_benchmark.cpp
+        tests/streaming_benchmark_stubs.cpp
+        data/data_audio_msg_id.cpp
+    )
+    nice_target_sources(test_media_streaming_benchmark
+        ${streaming_benchmark_source_loc}
+    PRIVATE
+        media/streaming/media_streaming_file.cpp
+        media/streaming/media_streaming_loader.cpp
+        media/streaming/media_streaming_player.cpp
+        media/streaming/media_streaming_reader.cpp
+        media/streaming/media_streaming_video_track.cpp
+        media/streaming/media_streaming_audio_track.cpp
+        media/streaming/media_streaming_utility.cpp
+    )
+    nice_target_sources(test_media_streaming_benchmark ${src_loc}
+    PRIVATE
+        media/streaming/media_streaming_native_frame_mac.mm
+    )
+    target_compile_definitions(test_media_streaming_benchmark PRIVATE
+        "TDESKTOP_STREAMING_BENCHMARK_FIXTURE=\"${CMAKE_SOURCE_DIR}/Telegram/SourceFiles/test/data/media_streaming/streaming_720p.mp4\""
+    )
+    target_link_libraries(test_media_streaming_benchmark PRIVATE
+        desktop-app::lib_base
+        desktop-app::lib_crl
+        desktop-app::lib_ui
+        desktop-app::lib_storage
+        desktop-app::lib_ffmpeg
+        desktop-app::external_openal
+        desktop-app::external_qt
+        desktop-app::external_qt_static_plugins
+    )
+    set_target_properties(test_media_streaming_benchmark PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+endif()
