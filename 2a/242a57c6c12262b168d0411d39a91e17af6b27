@@ -1,0 +1,24 @@
+Telegram/SourceFiles/ayu/utils/telegram_helpers.h
+  s_c5ed9cd4e03e75::t_e29555932567e5 83
+Telegram/SourceFiles/ayu/utils/telegram_helpers.cpp
+  s_c5ed9cd4e03e75::t_61d5c73196d8ed 595-602
+Telegram/SourceFiles/history/history_item.cpp
+  s_c5ed9cd4e03e75::t_73b8806fd63f57 558,564,566
+  s_c5ed9cd4e03e75::t_ce11a96058260b 559-563,565
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a242a57c6c12262b168d0411d39a91e17af6b27",
+  "prompts": {},
+  "sessions": {
+    "s_c5ed9cd4e03e75": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "56c6fdac-2806-43b4-a9ca-d37f01a2d8d1",
+        "model": "MiniMax-M3.1-Flash-Preview"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
