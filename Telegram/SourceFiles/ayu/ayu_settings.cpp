@@ -21,7 +21,10 @@
 #include "rpl/combine.h"
 #include "window/window_controller.h"
 
+#include <algorithm>
+#include <charconv>
 #include <fstream>
+#include <limits>
 #include <QApplication>
 
 using json = nlohmann::json;
@@ -35,6 +38,79 @@ std::string getSettingsPath() {
 void repaintApp() {
 	for (QWidget *widget : QApplication::allWidgets()) {
 		widget->update();
+	}
+}
+
+[[nodiscard]] json SerializeHiddenFolders(
+		const AyuFeatures::HiddenFoldersState &state) {
+	auto result = json::object();
+	for (const auto &[sessionId, ids] : state.sessions()) {
+		result[std::to_string(sessionId)] = ids;
+	}
+	return result;
+}
+
+void DeserializeHiddenFolders(
+		const json &value,
+		AyuFeatures::HiddenFoldersState &state) {
+	if (!value.is_object()) {
+		return;
+	}
+	constexpr auto kMaxInspectedSessions
+		= AyuFeatures::HiddenFoldersState::kMaxSessions * 4;
+	constexpr auto kMaxInspectedFolders
+		= AyuFeatures::HiddenFoldersState::kMaxFoldersPerSession * 4;
+	auto inspectedSessions = std::size_t(0);
+	for (const auto &[key, idsValue] : value.items()) {
+		if (++inspectedSessions > kMaxInspectedSessions) {
+			break;
+		}
+		if (key.empty() || key.size() > 20) {
+			continue;
+		}
+		auto sessionId = std::uint64_t(0);
+		const auto parsed = std::from_chars(
+			key.data(),
+			key.data() + key.size(),
+			sessionId);
+		if (parsed.ec != std::errc()
+			|| parsed.ptr != key.data() + key.size()
+			|| !sessionId
+			|| !idsValue.is_array()) {
+			continue;
+		}
+
+		auto ids = std::vector<std::int32_t>();
+		ids.reserve(std::min(
+			idsValue.size(),
+			AyuFeatures::HiddenFoldersState::kMaxFoldersPerSession));
+		auto inspectedFolders = std::size_t(0);
+		for (const auto &idValue : idsValue) {
+			if (++inspectedFolders > kMaxInspectedFolders) {
+				break;
+			}
+			if (idValue.is_number_unsigned()) {
+				const auto id = idValue.get<std::uint64_t>();
+				if (id > 0
+					&& id <= std::uint64_t(
+						std::numeric_limits<std::int32_t>::max())) {
+					ids.push_back(std::int32_t(id));
+				}
+			} else if (idValue.is_number_integer()) {
+				const auto id = idValue.get<std::int64_t>();
+				if (id > 0
+					&& id <= std::int64_t(
+						std::numeric_limits<std::int32_t>::max())) {
+					ids.push_back(std::int32_t(id));
+				}
+			}
+		}
+		const auto changed = state.replace(sessionId, ids);
+		if (changed
+			&& state.sessions().size()
+				>= AyuFeatures::HiddenFoldersState::kMaxSessions) {
+			break;
+		}
 	}
 }
 
@@ -477,6 +553,35 @@ void AyuSettings::removeShadowBan(int64 id) {
 		FiltersCacheController::fireUpdate();
 		save();
 	}
+}
+
+bool AyuSettings::isFolderHidden(uint64 sessionId, int32 id) const {
+	return _hiddenFolders.isHidden(sessionId, id);
+}
+
+bool AyuSettings::setFolderHidden(
+		uint64 sessionId,
+		int32 id,
+		bool hidden) {
+	if (!_hiddenFolders.setHidden(sessionId, id, hidden)) {
+		return false;
+	}
+	save();
+	return true;
+}
+
+void AyuSettings::reconcileHiddenFolders(
+		uint64 sessionId,
+		const std::vector<int32> &validIds) {
+	if (!_hiddenFolders.reconcile(sessionId, validIds)) {
+		return;
+	}
+	save();
+}
+
+const std::vector<int32> &AyuSettings::hiddenFolderIds(
+		uint64 sessionId) const {
+	return _hiddenFolders.hidden(sessionId);
 }
 
 void AyuSettings::validate() {
@@ -1082,6 +1187,7 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"saveMessagesHistory", s._saveMessagesHistory.current()},
 		{"saveForBots", s._saveForBots.current()},
 		{"shadowBanIds", s._shadowBanIds},
+		{"hiddenFolderIds", SerializeHiddenFolders(s._hiddenFolders)},
 		{"filtersEnabled", s._filtersEnabled.current()},
 		{"filtersEnabledInChats", s._filtersEnabledInChats.current()},
 		{"hideFromBlocked", s._hideFromBlocked.current()},
@@ -1186,6 +1292,10 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._saveMessagesHistory = j.value("saveMessagesHistory", defaults._saveMessagesHistory.current());
 	s._saveForBots = j.value("saveForBots", defaults._saveForBots.current());
 	s._shadowBanIds = j.value("shadowBanIds", defaults._shadowBanIds);
+	const auto hiddenFolders = j.find("hiddenFolderIds");
+	if (hiddenFolders != j.end()) {
+		DeserializeHiddenFolders(*hiddenFolders, s._hiddenFolders);
+	}
 	s._filtersEnabled = j.value("filtersEnabled", defaults._filtersEnabled.current());
 	s._filtersEnabledInChats = j.value("filtersEnabledInChats", defaults._filtersEnabledInChats.current());
 	s._hideFromBlocked = j.value("hideFromBlocked", defaults._hideFromBlocked.current());

@@ -12,6 +12,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class History;
 
+namespace AyuFeatures {
+class HiddenFolders;
+} // namespace AyuFeatures
+
 namespace Dialogs {
 class MainList;
 class Key;
@@ -162,6 +166,8 @@ public:
 	void remove(FilterId id);
 	void moveAllToFront();
 	[[nodiscard]] const std::vector<ChatFilter> &list() const;
+	[[nodiscard]] AyuFeatures::HiddenFolders &hiddenFolders();
+	[[nodiscard]] const AyuFeatures::HiddenFolders &hiddenFolders() const;
 	[[nodiscard]] rpl::producer<> changed() const;
 	[[nodiscard]] rpl::producer<FilterId> isChatlistChanged() const;
 	[[nodiscard]] rpl::producer<TagColorChanged> tagColorChanged() const;
@@ -235,6 +241,7 @@ private:
 	void loadMoreChatsList(FilterId id);
 
 	const not_null<Session*> _owner;
+	std::unique_ptr<AyuFeatures::HiddenFolders> _hiddenFolders;
 
 	std::vector<ChatFilter> _list;
 	base::flat_map<FilterId, std::unique_ptr<Dialogs::MainList>> _chatsLists;

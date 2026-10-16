@@ -1,0 +1,107 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "quality-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "environment": {
+        "QT": null
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "TDESKTOP_API_TEST": true,
+        "DESKTOP_APP_ASAN": false,
+        "CMAKE_Swift_FLAGS": "-module-cache-path \"${sourceDir}/out/${presetName}/swift-module-cache\""
+      }
+    },
+    {
+      "name": "quality-static",
+      "inherits": "quality-base",
+      "binaryDir": "${sourceDir}/out/quality-static",
+      "cacheVariables": {
+        "AYUGRAM_SANITIZER": "none"
+      }
+    },
+    {
+      "name": "quality-asan-ubsan",
+      "inherits": "quality-base",
+      "binaryDir": "${sourceDir}/out/quality-asan-ubsan",
+      "cacheVariables": {
+        "AYUGRAM_SANITIZER": "asan-ubsan"
+      }
+    },
+    {
+      "name": "quality-ubsan",
+      "inherits": "quality-base",
+      "binaryDir": "${sourceDir}/out/quality-ubsan",
+      "cacheVariables": {
+        "AYUGRAM_SANITIZER": "ubsan"
+      }
+    },
+    {
+      "name": "quality-tsan",
+      "inherits": "quality-base",
+      "binaryDir": "${sourceDir}/out/quality-tsan",
+      "cacheVariables": {
+        "AYUGRAM_SANITIZER": "tsan"
+      }
+    },
+    {
+      "name": "quality-lsan",
+      "inherits": "quality-base",
+      "binaryDir": "${sourceDir}/out/quality-lsan",
+      "cacheVariables": {
+        "AYUGRAM_SANITIZER": "lsan"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "quality-static",
+      "configurePreset": "quality-static",
+      "targets": [
+        "Telegram"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "quality-asan-ubsan",
+      "configurePreset": "quality-asan-ubsan",
+      "targets": [
+        "Telegram"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "quality-ubsan",
+      "configurePreset": "quality-ubsan",
+      "targets": [
+        "Telegram"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "quality-tsan",
+      "configurePreset": "quality-tsan",
+      "targets": [
+        "Telegram"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "quality-lsan",
+      "configurePreset": "quality-lsan",
+      "targets": [
+        "Telegram"
+      ],
+      "jobs": 2
+    }
+  ]
+}

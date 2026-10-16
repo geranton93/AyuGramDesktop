@@ -1,0 +1,13 @@
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  bugprone-use-after-move,
+  bugprone-dangling-handle,
+  bugprone-unused-raii,
+  bugprone-virtual-near-miss,
+  performance-*,
+  readability-function-cognitive-complexity
+HeaderFilterRegex: 'Telegram/(SourceFiles|lib_[^/]+)/'
+FormatStyle: none
+CheckOptions:
+  readability-function-cognitive-complexity.Threshold: '35'

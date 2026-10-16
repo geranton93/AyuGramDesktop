@@ -103,6 +103,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <unordered_map>
 
 // AyuGram includes
+#include "ayu/features/hidden_folders/hidden_folders.h"
 #include "ayu/ui/ayu_userpic.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "styles/style_ayu_icons.h"
@@ -6356,7 +6357,9 @@ void InnerWidget::setupShortcuts() {
 
 		if (session().data().chatsFilters().has()) {
 			const auto filters = &session().data().chatsFilters();
-			const auto filtersCount = int(filters->list().size());
+			const auto visibleIds = filters->hiddenFolders().visibleIds(
+				filters->list());
+			const auto filtersCount = int(visibleIds.size());
 			auto &&folders = ranges::views::zip(
 				Shortcuts::kShowFolder,
 				ranges::views::ints(0, ranges::unreachable));
@@ -6365,9 +6368,8 @@ void InnerWidget::setupShortcuts() {
 					? (filtersCount - 1)
 					: std::clamp(index, 0, filtersCount - 1);
 				request->check(command) && request->handle([=] {
-					if (select <= filtersCount) {
-						_controller->setActiveChatsFilter(
-							filters->lookupId(select));
+					if (select >= 0 && select < filtersCount) {
+						_controller->setActiveChatsFilter(visibleIds[select]);
 					}
 					return true;
 				});

@@ -51,6 +51,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QtEvents>
 
 // AyuGram includes
+#include "ayu/features/hidden_folders/hidden_folders.h"
 #include "ayu/ayu_settings.h"
 
 
@@ -375,9 +376,15 @@ void FiltersMenu::refresh() {
 	if (!reorderAll && !settings.hideAllChatsFolder()) {
 		_reorder->addPinnedInterval(0, 1);
 	}
+	const auto &fullList = filters->list();
+	const auto &hiddenFolders = filters->hiddenFolders();
+	const auto visibleIds = hiddenFolders.visibleIds(fullList);
+	const auto visiblePremiumFrom = hiddenFolders.visiblePrefixSize(
+		fullList,
+		premiumFrom);
 	_reorder->addPinnedInterval(
-		premiumFrom,
-		std::max(1, int(filters->list().size()) - maxLimit));
+		visiblePremiumFrom,
+		std::max(1, int(visibleIds.size()) - visiblePremiumFrom));
 
 	// Remember which folder holds keyboard focus so the roving Tab-stop can be
 	// re-established on its replacement after the rebuild: the new buttons are
@@ -392,9 +399,18 @@ void FiltersMenu::refresh() {
 	}
 
 	auto now = base::flat_map<int, base::unique_qptr<Ui::SideBarButton>>();
-	const auto &currentFilter = _session->activeChatsFilterCurrent();
-	for (const auto &filter : filters->list()) {
-		const auto nextIsLocked = (now.size() >= premiumFrom);
+	const auto requestedFilter = _session->activeChatsFilterCurrent();
+	const auto currentFilter = hiddenFolders.resolveVisible(
+		requestedFilter,
+		fullList);
+	if (currentFilter != requestedFilter) {
+		_session->setActiveChatsFilter(currentFilter);
+	}
+	for (const auto id : visibleIds) {
+		const auto i = ranges::find(fullList, id, &Data::ChatFilter::id);
+		Assert(i != end(fullList));
+		const auto &filter = *i;
+		const auto nextIsLocked = ((i - begin(fullList)) >= premiumFrom);
 		if (nextIsLocked && (currentFilter == filter.id())) {
 			_session->setActiveChatsFilter(FilterId(0));
 		}
@@ -439,7 +455,9 @@ void FiltersMenu::refresh() {
 
 	if (settings.hideAllChatsFolder()
 		&& _session->widget()->sessionContent()) {
-		_session->setActiveChatsFilter(filters->lookupId(0));
+		_session->setActiveChatsFilter(hiddenFolders.resolveVisible(
+			filters->lookupId(0),
+			fullList));
 	}
 
 	if (refocus) {
@@ -794,6 +812,10 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 			std::move(filteredChats),
 			addAction);
 
+		auto &hiddenFolders
+			= _session->session().data().chatsFilters().hiddenFolders();
+		hiddenFolders.addToggleAction(addAction, id);
+
 		addAction({
 			.text = tr::lng_filters_context_remove(tr::now),
 			.handler = crl::guard(&_outer, [=, this] {
@@ -840,24 +862,24 @@ void FiltersMenu::applyReorder(
 
 	const auto filters = &_session->session().data().chatsFilters();
 	const auto &list = filters->list();
+	const auto &hiddenFolders = filters->hiddenFolders();
 	if (!settings.hideAllChatsFolder() && !premium()) {
 		if (list[0].id() != FilterId()) {
 			filters->moveAllToFront();
 		}
 	}
-	Assert(oldPosition >= 0 && oldPosition < list.size());
-	Assert(newPosition >= 0 && newPosition < list.size());
-	const auto id = list[oldPosition].id();
+	const auto visibleIds = hiddenFolders.visibleIds(list);
+	Assert(oldPosition >= 0 && oldPosition < int(visibleIds.size()));
+	Assert(newPosition >= 0 && newPosition < int(visibleIds.size()));
+	const auto id = visibleIds[oldPosition];
 	const auto i = _filters.find(id);
 	Assert(i != end(_filters));
 	Assert(i->second == widget);
 
-	auto order = ranges::views::all(
-		list
-	) | ranges::views::transform(
-		&Data::ChatFilter::id
-	) | ranges::to_vector;
-	base::reorder(order, oldPosition, newPosition);
+	const auto order = hiddenFolders.reorderVisible(
+		list,
+		oldPosition,
+		newPosition);
 
 	_ignoreRefresh = true;
 	filters->saveOrder(order);

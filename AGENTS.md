@@ -2,6 +2,22 @@
 
 This guide defines repository-wide instructions for coding agents working with the Telegram Desktop codebase.
 
+## Required engineering workflow (Codex and Claude Code)
+
+Before non-trivial investigation, implementation, review, or performance work,
+read [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md). It is the shared contract for
+graph freshness, source-backed understanding, issue discovery, testing,
+resource lifetime, performance measurement, and knowledge maintenance.
+Re-read it after context loss if its requirements are no longer available.
+Read applicable directory instructions and `REVIEW.md` before editing code.
+`CLAUDE.md` points here; keep shared policy here and in that workflow, rather
+than maintaining separate rules for each assistant.
+
+Use CodeGraph first for structural code questions when `.codegraph/` exists.
+Verify freshness before relying on its relationships; source and executed
+evidence outrank graph edges, remembered conclusions, and generated summaries.
+Never describe unrun tests, stale knowledge, or unmeasured speedups as verified.
+
 Avoid building the project.
 
 If you're asked to create a Pull Request, then clearly state in PR description that it was AI generated.

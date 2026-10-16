@@ -77,3 +77,9 @@ settings.local.json
 
 # Project specific
 Telegram/SourceFiles/_other/packer_private.h
+
+# CodeGraph local index (machine-specific SQLite cache, rebuilt via `codegraph init`/`sync`)
+.codegraph/
+
+# Local git worktrees (scratch integration branches, e.g. the upstream-update sequence)
+/.worktrees/

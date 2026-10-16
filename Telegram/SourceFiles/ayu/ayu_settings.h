@@ -6,6 +6,7 @@
 // Copyright @Radolyn, 2026
 #pragma once
 
+#include "ayu/features/hidden_folders/hidden_folders_state.h"
 #include "ayu/libs/json.hpp"
 #include "ayu/libs/json_ext.hpp"
 #include "rpl/lifetime.h"
@@ -264,6 +265,16 @@ public:
 	void removeShadowBan(int64 id);
 	[[nodiscard]] bool isShadowBanned(const int64 id) const { return _shadowBanIds.contains(id); }
 	[[nodiscard]] const std::unordered_set<int64> &shadowBanIds() const { return _shadowBanIds; }
+	[[nodiscard]] bool isFolderHidden(uint64 sessionId, int32 id) const;
+	[[nodiscard]] bool setFolderHidden(
+		uint64 sessionId,
+		int32 id,
+		bool hidden);
+	void reconcileHiddenFolders(
+		uint64 sessionId,
+		const std::vector<int32> &validIds);
+	[[nodiscard]] const std::vector<int32> &hiddenFolderIds(
+		uint64 sessionId) const;
 
 	void validate();
 
@@ -628,6 +639,7 @@ private:
 	rpl::variable<bool> _saveMessagesHistory = true;
 	rpl::variable<bool> _saveForBots = false;
 	std::unordered_set<int64> _shadowBanIds;
+	AyuFeatures::HiddenFoldersState _hiddenFolders;
 	rpl::variable<bool> _filtersEnabled = false;
 	rpl::variable<bool> _filtersEnabledInChats = false;
 	rpl::variable<bool> _hideFromBlocked = false;

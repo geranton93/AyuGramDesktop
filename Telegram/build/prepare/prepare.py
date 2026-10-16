@@ -621,8 +621,9 @@ mac:
 """)
 
 stage('openssl3', """
-    git clone -b openssl-3.2.1 https://github.com/openssl/openssl openssl3
+    git clone -b openssl-3.5.8 https://github.com/openssl/openssl openssl3
     cd openssl3
+    git checkout f4dc4d58b48d346a8270183f89acf826d459b0ca
 win32:
     perl Configure no-shared no-tests debug-VC-WIN32 /FS
 win64:

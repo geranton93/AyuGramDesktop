@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://cubic.dev/schema/cubic-repository-config.schema.json
+
+version: 1
+
+reviews:
+  enabled: true
+  sensitivity: medium
+  incremental_commits: true
+  check_drafts: false
+  architecture_diagrams: false
+  external_contributors_require_manual_review: false
+  resolve_threads_when_addressed: false
+  auto_approve_behavior: disabled
+  auto_approve: disabled
+  ultrareview: disabled
+  auto_ultrareview: disabled
+  custom_instructions: |
+    Review only code and documentation from this public AyuGramDesktop
+    repository. Do not use cross-repository context, connected issue trackers,
+    or guidance learned from unrelated projects. Follow AGENTS.md,
+    AGENT_WORKFLOW.md, and REVIEW.md. Report concrete correctness, security,
+    lifetime, concurrency, performance, and regression risks with exact source
+    evidence; avoid generic style commentary and speculative findings.
+  custom_rules: []
+  ignore:
+    files:
+      - out/**
+      - .codegraph/**
+      - Telegram/ThirdParty/**
+
+pr_descriptions:
+  generate: false
+
+issues:
+  fix_with_cubic_buttons: false
+  pr_comment_fixes: false
+  fix_commits_to_pr: false
+  auto_fix_sign_commits: false
+  coding_agent_provider: cubic

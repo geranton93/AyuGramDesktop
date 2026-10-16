@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 
 // AyuGram includes
+#include "ayu/features/hidden_folders/hidden_folders.h"
 #include "ayu/ayu_settings.h"
 
 
@@ -393,6 +394,8 @@ bool ChatFilter::contains(
 
 ChatFilters::ChatFilters(not_null<Session*> owner)
 : _owner(owner)
+, _hiddenFolders(std::make_unique<AyuFeatures::HiddenFolders>(
+	&owner->session()))
 , _moreChatsTimer([=] { checkLoadMoreChatsLists(); }) {
 	_list.emplace_back();
 	crl::on_main(&owner->session(), [=] { load(); });
@@ -416,6 +419,12 @@ ChatFilters::ChatFilters(not_null<Session*> owner)
 				_list.insert(begin(_list), ChatFilter());
 				_listChanged.fire({});
 			}
+		}
+	}, _lifetime);
+
+	_hiddenFolders->changes() | rpl::on_next([=] {
+		if (_loaded) {
+			_listChanged.fire({});
 		}
 	}, _lifetime);
 }
@@ -549,6 +558,7 @@ void ChatFilters::received(const QVector<MTPDialogFilter> &list) {
 	if (!settings.hideAllChatsFolder() && !ranges::contains(begin(_list), end(_list), 0, &ChatFilter::id)) {
 		_list.insert(begin(_list), ChatFilter());
 	}
+	_hiddenFolders->reconcile(_list);
 	if (changed || !_loaded || _reloading) {
 		_loaded = true;
 		_reloading = false;
@@ -719,6 +729,7 @@ void ChatFilters::remove(FilterId id) {
 		return;
 	}
 	applyRemove(i - begin(_list));
+	_hiddenFolders->reconcile(_list);
 	_listChanged.fire({});
 }
 
@@ -938,6 +949,14 @@ bool ChatFilters::archiveNeeded() const {
 
 const std::vector<ChatFilter> &ChatFilters::list() const {
 	return _list;
+}
+
+AyuFeatures::HiddenFolders &ChatFilters::hiddenFolders() {
+	return *_hiddenFolders;
+}
+
+const AyuFeatures::HiddenFolders &ChatFilters::hiddenFolders() const {
+	return *_hiddenFolders;
 }
 
 FilterId ChatFilters::defaultId() const {

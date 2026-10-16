@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_chat_filters.h"
 #include "apiwrap.h"
+#include "ayu/features/hidden_folders/hidden_folders.h"
 #include "boxes/filters/edit_filter_box.h"
 #include "boxes/premium_limits_box.h"
 #include "boxes/premium_preview_box.h"
@@ -45,6 +46,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/slide_wrap.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
+
+#include "styles/style_ayu_icons.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_layers.h"
@@ -91,10 +94,12 @@ private:
 	void setup(const Data::ChatFilter &filter, const QString &status);
 	void setState(State state, bool force = false);
 	void updateButtonsVisibility();
+	void applyHiddenState();
 
 	const not_null<::Main::Session*> _session;
 
 	Ui::IconButton _remove;
+	Ui::IconButton _hide;
 	Ui::RoundButton _restore;
 	Ui::RoundButton _add;
 
@@ -105,6 +110,8 @@ private:
 	float64 _colorIndexProgress = 1.;
 
 	State _state = State::Normal;
+	FilterId _id = 0;
+	bool _hidden = false;
 
 };
 
@@ -181,6 +188,7 @@ FilterRowButton::FilterRowButton(
 : RippleButton(parent, st::defaultRippleAnimation)
 , _session(session)
 , _remove(this, st::filtersRemove)
+, _hide(this, st::filtersRemove)
 , _restore(this, tr::lng_filters_restore(), st::settingsFilterAddRecommended)
 , _add(
 	this,
@@ -192,6 +200,32 @@ FilterRowButton::FilterRowButton(
 	setup(filter, description.isEmpty()
 		? ComputeCountString(session, filter)
 		: description);
+
+	_hide.setClickedCallback(crl::guard(this, [=] {
+		auto &hiddenFolders = _session->data().chatsFilters().hiddenFolders();
+		const auto id = _id;
+		const auto hidden = !hiddenFolders.isHidden(id);
+		const auto weak = base::make_weak(this);
+		if (hiddenFolders.toggle(id)) {
+			if (const auto strong = weak.get()) {
+				strong->_hidden = hidden;
+				strong->applyHiddenState();
+			}
+		}
+	}));
+}
+
+void FilterRowButton::applyHiddenState() {
+	const auto icon = _hidden
+		? &st::ayuFolderShowSettingsIcon
+		: &st::ayuFolderHideSettingsIcon;
+	const auto iconOver = _hidden
+		? &st::ayuFolderShowSettingsIconOver
+		: &st::ayuFolderHideSettingsIconOver;
+	_hide.setIconOverride(icon, iconOver);
+	_hide.setAccessibleName(_hidden
+		? tr::ayu_ShowFolder(tr::now)
+		: tr::ayu_HideFolder(tr::now));
 }
 
 void FilterRowButton::setRemoved(bool removed) {
@@ -215,6 +249,9 @@ void FilterRowButton::updateData(
 		}));
 	_icon = Ui::ComputeFilterIcon(filter);
 	_colorIndex = filter.colorIndex();
+	_id = filter.id();
+	_hidden = _session->data().chatsFilters().hiddenFolders().isHidden(_id);
+	applyHiddenState();
 	if (!ignoreCount) {
 		updateCount(filter);
 	}
@@ -254,11 +291,19 @@ void FilterRowButton::setup(
 		_add.moveToRight(right, (height - _add.height()) / 2, width);
 		const auto skipped = right - st::stickersRemoveSkip;
 		_remove.moveToRight(skipped, (height - _remove.height()) / 2, width);
+		const auto hideSkipped = skipped
+			+ _remove.width()
+			+ st::stickersRemoveSkip;
+		_hide.moveToRight(
+			hideSkipped,
+			(height - _hide.height()) / 2,
+			width);
 	}, lifetime());
 }
 
 void FilterRowButton::updateButtonsVisibility() {
 	_remove.setVisible(_state == State::Normal);
+	_hide.setVisible(_state == State::Normal && _id > 0);
 	_restore.setVisible(_state == State::Removed);
 	_add.setVisible(_state == State::Suggested);
 }
@@ -296,8 +341,11 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 			p.setPen(Qt::NoPen);
 			p.setBrush(Ui::EmptyUserpic::UserpicColor(*_colorIndex).color2);
 			const auto w = height() / 3;
+			const auto buttonLeft = !_hide.isHidden()
+				? _hide.x()
+				: _remove.x();
 			const auto rect = QRect(
-				_remove.x() - w - st::contactsCheckPosition.x(),
+				buttonLeft - w - st::contactsCheckPosition.x(),
 				(height() - w) / 2,
 				w,
 				w);
@@ -311,9 +359,12 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 	const auto left = (_state == State::Suggested)
 		? st::defaultSubsectionTitlePadding.left()
 		: st::settingsButtonActive.padding.left();
-	const auto buttonsLeft = std::min(
+	auto buttonsLeft = std::min(
 		_add.x(),
 		std::min(_remove.x(), _restore.x()));
+	if (!_hide.isHidden()) {
+		buttonsLeft = std::min(buttonsLeft, _hide.x());
+	}
 	const auto availableWidth = buttonsLeft - left;
 
 	p.setPen(st::contactsNameFg);

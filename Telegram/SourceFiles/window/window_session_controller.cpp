@@ -131,6 +131,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h" // st::boxLabel
 
 // AyuGram includes
+#include "ayu/features/hidden_folders/hidden_folders.h"
 #include "ayu/ayu_settings.h"
 
 
@@ -2044,14 +2045,18 @@ rpl::producer<> SessionController::filtersMenuChanged() const {
 
 void SessionController::checkOpenedFilter() {
 	activateFirstChatsFilter();
-	if (const auto filterId = activeChatsFilterCurrent()) {
-		const auto &list = session().data().chatsFilters().list();
-		const auto i = ranges::find(list, filterId, &Data::ChatFilter::id);
-		if (i == end(list)) {
-			setActiveChatsFilter(
-				0,
-				{ anim::type::normal, anim::activation::background });
-		}
+	const auto &filters = session().data().chatsFilters();
+	if (!filters.loaded()) {
+		return;
+	}
+	const auto current = activeChatsFilterCurrent();
+	const auto resolved = filters.hiddenFolders().resolveVisible(
+		current,
+		filters.list());
+	if (resolved != current) {
+		setActiveChatsFilter(
+			resolved,
+			{ anim::type::normal, anim::activation::background });
 	}
 }
 
@@ -3328,6 +3333,10 @@ void SessionController::setActiveChatsFilter(
 	if (!isPrimary()) {
 		return;
 	}
+	const auto &filters = session().data().chatsFilters();
+	if (filters.loaded()) {
+		id = filters.hiddenFolders().resolveVisible(id, filters.list());
+	}
 	const auto changed = (activeChatsFilterCurrent() != id);
 	if (changed) {
 		resetFakeUnreadWhileOpened();
@@ -4168,26 +4177,31 @@ bool CheckAndJumpToNearChatsFilter(
 		bool jump) {
 	const auto id = controller->activeChatsFilterCurrent();
 	const auto session = &controller->session();
-	const auto list = &session->data().chatsFilters().list();
+	const auto &filters = session->data().chatsFilters();
+	const auto &list = filters.list();
+	const auto visibleIds = filters.hiddenFolders().visibleIds(list);
 	const auto index = int(ranges::find(
-		*list,
-		id,
-		&Data::ChatFilter::id
-	) - begin(*list));
-	if (index == list->size() && id != 0) {
+		visibleIds,
+		id
+	) - begin(visibleIds));
+	if (index == int(visibleIds.size())) {
 		return false;
 	}
 	const auto changed = index + (isNext ? 1 : -1);
-	if (changed >= int(list->size()) || changed < 0) {
+	if (changed >= int(visibleIds.size()) || changed < 0) {
 		return false;
 	}
-	if (changed > Data::PremiumLimits(session).dialogFiltersCurrent()) {
+	const auto nextId = visibleIds[changed];
+	const auto fullIndex = int(ranges::find(
+		list,
+		nextId,
+		&Data::ChatFilter::id
+	) - begin(list));
+	if (fullIndex > Data::PremiumLimits(session).dialogFiltersCurrent()) {
 		return false;
 	}
 	if (jump) {
-		controller->setActiveChatsFilter((changed >= 0)
-			? (*list)[changed].id()
-			: 0);
+		controller->setActiveChatsFilter(nextId);
 	}
 	return true;
 }
