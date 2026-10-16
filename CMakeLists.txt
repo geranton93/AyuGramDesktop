@@ -62,5 +62,16 @@ set(desktop_app_skip_libs
     variant
 )
 
+# range-v3 forward-declares std::allocator, std::pair, std::hash and
+# friends into namespace std when __apple_build_version__ is set.
+# Current libc++ declares those in its inline __1 namespace, so pulling
+# range-v3 in after any std header fails with "redefinition ... as
+# different kind of symbol". lib_base/base/base_pch.h includes <vector>
+# before range-v3, which is enough to trigger it. Set for every target
+# in the tree, C++ and Objective-C++ alike.
+if (APPLE)
+    add_compile_definitions(META_NO_STD_FORWARD_DECLARATIONS)
+endif()
+
 add_subdirectory(cmake)
 add_subdirectory(Telegram)
