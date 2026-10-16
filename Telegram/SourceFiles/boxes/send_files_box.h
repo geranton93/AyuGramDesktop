@@ -299,7 +299,6 @@ private:
 	const std::shared_ptr<ChatHelpers::Show> _show;
 	const style::ComposeControls &_st;
 	const Api::SendType _sendType = Api::SendType();
-	const bool _welcomeTemplate = false;
 
 	QString _titleText;
 	rpl::variable<int> _titleHeight = 0;
