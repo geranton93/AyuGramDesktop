@@ -1,0 +1,97 @@
+.clang-tidy
+  s_ef6173f274c1ad::t_76b7088d147fee 1-13
+.claude/settings.json
+  s_ef6173f274c1ad::t_f159877b160d47 1-18
+.codex/hooks.json
+  s_ef6173f274c1ad::t_7b2933b67c98c7 1-17
+.gitignore
+  s_ef6173f274c1ad::t_f1948807b5e19e 80-85
+AGENTS.md
+  s_ef6173f274c1ad::t_339b588e3c0d78 5-20
+AGENT_WORKFLOW.md
+  s_ef6173f274c1ad::t_11e47f4c2a9751 1-204
+CLAUDE.md
+  s_ef6173f274c1ad::t_44949b0d8ecd0e 4-14
+CMakeLists.txt
+  s_ef6173f274c1ad::t_09330d5efd520d 58
+CMakePresets.json
+  s_ef6173f274c1ad::t_98b0eac9fa24a8 1-107
+Telegram/CMakeLists.txt
+  s_ef6173f274c1ad::t_00d6375d41cf22 214-217
+Telegram/Resources/langs/lang.strings
+  s_ef6173f274c1ad::t_11b75d1fddaef3 8902-8903
+Telegram/SourceFiles/ayu/ayu_lang.cpp
+  s_ef6173f274c1ad::t_a6a579bc021bdf 16-22,42,44-49,51-53,55-58,60-66,69-78,81-84,87-97,100-113,115-136,139,142-152,154,157-166,169-183,185,188,190,192-199,201-203,205,208-210,212-214,216-229,231-239,243-258,260-282,284-285,287-302,304-310,312-320,322-324,326-353,355-371,373-379,382-383
+Telegram/SourceFiles/ayu/ayu_lang.h
+  s_ef6173f274c1ad::t_bfa8ecb18cbcd4 9-12,16-17,28,35-43,48,50-55
+Telegram/SourceFiles/ayu/ayu_settings.cpp
+  s_ef6173f274c1ad::t_ec831ca2752bf9 24-25,27,44-116,558-586,1190,1295-1298
+Telegram/SourceFiles/ayu/ayu_settings.h
+  s_ef6173f274c1ad::t_7bdf04b61a430c 9,268-277,642
+Telegram/SourceFiles/ayu/features/hidden_folders/hidden_folders.cpp
+  s_ef6173f274c1ad::t_4920d814939926 1-114
+Telegram/SourceFiles/ayu/features/hidden_folders/hidden_folders.h
+  s_ef6173f274c1ad::t_9134b68d802615 1-62
+Telegram/SourceFiles/ayu/features/hidden_folders/hidden_folders_state.cpp
+  s_ef6173f274c1ad::t_fa9611adb9abc1 1-236
+Telegram/SourceFiles/ayu/features/hidden_folders/hidden_folders_state.h
+  s_ef6173f274c1ad::t_6adc25211bc945 1-71
+Telegram/SourceFiles/ayu/ui/ayu_icons.style
+  s_ef6173f274c1ad::t_3a7a99b68b548c 26-32
+Telegram/SourceFiles/ayu/utils/windows_utils.cpp
+  s_ef6173f274c1ad::t_f349741ca47b82 38-44
+Telegram/SourceFiles/boxes/background_box.cpp
+  s_ef6173f274c1ad::t_aeafb4b09ed53b 253
+Telegram/SourceFiles/data/data_chat_filters.cpp
+  s_ef6173f274c1ad::t_c1c2a50bc38df4 29,397-398,424-429,561,732,954-961
+Telegram/SourceFiles/dialogs/dialogs_inner_widget.cpp
+  s_ef6173f274c1ad::t_a5790e6839373a 106,6360-6362,6371-6372
+Telegram/SourceFiles/history/history_item.cpp
+  s_ef6173f274c1ad::t_52c4790fbd8679 4147-4149,4152
+Telegram/SourceFiles/lang/lang_instance.h
+  s_ef6173f274c1ad::t_4890eeb65c9dde 89-91
+Telegram/SourceFiles/platform/win/tray_win.cpp
+  s_ef6173f274c1ad::t_1bc6ee18c43cc5 149-154
+Telegram/SourceFiles/settings/sections/settings_chat.cpp
+  s_ef6173f274c1ad::t_dbc5f767b69d4e 720
+Telegram/SourceFiles/settings/sections/settings_folders.cpp
+  s_ef6173f274c1ad::t_e1220588dd64c1 12,49-50,97,102,113-114,191,203-228,252-254,294-300,306,344-346,348,362,365-367
+Telegram/SourceFiles/ui/controls/who_reacted_context_action.cpp
+  s_ef6173f274c1ad::t_4858f0f10be6be 440,453-461
+Telegram/SourceFiles/ui/widgets/chat_filters_tabs_strip.cpp
+  s_ef6173f274c1ad::t_62184bd8b44f4d 46,67-91,96,116-119,170,181-184,187,209,266,271,311-314,349,351,359,361,399,403,407-409,421-422,431-432,444-448,450,461-464,471-473,477,480,482,488,495-496,499,505,507,523-524,526,529,533-535,541,570
+Telegram/SourceFiles/window/window_filters_menu.cpp
+  s_ef6173f274c1ad::t_f906534d0181db 54,379-384,386-387,402-413,458-460,815-818,865,871-874,879-882
+Telegram/SourceFiles/window/window_peer_menu.cpp
+  s_ef6173f274c1ad::t_66acca3500b506 1093-1094
+Telegram/SourceFiles/window/window_session_controller.cpp
+  s_ef6173f274c1ad::t_d989d3560911bc 134,2048-2059,3336-3339,4180-4182,4184-4187,4191,4194-4200,4204
+Telegram/build/prepare/prepare.py
+  s_ef6173f274c1ad::t_3f763269887517 624,626
+Telegram/build/quality/README.md
+  s_ef6173f274c1ad::t_49315e347eb50d 1-168
+Telegram/build/quality/quality.py
+  s_ef6173f274c1ad::t_4f5b73fa5b6dae 1-126
+Telegram/build/quality/sanitizers.cmake
+  s_ef6173f274c1ad::t_509ba25ed283c2 1-53
+Telegram/build/quality/test_quality.py
+  s_ef6173f274c1ad::t_f06c3879d6e42f 1-68
+cubic.yaml
+  s_ef6173f274c1ad::t_8ce58622e87830 1-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a6ffd6f3236101d97c364ea0ac97362f281480ad",
+  "prompts": {},
+  "sessions": {
+    "s_ef6173f274c1ad": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0865a-618f-7860-a7b5-0bb510244fe6",
+        "model": "unknown"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
