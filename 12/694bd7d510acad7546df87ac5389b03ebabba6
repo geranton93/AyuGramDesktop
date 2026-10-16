@@ -1,0 +1,19 @@
+CMakeLists.txt
+  s_c5ed9cd4e03e75::t_33fc6432efaa4e 65-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "12694bd7d510acad7546df87ac5389b03ebabba6",
+  "prompts": {},
+  "sessions": {
+    "s_c5ed9cd4e03e75": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "56c6fdac-2806-43b4-a9ca-d37f01a2d8d1",
+        "model": "MiniMax-M3.1-Flash-Preview"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
