@@ -235,7 +235,7 @@ void AddJumpToBeginningAction(PeerData *peerData,
 			id);
 	};
 
-	const auto showTopic = [=](auto topic, MsgId id)
+	const auto showTopic = [=](not_null<Data::ForumTopic*> topic, MsgId id)
 	{
 		controller->showTopic(
 			topic,
@@ -243,10 +243,20 @@ void AddJumpToBeginningAction(PeerData *peerData,
 			Window::SectionShow::Way::Forward);
 	};
 
+	const auto weakTopic = base::make_weak(topic);
+	const auto hadTopic = (topic != nullptr);
+	const auto weakController = base::make_weak(controller);
 	addCallback(
 		tr::ayu_JumpToBeginning(tr::now),
 		[=]
 		{
+			if (!weakController) {
+				return;
+			}
+			const auto topic = weakTopic.get();
+			if (hadTopic && !topic) {
+				return;
+			}
 			if (user) {
 				jumpToDate(controller->session().data().history(user), showPeerHistory);
 			} else if (group && !chat) {
@@ -263,9 +273,10 @@ void AddJumpToBeginningAction(PeerData *peerData,
 				} else {
 					jumpToDate(
 						topic,
-						[=](not_null<PeerData*>, MsgId id)
-						{
-							showTopic(topic, id);
+						[=](not_null<PeerData*>, MsgId id) {
+							if (const auto topic = weakTopic.get()) {
+								showTopic(topic, id);
+							}
 						});
 				}
 			}
@@ -775,12 +786,11 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 				if (currentItem->richPage() && session->premium()) {
 					if (preserveReply) {
 						crl::async([=] {
-							const auto current = sourceSession.get();
-							if (!current) {
+							if (!sourceSession) {
 								return;
 							}
 							AyuForward::forwardRichMessage(
-								not_null<Main::Session*>(current),
+								sourceSession,
 								itemId,
 								action,
 								targetHistory);
@@ -829,12 +839,11 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 				if (AyuForward::isFullAyuForwardNeeded(currentItem)) {
 					crl::async([=]
 					{
-						const auto current = sourceSession.get();
-						if (!current) {
+						if (!sourceSession) {
 							return;
 						}
 						AyuForward::forwardMessages(
-							not_null<Main::Session*>(current),
+							sourceSession,
 							action,
 							false,
 							itemIds,
@@ -844,12 +853,11 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 				} else if (AyuForward::isAyuForwardNeeded(currentItem)) {
 					crl::async([=]
 					{
-						const auto current = sourceSession.get();
-						if (!current) {
+						if (!sourceSession) {
 							return;
 						}
 						AyuForward::intelligentForward(
-							not_null<Main::Session*>(current),
+							sourceSession,
 							action,
 							itemIds,
 							forwardOptions,

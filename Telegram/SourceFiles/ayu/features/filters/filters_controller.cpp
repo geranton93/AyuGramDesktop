@@ -8,6 +8,8 @@
 #include "ayu/features/filters/filters_controller.h"
 
 #include "ayu/ayu_settings.h"
+#include "ayu/features/filters/filter_cache.h"
+#include "ayu/features/filters/filter_regex.h"
 #include "ayu/features/filters/filters_cache_controller.h"
 #include "ayu/features/filters/filters_utils.h"
 #include "ayu/utils/telegram_helpers.h"
@@ -18,6 +20,7 @@
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_components.h"
+#include "main/main_session.h"
 #include "unicode/regex.h"
 
 #include <memory>
@@ -25,7 +28,11 @@
 
 namespace FiltersController {
 
-std::unordered_set<long long> showingFilteredMessages;
+FiltersCacheController::ShownDialogs showingFilteredMessages;
+
+FiltersCacheController::DialogKey keyFor(not_null<PeerData*> peer) {
+	return { peer->session().uniqueId(), peer->id.value };
+}
 
 bool filterBlocked(const not_null<HistoryItem*> item) {
 	if (item->from() != item->history()->peer) {
@@ -55,19 +62,15 @@ std::optional<bool> isFiltered(
 	{
 		UErrorCode status = U_ZERO_ERROR;
 
-		const auto matcher = std::unique_ptr<icu::RegexMatcher>(pattern.pattern->matcher(icuStr, status));
-		if (U_FAILURE(status) || !matcher) {
+		const auto result = MatchPattern(
+			*pattern.pattern,
+			pattern.reversed,
+			icuStr,
+			status);
+		if (U_FAILURE(status)) {
 			LOG(("FILTER FAILED: %1").arg(u_errorName(status)));
-			return false;
 		}
-
-		const auto match = matcher->find();
-		const auto reversed = pattern.reversed;
-
-		if ((!reversed && match) || (reversed && !match)) {
-			return true;
-		}
-		return false;
+		return result;
 	};
 
 	if (const auto i = cache->patternsByDialogId.find(dialogId); i != cache->patternsByDialogId.end()) {
@@ -150,7 +153,7 @@ bool isBlocked(const not_null<PeerData*> peer) {
 }
 
 bool filtered(const not_null<HistoryItem*> item) {
-	if (showingFilteredMessages.contains(item->history()->peer->id.value)) {
+	if (showingFilteredMessages.contains(keyFor(item->history()->peer))) {
 		return false;
 	}
 
@@ -192,19 +195,15 @@ bool filtered(const not_null<HistoryItem*> item) {
 }
 
 std::optional<bool> filteredMessagesShown(not_null<PeerData*> peer) {
-	if (!showingFilteredMessages.contains(peer->id.value)
+	if (!showingFilteredMessages.contains(keyFor(peer))
 		&& !FiltersCacheController::hasFilteredMessages(peer)) {
 		return std::nullopt;
 	}
-	return showingFilteredMessages.contains(peer->id.value);
+	return showingFilteredMessages.contains(keyFor(peer));
 }
 
 void toggleFilteredMessagesShown(not_null<PeerData*> peer) {
-	if (showingFilteredMessages.contains(peer->id.value)) {
-		showingFilteredMessages.erase(peer->id.value);
-	} else {
-		showingFilteredMessages.insert(peer->id.value);
-	}
+	showingFilteredMessages.toggle(keyFor(peer));
 	FiltersCacheController::fireUpdate();
 }
 

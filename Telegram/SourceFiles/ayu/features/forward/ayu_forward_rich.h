@@ -12,10 +12,14 @@
 #include "history/history_item.h"
 #include "main/main_session.h"
 
+namespace AyuSync {
+enum class SendSyncResult;
+} // namespace AyuSync
+
 namespace AyuForward {
 
-bool forwardRichMessage(
-	not_null<Main::Session*> session,
+[[nodiscard]] AyuSync::SendSyncResult forwardRichMessage(
+	const base::weak_ptr<Main::Session> &session,
 	FullMsgId itemId,
 	const Api::SendAction &action,
 	base::weak_ptr<History> targetHistory,

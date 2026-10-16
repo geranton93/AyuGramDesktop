@@ -321,6 +321,8 @@ private:
 	std::unique_ptr<Ui::RpWidget> _priceTag;
 	QImage _priceTagBg;
 	bool _confirmed = false;
+	bool _prefetchingAnimatedContent = false;
+	bool _closing = false;
 	bool _textTaken = false;
 	bool _invertCaption = false;
 

@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_editing.h"
 #include "api/api_send_progress.h"
+#include "api/api_sending.h"
 #include "boxes/abstract_box.h"
 #include "boxes/premium_limits_box.h"
 #include "lang/lang_keys.h"
@@ -183,7 +184,8 @@ Uploader::Uploader(not_null<ApiWrap*> api)
 			_api->sendUploadedPhoto(
 				data.fullId,
 				std::move(data.info),
-				data.options);
+				data.options,
+				std::move(data.sendRequest));
 		}
 	}, _lifetime);
 
@@ -199,7 +201,8 @@ Uploader::Uploader(not_null<ApiWrap*> api)
 			_api->sendUploadedDocument(
 				data.fullId,
 				std::move(data.info),
-				data.options);
+				data.options,
+				std::move(data.sendRequest));
 		}
 	}, _lifetime);
 
@@ -581,6 +584,9 @@ void Uploader::finishTranscode(
 }
 
 void Uploader::failed(FullMsgId itemId) {
+	if (const auto requestId = _videoCoverUploadRequests.take(itemId)) {
+		_api->request(*requestId).cancel();
+	}
 	const auto i = ranges::find(_queue, itemId, &Entry::itemId);
 	if (i != end(_queue)) {
 		if (i->cancelPreparing) {
@@ -591,6 +597,9 @@ void Uploader::failed(FullMsgId itemId) {
 		notifyFailed(entry);
 	} else if (const auto coverId = _videoIdToCoverId.take(itemId)) {
 		if (const auto video = _videoWaitingCover.take(*coverId)) {
+			if (video->sendRequest) {
+				video->sendRequest->finishOne(Api::SendResult::Failed);
+			}
 			const auto document = session().data().document(video->id);
 			if (document->uploading()) {
 				document->uploadingData->preparing = false;
@@ -601,6 +610,9 @@ void Uploader::failed(FullMsgId itemId) {
 		failed(*coverId);
 	} else if (const auto video = _videoWaitingCover.take(itemId)) {
 		_videoIdToCoverId.remove(video->fullId);
+		if (video->sendRequest) {
+			video->sendRequest->finishOne(Api::SendResult::Failed);
+		}
 		const auto document = session().data().document(video->id);
 		if (document->uploading()) {
 			document->uploadingData->preparing = false;
@@ -617,6 +629,21 @@ void Uploader::failed(FullMsgId itemId) {
 }
 
 void Uploader::notifyFailed(const Entry &entry) {
+	if (const auto video = _videoWaitingCover.take(entry.itemId)) {
+		_videoIdToCoverId.remove(video->fullId);
+		const auto document = session().data().document(video->id);
+		if (document->uploading()) {
+			document->uploadingData->preparing = false;
+			document->status = FileUploadFailed;
+		}
+		_documentFailed.fire_copy(video->fullId);
+		if (video->sendRequest) {
+			video->sendRequest->finishOne(Api::SendResult::Failed);
+		}
+	}
+	if (entry.file->sendRequest) {
+		entry.file->sendRequest->finishOne(Api::SendResult::Failed);
+	}
 	const auto type = entry.file->type;
 	if (type == SendMediaType::Photo) {
 		_photoFailed.fire_copy(entry.itemId);
@@ -954,17 +981,37 @@ void Uploader::cancelAllRequests() {
 }
 
 void Uploader::clear() {
+	auto sendRequests = std::vector<std::shared_ptr<Api::SendRequest>>();
+	sendRequests.reserve(_queue.size() + _videoWaitingCover.size());
 	for (auto &entry : _queue) {
 		if (entry.cancelPreparing) {
 			entry.cancelPreparing->store(true);
 		}
+		if (entry.file->sendRequest) {
+			sendRequests.push_back(entry.file->sendRequest);
+		}
 	}
+	for (const auto &entry : _videoWaitingCover) {
+		const auto &video = entry.second;
+		if (video.sendRequest) {
+			sendRequests.push_back(video.sendRequest);
+		}
+	}
+	const auto coverUploadRequests = base::take(_videoCoverUploadRequests);
+	_videoIdToCoverId.clear();
+	_videoWaitingCover.clear();
 	_transcodeQueue.list.clear();
 	_archiveQueue.list.clear();
 	_queue.clear();
 	cancelAllRequests();
+	for (const auto &request : coverUploadRequests) {
+		_api->request(request.second).cancel();
+	}
 	stopSessions();
 	_stopSessionsTimer.cancel();
+	for (const auto &request : sendRequests) {
+		request->finishOne(Api::SendResult::Indeterminate);
+	}
 }
 
 Uploader::Request Uploader::finishRequest(mtpRequestId requestId) {
@@ -1142,6 +1189,7 @@ void Uploader::finishFront() {
 			},
 			.options = options,
 			.edit = edit,
+			.sendRequest = entry.file->sendRequest,
 		};
 		const auto i = _videoWaitingCover.find(entry.itemId);
 		if (i != end(_videoWaitingCover)) {
@@ -1202,6 +1250,7 @@ void Uploader::finishFront() {
 			},
 			.options = options,
 			.edit = edit,
+			.sendRequest = entry.file->sendRequest,
 		};
 		if (entry.file->videoCover) {
 			uploadVideoCover(std::move(ready), entry.file->videoCover);
@@ -1238,7 +1287,7 @@ void Uploader::uploadCoverAsPhoto(
 		FullMsgId videoId,
 		UploadedMedia &&cover) {
 	const auto coverId = cover.fullId;
-	_api->request(MTPmessages_UploadMedia(
+	const auto requestId = _api->request(MTPmessages_UploadMedia(
 		MTP_flags(0),
 		MTPstring(), // business_connection_id
 		session().data().peer(videoId.peer)->input(),
@@ -1248,7 +1297,8 @@ void Uploader::uploadCoverAsPhoto(
 			MTP_vector<MTPInputDocument>(0),
 			MTP_int(0),
 			MTPInputDocument()) // video
-	)).done([=](const MTPMessageMedia &result) {
+	)).done(crl::guard(this, [=](const MTPMessageMedia &result) {
+		_videoCoverUploadRequests.remove(videoId);
 		result.match([&](const MTPDmessageMediaPhoto &data) {
 			const auto photo = data.vphoto();
 			if (!photo || photo->type() != mtpc_photo) {
@@ -1268,9 +1318,11 @@ void Uploader::uploadCoverAsPhoto(
 		}, [&](const auto &) {
 			failed(coverId);
 		});
-	}).fail([=] {
+	})).fail(crl::guard(this, [=] {
+		_videoCoverUploadRequests.remove(videoId);
 		failed(coverId);
-	}).send();
+	})).send();
+	_videoCoverUploadRequests.emplace(videoId, requestId);
 }
 
 } // namespace Storage

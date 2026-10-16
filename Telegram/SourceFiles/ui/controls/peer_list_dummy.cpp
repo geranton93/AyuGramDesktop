@@ -7,7 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/controls/peer_list_dummy.h"
 
+#include "ayu/rows_range.h"
 #include "ui/painter.h"
+#include "ui/ui_utility.h"
 #include "styles/style_widgets.h"
 
 PeerListDummy::PeerListDummy(
@@ -25,11 +27,10 @@ void PeerListDummy::paintEvent(QPaintEvent *e) {
 	PainterHighQualityEnabler hq(p);
 
 	const auto fill = e->rect();
-	const auto bottom = fill.top() + fill.height();
-	const auto from = std::clamp(fill.top() / _st.item.height, 0, _count);
-	const auto till = std::clamp(
-		(bottom + _st.item.height - 1) / _st.item.height,
-		0,
+	const auto [from, till] = Ayu::RowsInRange(
+		fill.top(),
+		fill.top() + fill.height(),
+		_st.item.height,
 		_count);
 	p.translate(0, _st.item.height * from);
 	p.setPen(Qt::NoPen);

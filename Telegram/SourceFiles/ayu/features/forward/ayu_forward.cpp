@@ -7,6 +7,7 @@
 #include "ayu/features/forward/ayu_forward.h"
 #include "ayu/features/forward/ayu_forward_source.h"
 
+#include "api/api_sending.h"
 #include "apiwrap.h"
 #include "lang_auto.h"
 #include "ayu/features/forward/ayu_forward_rich.h"
@@ -73,6 +74,24 @@ std::unordered_map<ForwardStateKey,
 constexpr auto kMaxForwardStates = std::size_t(256);
 constexpr auto kMaxForwardItems = std::size_t(10'000);
 
+class IntelligentForwardCompletion final {
+public:
+	explicit IntelligentForwardCompletion(
+			Fn<void(Api::ForwardMessagesResult)> callback)
+	: _callback(std::move(callback)) {
+	}
+
+	void finish(Api::ForwardMessagesResult result) {
+		if (!_finished.exchange(true) && _callback) {
+			_callback(result);
+		}
+	}
+
+private:
+	std::atomic<bool> _finished = false;
+	Fn<void(Api::ForwardMessagesResult)> _callback;
+};
+
 [[nodiscard]] bool IsForwardStopped(
 		const base::weak_ptr<Main::Session> &weakSession,
 		const ForwardState &state) {
@@ -80,13 +99,10 @@ constexpr auto kMaxForwardItems = std::size_t(10'000);
 }
 
 void FinishForward(
-		const base::weak_ptr<Main::Session> &weakSession,
 		const std::shared_ptr<ForwardState> &state,
 		const PeerId &peerId) {
 	state->state = ForwardState::State::Finished;
-	if (const auto current = weakSession.get()) {
-		state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
-	}
+	state->updateBottomBar(&peerId, ForwardState::State::Finished);
 }
 
 void ShowForwardStartFailure(
@@ -106,7 +122,7 @@ void ShowForwardStartFailure(
 		return nullptr;
 	}
 	const auto owner = it->second->owner.get();
-	if (!owner || owner->uniqueId() != key.sessionUniqueId) {
+	if (!owner) {
 		forwardStates.erase(it);
 		return nullptr;
 	}
@@ -120,7 +136,7 @@ void ShowForwardStartFailure(
 	if (const auto existing = forwardStates.find(key);
 		existing != forwardStates.end()) {
 		const auto owner = existing->second->owner.get();
-		if (owner && owner->uniqueId() == key.sessionUniqueId
+		if (owner
 			&& existing->second->state.load()
 				!= ForwardState::State::Finished) {
 			return false;
@@ -161,13 +177,13 @@ struct ForwardItem {
 };
 
 [[nodiscard]] std::vector<ForwardItem> SnapshotForwardItems(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const MessageIdsList &itemIds) {
 	if (itemIds.empty() || itemIds.size() > kMaxForwardItems) {
 		return {};
 	}
 	auto result = std::vector<ForwardItem>();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	try {
 		crl::on_main_sync([&] {
 			const auto current = weakSession.get();
@@ -221,10 +237,10 @@ struct ForwardItem {
 } // namespace
 
 std::optional<ForwardTargetSnapshot> SnapshotForwardTarget(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const base::weak_ptr<History> &targetHistory) {
 	auto result = std::optional<ForwardTargetSnapshot>();
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	crl::on_main_sync([&] {
 		const auto current = weakSession.get();
 		const auto history = targetHistory.get();
@@ -247,17 +263,20 @@ bool isForwarding(const Main::Session &session, const PeerId &id) {
 	if (!state) {
 		return false;
 	}
-	return state->state.load() != ForwardState::State::Finished
-		&& state->currentChunk.load() < state->totalChunks
+	const auto progress = state->progress();
+	const auto currentState = state->state.load();
+	return currentState != ForwardState::State::Finished
+		&& progress.currentChunk < state->totalChunks
 		&& !state->stopRequested.load()
-		&& ((state->totalChunks && state->totalMessages.load()) || state->state.load() == ForwardState::State::Downloading);
+		&& ((state->totalChunks && progress.totalMessages)
+			|| currentState == ForwardState::State::Downloading);
 }
 
 void cancelForward(const PeerId &id, const Main::Session &session) {
 	const auto state = FindForwardState({ session.uniqueId(), id });
 	if (state) {
 		state->stopRequested = true;
-		state->updateBottomBar(session, &id, ForwardState::State::Finished);
+		state->updateBottomBar(&id, ForwardState::State::Finished);
 	}
 }
 
@@ -269,20 +288,22 @@ std::pair<QString, QString> stateName(
 	if (!state) {
 		return std::make_pair(QString(), QString());
 	}
+	const auto progress = state->progress();
+	const auto currentState = state->state.load();
 
 	QString messagesString = tr::ayu_AyuForwardStatusSentCount(tr::now,
-															   lt_count1,
-															   QString::number(state->sentMessages),
-															   lt_count2,
-															   QString::number(state->totalMessages)
+												   lt_count1,
+												   QString::number(progress.sentMessages),
+												   lt_count2,
+												   QString::number(progress.totalMessages)
 
 	);
 
 	QString chunkString = tr::ayu_AyuForwardStatusChunkCount(tr::now,
-															 lt_count1,
-															 QString::number(state->currentChunk + 1),
-															 lt_count2,
-															 QString::number(state->totalChunks)
+												 lt_count1,
+												 QString::number(progress.currentChunk + 1),
+												 lt_count2,
+												 QString::number(state->totalChunks)
 
 	);
 
@@ -290,11 +311,11 @@ std::pair<QString, QString> stateName(
 
 	QString status;
 
-	if (state->state == ForwardState::State::Preparing) {
+	if (currentState == ForwardState::State::Preparing) {
 		status = tr::ayu_AyuForwardStatusPreparing(tr::now);
-	} else if (state->state == ForwardState::State::Downloading) {
+	} else if (currentState == ForwardState::State::Downloading) {
 		return std::make_pair(tr::ayu_AyuForwardStatusLoadingMedia(tr::now), "");
-	} else if (state->state == ForwardState::State::Sending) {
+	} else if (currentState == ForwardState::State::Sending) {
 		status = tr::ayu_AyuForwardStatusForwarding(tr::now);
 	} else {
 		// ForwardState::State::Finished
@@ -305,9 +326,17 @@ std::pair<QString, QString> stateName(
 	return std::make_pair(status, partString);
 }
 
-void ForwardState::updateBottomBar(const Main::Session &session, const PeerId *peer, const State &st) {
-	state = st;
-	const auto weakSession = base::make_weak(&session);
+void ForwardState::updateBottomBar(const PeerId *peer, const State &st) {
+	auto previous = state.load();
+	while (previous != st) {
+		if (previous == State::Finished && st != State::Finished) {
+			return;
+		}
+		if (state.compare_exchange_weak(previous, st)) {
+			break;
+		}
+	}
+	const auto weakSession = owner;
 	if (!weakSession) {
 		return;
 	}
@@ -326,10 +355,16 @@ static Ui::PreparedList prepareMedia(
 		const std::vector<ForwardItem> &items,
 		int &i,
 		std::vector<ForwardMedia> &groupMedia,
-		const AyuSync::DocumentPaths &documentPaths) {
+		const AyuSync::DocumentPaths &documentPaths,
+		int &groupItemCount,
+		int &expectedMediaCount,
+		bool &allPrepared) {
 	auto list = Ui::PreparedList();
 	const auto append = [&](const ForwardMedia &media)
 	{
+		if (media.downloadable || media.photo || media.document) {
+			++expectedMediaCount;
+		}
 		auto path = QString();
 		const auto document = media.document;
 		if (document) {
@@ -341,7 +376,9 @@ static Ui::PreparedList prepareMedia(
 			path = photo->path;
 		}
 		auto prepared = Ui::PreparedFile(path);
-		if (prepared.path.isEmpty()) {
+		if (prepared.path.isEmpty()
+			|| (!document && !media.photo)) {
+			allPrepared = false;
 			return;
 		}
 		if (document) {
@@ -367,7 +404,10 @@ static Ui::PreparedList prepareMedia(
 		if (nextItem.groupId != groupId) {
 			break;
 		}
-		if (nextItem.media.photo || nextItem.media.document) {
+		++groupItemCount;
+		if (nextItem.media.downloadable
+			|| nextItem.media.photo
+			|| nextItem.media.document) {
 			append(nextItem.media);
 			i = k;
 		}
@@ -375,20 +415,27 @@ static Ui::PreparedList prepareMedia(
 	return list;
 }
 
-void sendMedia(
-	not_null<Main::Session*> session,
+[[nodiscard]] AyuSync::SendSyncResult sendMedia(
+	const base::weak_ptr<Main::Session> &session,
 	const std::shared_ptr<Ui::PreparedBundle> &bundle,
 	const ForwardMedia &primaryMedia,
 	Api::MessageToSend &&message,
 	bool sendImagesAsPhotos,
-	base::weak_ptr<History> targetHistory) {
+	base::weak_ptr<History> targetHistory,
+		const Fn<bool()> &cancelled) {
+	if (cancelled && cancelled()) {
+		return AyuSync::SendSyncResult::Indeterminate;
+	}
+	if (!bundle || bundle->groups.empty()) {
+		return AyuSync::SendSyncResult::Failed;
+	}
 	if (const auto document = primaryMedia.document; document && document->sticker) {
-		AyuSync::sendStickerSync(
+		return AyuSync::sendStickerSync(
 			session,
 			std::move(message),
 			document->id,
-			targetHistory);
-		return;
+			targetHistory,
+			cancelled);
 	}
 
 	auto mediaType = [&]
@@ -418,6 +465,9 @@ void sendMedia(
 			LOG(("failed to open file for forward with reason: %1").arg(file.errorString()));
 			failed = true;
 		}
+		if (cancelled && cancelled()) {
+			return AyuSync::SendSyncResult::Indeterminate;
+		}
 		auto data = QByteArray();
 		if (!failed) {
 			const auto fileSize = file.size();
@@ -430,14 +480,18 @@ void sendMedia(
 		}
 		file.close();
 
+		if (cancelled && cancelled()) {
+			return AyuSync::SendSyncResult::Indeterminate;
+		}
 		if (!failed && data.size()) {
-			AyuSync::sendVoiceSync(session,
-								   data,
-								   primaryMedia.document->duration,
-								   mediaType == SendMediaType::Round,
-								   std::move(message),
-								   targetHistory);
-			return;
+			return AyuSync::sendVoiceSync(
+				session,
+				data,
+				primaryMedia.document->duration,
+				mediaType == SendMediaType::Round,
+				std::move(message),
+				targetHistory,
+				cancelled);
 		}
 		// at least try to send it as squared-video
 	}
@@ -447,15 +501,28 @@ void sendMedia(
 		mediaType = SendMediaType::Photo;
 	}
 
+	auto sentAnyGroup = false;
 	for (auto &group : bundle->groups) {
-		AyuSync::sendDocumentSync(
+		if (cancelled && cancelled()) {
+			return AyuSync::SendSyncResult::Indeterminate;
+		}
+		const auto result = AyuSync::sendDocumentSync(
 			session,
 			group,
 			mediaType,
 			std::move(message.textWithTags),
 			message.action,
-			targetHistory);
+			targetHistory,
+			cancelled);
+		if (result != AyuSync::SendSyncResult::Succeeded) {
+			return (sentAnyGroup
+				&& result == AyuSync::SendSyncResult::Failed)
+				? AyuSync::SendSyncResult::Indeterminate
+				: result;
+		}
+		sentAnyGroup = true;
 	}
+	return AyuSync::SendSyncResult::Succeeded;
 }
 
 bool isAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items) {
@@ -490,20 +557,24 @@ struct ForwardChunk
 	MessageIdsList itemIds;
 };
 
-void ContinueIntelligentForward(
-		not_null<Main::Session*> session,
+Api::ForwardMessagesResult ContinueIntelligentForward(
+		const base::weak_ptr<Main::Session> &session,
 		const Api::SendAction &action,
 		MessageIdsList resolvedIds,
 		Data::ForwardOptions options,
-		base::weak_ptr<History> targetHistory) {
-	const auto weakSession = base::make_weak(session);
+		base::weak_ptr<History> targetHistory,
+		const Fn<bool()> &cancelled) {
+	const auto weakSession = session;
 	if (!weakSession) {
-		return;
+		return Api::ForwardMessagesResult::Failed;
+	}
+	if (cancelled && cancelled()) {
+		return Api::ForwardMessagesResult::Indeterminate;
 	}
 	const auto target = SnapshotForwardTarget(session, targetHistory);
 	if (!target || resolvedIds.empty()
 		|| resolvedIds.size() > kMaxForwardItems) {
-		return;
+		return Api::ForwardMessagesResult::Failed;
 	}
 	const auto peerId = target->peerId;
 	const auto stateKey = ForwardStateKey{
@@ -512,7 +583,7 @@ void ContinueIntelligentForward(
 	};
 	const auto items = SnapshotForwardItems(session, resolvedIds);
 	if (items.empty() || items.size() != resolvedIds.size() || !weakSession) {
-		return;
+		return Api::ForwardMessagesResult::Failed;
 	}
 	auto chunks = std::vector<ForwardChunk>();
 	auto currentArray = MessageIdsList();
@@ -545,146 +616,241 @@ void ContinueIntelligentForward(
 	if (!SetForwardState(stateKey, state)) {
 		LOG(("AyuForward: forward state capacity reached"));
 		ShowForwardStartFailure(weakSession);
-		return;
+		return Api::ForwardMessagesResult::Failed;
 	}
-
-	for (const auto &chunk : chunks) {
-		if (IsForwardStopped(weakSession, *state)) {
-			FinishForward(weakSession, state, peerId);
-			return;
+	const auto finishState = gsl::finally([&] {
+		if (state->state.load() != ForwardState::State::Finished) {
+			FinishForward(state, peerId);
 		}
+	});
+	const auto isStopped = [weakSession, state, cancelled] {
+		return IsForwardStopped(weakSession, *state)
+			|| (cancelled && cancelled());
+	};
+
+	auto hasUntrackedSends = false;
+	auto hasSucceeded = false;
+	for (auto chunkIndex = 0;
+		chunkIndex != static_cast<int>(chunks.size());
+		++chunkIndex) {
+		const auto &chunk = chunks[chunkIndex];
+		if (isStopped()) {
+			FinishForward(state, peerId);
+			return Api::ForwardMessagesResult::Indeterminate;
+		}
+		state->setProgress({
+			.currentChunk = chunkIndex,
+			.totalMessages = static_cast<int>(chunk.itemIds.size()),
+			.sentMessages = 0,
+		});
 		if (chunk.isAyuForwardNeeded) {
-			forwardMessages(
+			const auto result = forwardMessages(
 				session,
 				action,
 				true,
 				chunk.itemIds,
 				options,
-				targetHistory);
-			if (IsForwardStopped(weakSession, *state)) {
-				FinishForward(weakSession, state, peerId);
-				return;
+				targetHistory,
+				true,
+				cancelled);
+			if (result == Api::ForwardMessagesResult::Failed) {
+				FinishForward(state, peerId);
+				return hasSucceeded || hasUntrackedSends
+					? Api::ForwardMessagesResult::Indeterminate
+					: Api::ForwardMessagesResult::Failed;
+			}
+			hasUntrackedSends = hasUntrackedSends
+				|| (result == Api::ForwardMessagesResult::Indeterminate);
+			hasSucceeded = hasSucceeded
+				|| (result == Api::ForwardMessagesResult::Succeeded);
+			if (isStopped()) {
+				FinishForward(state, peerId);
+				return Api::ForwardMessagesResult::Indeterminate;
 			}
 		} else {
-			state->totalMessages = static_cast<int>(chunk.itemIds.size());
-			state->sentMessages = 0;
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Sending);
-			}
+			state->updateBottomBar(&peerId, ForwardState::State::Sending);
 
-			AyuSync::forwardMessagesSync(
+			const auto result = AyuSync::forwardMessagesSync(
 				session,
 				chunk.itemIds,
 				action,
 				options,
-				targetHistory);
-			if (IsForwardStopped(weakSession, *state)) {
-				FinishForward(weakSession, state, peerId);
-				return;
+				targetHistory,
+				[isStopped] {
+					return isStopped();
+				},
+				[state, peerId](Api::SendResult requestResult, int messageCount) {
+					if (requestResult == Api::SendResult::Succeeded) {
+						state->addSentMessages(messageCount);
+					}
+					state->updateBottomBar(
+						&peerId,
+						ForwardState::State::Sending);
+				});
+			if (result != AyuSync::ForwardMessagesSyncResult::Succeeded) {
+				FinishForward(state, peerId);
+				return result == AyuSync::ForwardMessagesSyncResult::Failed
+					&& !hasSucceeded
+					&& !hasUntrackedSends
+					? Api::ForwardMessagesResult::Failed
+					: Api::ForwardMessagesResult::Indeterminate;
 			}
-
-			state->sentMessages = state->totalMessages.load();
-
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Finished);
+			if (isStopped()) {
+				FinishForward(state, peerId);
+				return Api::ForwardMessagesResult::Indeterminate;
 			}
+			const auto progress = state->progress();
+			if (progress.sentMessages != progress.totalMessages) {
+				FinishForward(state, peerId);
+				return Api::ForwardMessagesResult::Indeterminate;
+			}
+			hasSucceeded = true;
+
+			state->updateBottomBar(&peerId, ForwardState::State::Sending);
 		}
-		state->currentChunk++;
 	}
 
-	FinishForward(weakSession, state, peerId);
+	FinishForward(state, peerId);
+	return hasUntrackedSends
+		? Api::ForwardMessagesResult::Indeterminate
+		: Api::ForwardMessagesResult::Succeeded;
 }
 
 void intelligentForward(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		const Api::SendAction &action,
 		const MessageIdsList &itemIds,
 		Data::ForwardOptions options,
-		base::weak_ptr<History> targetHistory) {
-	const auto weakSession = base::make_weak(session);
+		base::weak_ptr<History> targetHistory,
+		Fn<void(Api::ForwardMessagesResult)> done,
+		Fn<bool()> cancelled) {
+	const auto completion = std::make_shared<IntelligentForwardCompletion>(
+		std::move(done));
+	const auto weakSession = session;
 	if (!weakSession) {
+		completion->finish(Api::ForwardMessagesResult::Failed);
+		return;
+	}
+	if (cancelled && cancelled()) {
+		completion->finish(Api::ForwardMessagesResult::Indeterminate);
 		return;
 	}
 	if (itemIds.empty() || itemIds.size() > kMaxForwardItems) {
 		LOG(("AyuForward: refusing an invalid or oversized selection"));
+		completion->finish(Api::ForwardMessagesResult::Failed);
 		return;
 	}
 	if (!SnapshotForwardTarget(session, targetHistory)) {
+		completion->finish(Api::ForwardMessagesResult::Failed);
 		return;
 	}
 	const auto topicRootId = action.replyTo.topicRootId;
 	const auto monoforumPeerId = action.replyTo.monoforumPeerId;
-	crl::on_main([weakSession, targetHistory, topicRootId, monoforumPeerId]
-	{
-		if (weakSession && targetHistory) {
-			targetHistory.get()->setForwardDraft(
+	try {
+		crl::on_main([
+				weakSession,
+				targetHistory,
 				topicRootId,
 				monoforumPeerId,
-				{});
-		}
-	});
+				cancelled]
+		{
+			if ((!cancelled || !cancelled())
+				&& weakSession
+				&& targetHistory) {
+				targetHistory.get()->setForwardDraft(
+					topicRootId,
+					monoforumPeerId,
+					{});
+			}
+		});
+	} catch (...) {
+		completion->finish(Api::ForwardMessagesResult::Failed);
+		return;
+	}
 
 	try {
 		resolveForwardSources(
 			session,
 			MessageIdsList(itemIds),
-			[weakSession, action, options, targetHistory](
+			[completion, weakSession, action, options, targetHistory, cancelled](
 					MessageIdsList resolvedIds) mutable {
+				if (cancelled && cancelled()) {
+					completion->finish(
+						Api::ForwardMessagesResult::Indeterminate);
+					return;
+				}
 				if (resolvedIds.empty()) {
 					if (weakSession) {
 						ShowForwardStartFailure(weakSession);
 					}
+					completion->finish(Api::ForwardMessagesResult::Failed);
 					return;
 				}
 				try {
-					crl::on_main([
+					crl::async([
+							completion,
 							weakSession,
 							action,
 							resolvedIds = std::move(resolvedIds),
 							options,
-							targetHistory]() mutable {
-						if (const auto current = weakSession.get()) {
-							ContinueIntelligentForward(
-								not_null<Main::Session*>(current),
+							targetHistory,
+							cancelled]() mutable {
+						try {
+							const auto result = ContinueIntelligentForward(
+								weakSession,
 								action,
 								std::move(resolvedIds),
 								options,
-								targetHistory);
+								targetHistory,
+								cancelled);
+							completion->finish(result);
+						} catch (...) {
+							ShowForwardStartFailure(weakSession);
+							completion->finish(
+								Api::ForwardMessagesResult::Indeterminate);
 						}
 					});
 				} catch (...) {
 					if (weakSession) {
 						ShowForwardStartFailure(weakSession);
 					}
+					completion->finish(
+						Api::ForwardMessagesResult::Indeterminate);
 				}
 			});
 	} catch (...) {
 		if (weakSession) {
 			ShowForwardStartFailure(weakSession);
 		}
+		completion->finish(Api::ForwardMessagesResult::Failed);
 	}
 }
 
-void forwardMessages(
-	not_null<Main::Session*> session,
+Api::ForwardMessagesResult forwardMessages(
+	const base::weak_ptr<Main::Session> &session,
 	const Api::SendAction &action,
 	bool forwardState,
 	const MessageIdsList &itemIds,
 	Data::ForwardOptions options,
-	base::weak_ptr<History> targetHistory) {
-	const auto weakSession = base::make_weak(session);
+	base::weak_ptr<History> targetHistory,
+	bool trackProgress,
+	Fn<bool()> cancelled) {
+	const auto weakSession = session;
 	if (!weakSession) {
-		return;
+		return Api::ForwardMessagesResult::Failed;
+	}
+	if (cancelled && cancelled()) {
+		return Api::ForwardMessagesResult::Indeterminate;
 	}
 	const auto target = SnapshotForwardTarget(session, targetHistory);
 	if (!target) {
-		return;
+		return Api::ForwardMessagesResult::Failed;
 	}
 	const auto items = SnapshotForwardItems(session, itemIds);
 	if (items.empty() || items.size() != itemIds.size()
 		|| items.size() > kMaxForwardItems) {
 		LOG(("AyuForward: refusing an invalid or oversized selection"));
-		return;
+		return Api::ForwardMessagesResult::Failed;
 	}
 	const auto peerId = target->peerId;
 	const auto stateKey = ForwardStateKey{
@@ -715,7 +881,7 @@ void forwardMessages(
 			if (!SetForwardState(stateKey, state)) {
 				LOG(("AyuForward: forward state capacity reached"));
 				ShowForwardStartFailure(weakSession);
-				return;
+				return Api::ForwardMessagesResult::Failed;
 			}
 		} else {
 			keepState = true;
@@ -725,18 +891,26 @@ void forwardMessages(
 		if (!SetForwardState(stateKey, state)) {
 			LOG(("AyuForward: forward state capacity reached"));
 			ShowForwardStartFailure(weakSession);
-			return;
+			return Api::ForwardMessagesResult::Failed;
 		}
 	}
-
-	std::unordered_map<uint64, uint64> groupIds;
+	const auto finishState = gsl::finally([&] {
+		if (!keepState
+			&& state->state.load() != ForwardState::State::Finished) {
+			FinishForward(state, peerId);
+		}
+	});
+	const auto isStopped = [weakSession, state, cancelled] {
+		return IsForwardStopped(weakSession, *state)
+			|| (cancelled && cancelled());
+	};
 
 	std::vector<AyuSync::DownloadItem> toBeDownloaded;
 
 	for (const auto &item : items) {
 		if (!weakSession) {
-			state->state = ForwardState::State::Finished;
-			return;
+			FinishForward(state, peerId);
+			return Api::ForwardMessagesResult::Indeterminate;
 		}
 		if (item.media.downloadable) {
 			toBeDownloaded.push_back({
@@ -746,91 +920,92 @@ void forwardMessages(
 			});
 		}
 
-		if (item.groupId) {
-			const auto currentId = groupIds.find(item.groupId);
-
-			if (currentId == groupIds.end()) {
-				groupIds[item.groupId] = base::RandomValue<uint64>();
-			}
-		}
 	}
-	state->totalMessages = static_cast<int>(items.size());
+	state->setMessageProgress(static_cast<int>(items.size()), 0);
 	auto documentPaths = AyuSync::DocumentPaths();
 	if (!toBeDownloaded.empty()) {
-		state->state = ForwardState::State::Downloading;
-		if (const auto current = weakSession.get()) {
-			state->updateBottomBar(*current, &peerId, ForwardState::State::Downloading);
-		}
+		state->updateBottomBar(&peerId, ForwardState::State::Downloading);
 		documentPaths = AyuSync::loadDocuments(
 			session,
 			toBeDownloaded,
-			[state] { return state->stopRequested.load(); });
+			[isStopped] { return isStopped(); });
 	}
-	if (IsForwardStopped(weakSession, *state)) {
-		FinishForward(weakSession, state, peerId);
-		return;
+	if (isStopped()) {
+		FinishForward(state, peerId);
+		return Api::ForwardMessagesResult::Indeterminate;
 	}
 
-	state->sentMessages = 0;
-	if (const auto current = weakSession.get()) {
-		state->updateBottomBar(*current, &peerId, ForwardState::State::Sending);
-	}
+	state->updateBottomBar(&peerId, ForwardState::State::Sending);
+	const auto isCancelled = isStopped;
+	auto hasSkippedItems = false;
+	auto didSendAnything = false;
+	auto progressSentMessages = 0;
 
 	for (int i = 0; i < static_cast<int>(items.size()); i++) {
 		if (!weakSession) {
-			state->state = ForwardState::State::Finished;
-			return;
+			FinishForward(state, peerId);
+			return Api::ForwardMessagesResult::Indeterminate;
 		}
 		const auto &item = items[i];
 
-		if (IsForwardStopped(weakSession, *state)) {
-			FinishForward(weakSession, state, peerId);
-			return;
+		if (isStopped()) {
+			FinishForward(state, peerId);
+			return Api::ForwardMessagesResult::Indeterminate;
 		}
+		auto itemSucceeded = false;
+		auto itemProgressKnown = false;
+		auto itemSendResult = AyuSync::SendSyncResult::Indeterminate;
+		auto itemProgressCount = 1;
 		const auto updateProgress = gsl::finally([&] {
-			if (state->stopRequested) {
+			if (!trackProgress
+				|| !itemSucceeded
+				|| !itemProgressKnown
+				|| isStopped()) {
 				return;
 			}
-			state->sentMessages = i + 1;
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(
-					*current,
-					&peerId,
+			progressSentMessages += itemProgressCount;
+			state->setSentMessages(progressSentMessages);
+			state->updateBottomBar(&peerId,
 					ForwardState::State::Sending);
-			}
 		});
 
 		if (item.richPage) {
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Downloading);
-			}
+			state->updateBottomBar(&peerId, ForwardState::State::Downloading);
 
-			const auto sent = forwardRichMessage(
+			itemSendResult = forwardRichMessage(
 				session,
 				item.id,
 				action,
 				targetHistory,
-				[state]
-			{
-				return state->stopRequested.load();
-			});
+				[isStopped] {
+					return isStopped();
+				});
+			itemSucceeded = itemSendResult
+				== AyuSync::SendSyncResult::Succeeded;
+			itemProgressKnown = itemSucceeded;
 
-			if (IsForwardStopped(weakSession, *state)) {
-				FinishForward(weakSession, state, peerId);
-				return;
+			if (isStopped()) {
+				FinishForward(state, peerId);
+				return Api::ForwardMessagesResult::Indeterminate;
 			}
 
-			if (const auto current = weakSession.get()) {
-				state->updateBottomBar(*current, &peerId, ForwardState::State::Sending);
-			}
+			state->updateBottomBar(&peerId, ForwardState::State::Sending);
 
-			if (sent) {
-				continue;
+			if (!itemSucceeded) {
+				state->stopRequested = true;
+				FinishForward(state, peerId);
+				return (itemSendResult == AyuSync::SendSyncResult::Failed
+					&& !didSendAnything)
+					? Api::ForwardMessagesResult::Failed
+					: Api::ForwardMessagesResult::Indeterminate;
 			}
+			didSendAnything = true;
+			continue;
 		}
 
 		const auto &extractedText = item.text;
 		if (extractedText.empty() && !item.media.downloadable) {
+			hasSkippedItems = true;
 			continue;
 		}
 
@@ -846,25 +1021,50 @@ void forwardMessages(
 		}
 
 		if (!item.media.downloadable) {
-			AyuSync::sendMessageSync(
+			itemSendResult = AyuSync::sendMessageSync(
 				session,
 				std::move(message),
-				targetHistory);
+				targetHistory,
+				isCancelled);
+			itemSucceeded = itemSendResult
+				== AyuSync::SendSyncResult::Succeeded;
+			itemProgressKnown = itemSucceeded;
+			didSendAnything = didSendAnything || itemSucceeded;
 		} else {
 			if (item.media.poll) {
-				AyuSync::sendMessageSync(
+				itemSendResult = AyuSync::sendMessageSync(
 					session,
 					std::move(message),
-					targetHistory);
+					targetHistory,
+					isCancelled);
+				itemSucceeded = itemSendResult
+					== AyuSync::SendSyncResult::Succeeded;
+				itemProgressKnown = itemSucceeded;
+				didSendAnything = didSendAnything || itemSucceeded;
+				if (!itemSucceeded) {
+					state->stopRequested = true;
+					FinishForward(state, peerId);
+				return (itemSendResult == AyuSync::SendSyncResult::Failed
+					&& !didSendAnything)
+						? Api::ForwardMessagesResult::Failed
+						: Api::ForwardMessagesResult::Indeterminate;
+				}
 				continue;
 			}
 
 			std::vector<ForwardMedia> groupMedia;
+			auto groupItemCount = 1;
+			auto expectedMediaCount = 0;
+			auto allMediaPrepared = true;
 			auto preparedMedia = prepareMedia(
 				items,
 				i,
 				groupMedia,
-				documentPaths);
+				documentPaths,
+				groupItemCount,
+				expectedMediaCount,
+				allMediaPrepared);
+			itemProgressCount = groupItemCount;
 
 			// remove not finished files
 			for (auto j = int(preparedMedia.files.size()); j != 0;) {
@@ -883,17 +1083,42 @@ void forwardMessages(
 						|| !fileInfo.isFile()
 						|| fileInfo.size() != document->size);
 				if (incompletePhoto || incompleteDocument) {
+					allMediaPrepared = false;
 					preparedMedia.files.erase(preparedMedia.files.begin() + j);
 					groupMedia.erase(groupMedia.begin() + j);
 				}
 			}
 
+			if (item.groupId
+				&& groupItemCount > 1
+				&& (!allMediaPrepared
+					|| groupMedia.size() != expectedMediaCount
+					|| expectedMediaCount != groupItemCount)) {
+				state->stopRequested = true;
+				FinishForward(state, peerId);
+				return Api::ForwardMessagesResult::Indeterminate;
+			}
+
 			if (preparedMedia.files.empty()) {
+				hasSkippedItems = true;
 				if (!message.textWithTags.empty()) {
-					AyuSync::sendMessageSync(
+					itemSendResult = AyuSync::sendMessageSync(
 						session,
 						std::move(message),
-						targetHistory);
+						targetHistory,
+						isCancelled);
+					itemSucceeded = itemSendResult
+						== AyuSync::SendSyncResult::Succeeded;
+					itemProgressKnown = itemSucceeded;
+					didSendAnything = didSendAnything || itemSucceeded;
+				}
+				if (!itemSucceeded) {
+					state->stopRequested = true;
+					FinishForward(state, peerId);
+					return (itemSendResult == AyuSync::SendSyncResult::Failed
+						&& !didSendAnything)
+						? Api::ForwardMessagesResult::Failed
+						: Api::ForwardMessagesResult::Indeterminate;
 				}
 				continue;
 			}
@@ -917,20 +1142,49 @@ void forwardMessages(
 				std::move(groups),
 				way,
 				false);
-			sendMedia(
-				session,
-				bundle,
-				groupMedia.front(),
-				std::move(message),
-				way.sendImagesAsPhotos(),
-				targetHistory);
+			const auto trackedSticker = groupMedia.front().document
+				&& groupMedia.front().document->sticker;
+			if (trackedSticker) {
+				itemSendResult = AyuSync::sendStickerSync(
+					session,
+					std::move(message),
+					groupMedia.front().document->id,
+					targetHistory,
+					isCancelled);
+				itemSucceeded = itemSendResult
+					== AyuSync::SendSyncResult::Succeeded;
+			} else {
+				itemSendResult = sendMedia(
+					session,
+					bundle,
+					groupMedia.front(),
+					std::move(message),
+					way.sendImagesAsPhotos(),
+					targetHistory,
+					isCancelled);
+				itemSucceeded = itemSendResult
+					== AyuSync::SendSyncResult::Succeeded;
+			}
+			itemProgressKnown = itemSucceeded;
 		}
+		if (!itemSucceeded) {
+			state->stopRequested = true;
+			FinishForward(state, peerId);
+			return (itemSendResult == AyuSync::SendSyncResult::Failed
+				&& !didSendAnything)
+				? Api::ForwardMessagesResult::Failed
+				: Api::ForwardMessagesResult::Indeterminate;
+		}
+		didSendAnything = didSendAnything || itemSucceeded;
 		// if there are grouped messages
 		// "i" is incremented in prepareMedia
 	}
 	if (!keepState) {
-		FinishForward(weakSession, state, peerId);
+		FinishForward(state, peerId);
 	}
+	return !didSendAnything || hasSkippedItems
+		? Api::ForwardMessagesResult::Indeterminate
+		: Api::ForwardMessagesResult::Succeeded;
 }
 
 } // namespace AyuForward

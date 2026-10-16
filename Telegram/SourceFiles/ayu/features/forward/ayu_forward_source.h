@@ -11,7 +11,7 @@ namespace AyuForward {
 [[nodiscard]] bool isSourceForwardRestricted(not_null<HistoryItem*> item);
 
 void resolveForwardSources(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	MessageIdsList itemIds,
 	std::function<void(MessageIdsList)> callback);
 

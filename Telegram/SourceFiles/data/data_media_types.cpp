@@ -1429,7 +1429,7 @@ crl::time MediaFile::ttlSeconds() const {
 }
 
 bool MediaFile::allowsForward() const {
-	return true;
+	return !ttlSeconds();
 }
 
 bool MediaFile::updateInlineResultMedia(const MTPMessageMedia &media) {

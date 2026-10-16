@@ -52,6 +52,7 @@ public:
 	[[nodiscard]] not_null<DocumentData*> owner() const;
 
 	void goodThumbnailWanted();
+	void goodThumbnailSourceChanged();
 	[[nodiscard]] Image *goodThumbnail() const;
 	void setGoodThumbnail(QImage thumbnail);
 
@@ -97,7 +98,8 @@ private:
 	static void ReadOrGenerateThumbnail(not_null<DocumentData*> document);
 	static void GenerateGoodThumbnail(
 		not_null<DocumentData*> document,
-		QByteArray data);
+		QByteArray data,
+		uint64 generation);
 
 	[[nodiscard]] bool thumbnailEnoughForSticker() const;
 

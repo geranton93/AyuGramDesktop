@@ -365,7 +365,7 @@ private:
 	const bool _spoiler = false;
 	const bool _editMode = false;
 	const std::shared_ptr<IvHistoryViewMediaHost> _host;
-	const std::vector<std::shared_ptr<void>> _keepAlive;
+	std::vector<std::shared_ptr<void>> _keepAlive;
 	std::unique_ptr<HistoryView::Media> _media;
 	rpl::lifetime _itemDeathLifetime;
 	QRect _geometry;
@@ -402,6 +402,7 @@ IvHistoryViewBlock::IvHistoryViewBlock(
 	// that view is still alive.
 	_host->itemDeath() | rpl::on_next([this] {
 		_media = nullptr;
+		_keepAlive.clear();
 	}, _itemDeathLifetime);
 }
 
@@ -891,7 +892,7 @@ private:
 	const uint64 _stableId = 0;
 	const QString _copyText;
 	const std::shared_ptr<IvHistoryViewMediaHost> _host;
-	const std::vector<std::shared_ptr<void>> _keepAlive;
+	std::vector<std::shared_ptr<void>> _keepAlive;
 	const base::flat_map<
 		uint64,
 		std::shared_ptr<PhotoRuntime>> _groupedPhotoRuntimes;
@@ -953,6 +954,7 @@ IvHistoryViewSlideshowBlock::IvHistoryViewSlideshowBlock(
 		for (auto &media : _slides) {
 			media = nullptr;
 		}
+		_keepAlive.clear();
 	}, _itemDeathLifetime);
 
 	_slides.reserve(descriptor.slideMediaFactories.size());

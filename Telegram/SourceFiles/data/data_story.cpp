@@ -932,32 +932,44 @@ PeerData *Story::fromPeer() const {
 	return _fromPeer;
 }
 
-StoryPreload::StoryPreload(not_null<Story*> story, Fn<void()> done)
-: _story(story) {
+StoryPreload::StoryPreload(
+		not_null<Story*> story,
+		std::shared_ptr<int> token)
+: _story(story)
+, _token(std::move(token)) {
+	Expects(_token != nullptr);
+}
+
+void StoryPreload::start(Fn<void(bool)> done) {
 	if (const auto photo = _story->photo()) {
-		if (PhotoPreload::Should(photo, story->peer())) {
+		if (PhotoPreload::Should(photo, _story->peer(), true)) {
 			_task = std::make_unique<PhotoPreload>(
 				photo,
-				story->fullId(),
-				std::move(done));
+				_story->fullId(),
+				std::move(done),
+				true);
 		} else {
-			done();
+			done(false);
 		}
 	} else if (const auto video = _story->document()) {
 		if (VideoPreload::Can(video)) {
 			_task = std::make_unique<VideoPreload>(
 				video,
-				story->fullId(),
+				_story->fullId(),
 				std::move(done));
 		} else {
-			done();
+			done(true);
 		}
 	} else {
-		done();
+		done(true);
 	}
 }
 
 StoryPreload::~StoryPreload() = default;
+
+const std::shared_ptr<int> &StoryPreload::token() const {
+	return _token;
+}
 
 FullStoryId StoryPreload::id() const {
 	return _story->fullId();

@@ -13,6 +13,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_utilities.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_file_origin.h"
+#include "data/data_session.h"
 #include "editor/editor_layer_widget.h"
 #include "editor/photo_editor.h"
 #include "editor/photo_editor_common.h"
@@ -53,10 +55,11 @@ constexpr auto kStickerSide = 512;
 constexpr auto kPreviewSide = 256;
 constexpr auto kWebpQuality = 95;
 constexpr auto kMaxEmojis = 7;
-constexpr auto kEmojiVideoMaxDuration = crl::time(3000);
-constexpr auto kEmojiVideoMinDuration = crl::time(200);
-constexpr auto kEmojiVideoFps = 30.;
-// Server limit for a webm custom emoji file.
+constexpr auto kVideoStickerMaxDuration = crl::time(3000);
+constexpr auto kVideoStickerMinDuration = crl::time(200);
+constexpr auto kVideoStickerFps = 30.;
+// Server limits for webm sticker and custom emoji files.
+constexpr auto kMaxStickerWebmBytes = 256 * 1024;
 constexpr auto kMaxEmojiWebmBytes = 64 * 1024;
 constexpr auto kMaxOriginalRatio = 3.;
 constexpr auto kSquareRatioEpsilon = 0.01;
@@ -280,42 +283,62 @@ void ShowPhotoEditor(
 	return bytes;
 }
 
-void LoadStickerMedia(
+void LoadDocumentMedia(
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<DocumentData*> document,
-		Fn<void(std::shared_ptr<Data::DocumentMedia>)> done) {
+		Fn<void(std::shared_ptr<Data::DocumentMedia>)> done,
+		Fn<void()> failed) {
 	struct State {
 		std::shared_ptr<Data::DocumentMedia> media;
 		rpl::lifetime lifetime;
 	};
 	const auto state = std::make_shared<State>();
 	state->media = document->createMediaView();
-	state->media->checkStickerLarge();
+	if (document->sticker()) {
+		state->media->checkStickerLarge();
+	} else if (!state->media->loaded()) {
+		document->save(document->stickerOrGifOrigin(), QString());
+	}
 	const auto finish = [=] {
 		auto media = state->media;
 		state->lifetime.destroy();
 		done(std::move(media));
 	};
+	const auto fail = [=] {
+		state->lifetime.destroy();
+		failed();
+	};
 	if (state->media->loaded()) {
 		finish();
 		return;
 	}
-	show->session().downloaderTaskFinished(
-	) | rpl::filter([=] {
-		return state->media->loaded();
-	}) | rpl::on_next([=] {
-		finish();
-	}, state->lifetime);
+	show->session().data().documentLoadProgress() | rpl::on_next(
+		[=](not_null<DocumentData*> updated) {
+			if (updated.get() != document.get()) {
+				return;
+			}
+			if (state->media->loaded()) {
+				finish();
+			} else if (!document->loading()) {
+				fail();
+			}
+		},
+		state->lifetime);
+	if (!document->loading()) {
+		fail();
+	}
 }
 
 void LoadStickerImage(
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<DocumentData*> document,
 		Fn<void(QImage)> done) {
-	LoadStickerMedia(show, document, [done = std::move(done)](
+	LoadDocumentMedia(show, document, [done = std::move(done)](
 			std::shared_ptr<Data::DocumentMedia> media) {
 		const auto large = media->getStickerLarge();
 		done(large ? large->original() : QImage());
+	}, [=] {
+		show->showToast(tr::lng_attach_failed(tr::now));
 	});
 }
 
@@ -328,9 +351,10 @@ struct StickerVideoSource {
 };
 
 [[nodiscard]] std::shared_ptr<QTemporaryFile> WriteStickerTempFile(
-		const QByteArray &bytes) {
+		const QByteArray &bytes,
+		const QString &extension) {
 	auto result = std::make_shared<QTemporaryFile>(
-		QDir::tempPath() + u"/tdemoji_XXXXXX.webm"_q);
+		QDir::tempPath() + u"/tdsticker_XXXXXX."_q + extension);
 	if (!result->open() || result->write(bytes) != bytes.size()) {
 		return nullptr;
 	}
@@ -338,18 +362,25 @@ struct StickerVideoSource {
 	return result;
 }
 
-[[nodiscard]] Editor::VideoEditorData EmojiVideoEditorData() {
+[[nodiscard]] Editor::VideoEditorData VideoStickerEditorData(
+		Data::StickersType type) {
 	return {
 		.editor = Editor::EditorData{
 			.keepAspectRatio = true,
 		},
-		.exactSize = Size(Api::kEmojiStickerSideMax),
-		.maxDuration = kEmojiVideoMaxDuration,
-		.minDuration = kEmojiVideoMinDuration,
-		.fpsLimit = kEmojiVideoFps,
+		.exactSize = Size(SideForType(type)),
+		.maxDuration = kVideoStickerMaxDuration,
+		.minDuration = kVideoStickerMinDuration,
+		.fpsLimit = kVideoStickerFps,
 		.removeAudio = true,
 		.webmSticker = true,
 	};
+}
+
+[[nodiscard]] int64 MaxWebmBytesForType(Data::StickersType type) {
+	return (type == Data::StickersType::Emoji)
+		? kMaxEmojiWebmBytes
+		: kMaxStickerWebmBytes;
 }
 
 } // namespace
@@ -377,6 +408,7 @@ void CreateMediaBox(
 	auto image = std::move(args.image);
 	const auto isEmoji = (type == Data::StickersType::Emoji);
 	const auto side = SideForType(type);
+	const auto maxWebmBytes = MaxWebmBytesForType(type);
 	struct State {
 		rpl::variable<bool> uploading = false;
 		std::unique_ptr<StickerUpload> upload;
@@ -519,14 +551,14 @@ void CreateMediaBox(
 						mods,
 						video->editorData,
 						false),
-					kMaxEmojiWebmBytes,
+					maxWebmBytes,
 					[=](float64) { return !cancel->load(); });
 				crl::on_main(weak, [
 					=,
 					result = std::move(result)
 				]() mutable {
 					if (result.empty()
-						|| result.bytes.size() > kMaxEmojiWebmBytes) {
+						|| result.bytes.size() > maxWebmBytes) {
 						state->uploading = false;
 						if (!cancel->load()) {
 							show->showToast(tr::lng_bad_video(tr::now));
@@ -539,7 +571,7 @@ void CreateMediaBox(
 						std::clamp(
 							result.duration,
 							crl::time(1),
-							kEmojiVideoMaxDuration));
+							kVideoStickerMaxDuration));
 				});
 			});
 			return;
@@ -616,6 +648,7 @@ void ShowVideoEditorThenCreate(
 		std::shared_ptr<ChatHelpers::Show> show,
 		StickerSetIdentifier set,
 		std::shared_ptr<StickerVideoSource> video,
+		Data::StickersType type,
 		std::vector<EmojiPtr> emoji,
 		Fn<void(MTPmessages_StickerSet)> done) {
 	const auto sessionController = show->resolveWindow();
@@ -643,13 +676,14 @@ void ShowVideoEditorThenCreate(
 					.set = set,
 					.image = std::move(preview),
 					.video = video,
-					.type = Data::StickersType::Emoji,
+					.type = type,
 					.emoji = emoji,
 					.back = [=](std::vector<EmojiPtr> chosen) {
 						ShowVideoEditorThenCreate(
 							show,
 							set,
 							video,
+							type,
 							chosen,
 							done);
 					},
@@ -677,12 +711,16 @@ void RunVideoEditorAndCreate(
 		StickerSetIdentifier set,
 		not_null<DocumentData*> document,
 		std::shared_ptr<Data::DocumentMedia> media,
+		Data::StickersType type,
 		Fn<void(MTPmessages_StickerSet)> done) {
 	auto bytes = media->bytes();
 	auto file = std::shared_ptr<QTemporaryFile>();
 	auto path = QString();
 	if (!bytes.isEmpty()) {
-		file = WriteStickerTempFile(bytes);
+		const auto extension = document->hasMimeType(u"video/webm"_q)
+			? u"webm"_q
+			: u"mp4"_q;
+		file = WriteStickerTempFile(bytes, extension);
 		path = file ? file->fileName() : QString();
 	}
 	if (path.isEmpty()) {
@@ -699,16 +737,20 @@ void RunVideoEditorAndCreate(
 		.file = std::move(file),
 		.path = path,
 		.info = info,
-		.editorData = EmojiVideoEditorData(),
+		.editorData = VideoStickerEditorData(type),
 	});
 	auto initial = std::vector<EmojiPtr>();
-	if (const auto emoji = Ui::Emoji::Find(StickerEmojiOrDefault(document))) {
-		initial.push_back(emoji);
+	if (document->sticker()) {
+		const auto emoji = Ui::Emoji::Find(StickerEmojiOrDefault(document));
+		if (emoji) {
+			initial.push_back(emoji);
+		}
 	}
 	ShowVideoEditorThenCreate(
 		std::move(show),
 		std::move(set),
 		std::move(video),
+		type,
 		std::move(initial),
 		std::move(done));
 }
@@ -824,7 +866,7 @@ bool AdaptStickerToEmoji(
 		return true;
 	}
 	if (sticker->isWebm()) {
-		LoadStickerMedia(
+		LoadDocumentMedia(
 			show,
 			document,
 			[=, set = std::move(set), done = std::move(done)](
@@ -834,7 +876,10 @@ bool AdaptStickerToEmoji(
 					std::move(set),
 					document,
 					std::move(media),
+					Data::StickersType::Emoji,
 					std::move(done));
+			}, [=] {
+				show->showToast(tr::lng_attach_failed(tr::now));
 			});
 		return true;
 	}
@@ -855,6 +900,34 @@ bool AdaptStickerToEmoji(
 				Data::StickersType::Emoji,
 				std::move(done));
 		});
+	return true;
+}
+
+bool AdaptGifToSet(
+		std::shared_ptr<ChatHelpers::Show> show,
+		StickerSetIdentifier set,
+		not_null<DocumentData*> document,
+		Data::StickersType type,
+		Fn<void(MTPmessages_StickerSet)> done) {
+	if (!document->isAnimation() && !document->isVideoFile()) {
+		show->showToast(tr::lng_attach_failed(tr::now));
+		return false;
+	}
+	LoadDocumentMedia(
+		show,
+		document,
+		[=, set = std::move(set), done = std::move(done)](
+				std::shared_ptr<Data::DocumentMedia> media) mutable {
+			RunVideoEditorAndCreate(
+				show,
+				std::move(set),
+				document,
+				std::move(media),
+					type,
+					std::move(done));
+			}, [=] {
+				show->showToast(tr::lng_attach_failed(tr::now));
+			});
 	return true;
 }
 

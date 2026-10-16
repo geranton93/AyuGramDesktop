@@ -1016,7 +1016,9 @@ void Updates::updateOnline(crl::time lastNonIdleTime, bool gotOtherOffline) {
 				_idleFinishTimer.callOnce(900);
 			}
 		} else {
-			updateIn = qMin(updateIn, int(config.offlineIdleTimeout - idle));
+			updateIn = std::min(
+				updateIn,
+				int(config.offlineIdleTimeout - idle));
 			Assert(updateIn >= 0);
 		}
 	}
@@ -1056,7 +1058,9 @@ void Updates::updateOnline(crl::time lastNonIdleTime, bool gotOtherOffline) {
 
 		_lastSetOnline = ms;
 	} else if (isOnline) {
-		updateIn = qMin(updateIn, int(_lastSetOnline + config.onlineUpdatePeriod - ms));
+		updateIn = std::min(
+			updateIn,
+			int(_lastSetOnline + config.onlineUpdatePeriod - ms));
 		Assert(updateIn >= 0);
 	}
 	_onlineTimer.callOnce(updateIn);
@@ -1444,9 +1448,16 @@ void Updates::applyUpdateNoPtsCheck(const MTPUpdate &update) {
 		const auto &d = update.c_updatePinnedChannelMessages();
 		const auto peerId = peerFromChannel(d.vchannel_id());
 		for (const auto &msgId : d.vmessages().v) {
-			const auto item = session().data().message(peerId, msgId.v);
-			if (item) {
-				item->setIsPinned(d.is_pinned());
+			if (d.is_pinned()) {
+				Data::ApplyPinnedMessageId(
+					session().data().peer(peerId),
+					msgId.v,
+					0,
+					0);
+			} else if (const auto item = session().data().message(
+					peerId,
+					msgId.v)) {
+				item->setIsPinned(false);
 			}
 		}
 	} break;
@@ -1472,9 +1483,16 @@ void Updates::applyUpdateNoPtsCheck(const MTPUpdate &update) {
 		const auto &d = update.c_updatePinnedMessages();
 		const auto peerId = peerFromMTP(d.vpeer());
 		for (const auto &msgId : d.vmessages().v) {
-			const auto item = session().data().message(peerId, msgId.v);
-			if (item) {
-				item->setIsPinned(d.is_pinned());
+			if (d.is_pinned()) {
+				Data::ApplyPinnedMessageId(
+					session().data().peer(peerId),
+					msgId.v,
+					0,
+					0);
+			} else if (const auto item = session().data().message(
+					peerId,
+					msgId.v)) {
+				item->setIsPinned(false);
 			}
 		}
 	} break;

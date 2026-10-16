@@ -99,13 +99,84 @@ void PhotoData::automaticLoadSettingsChanged() {
 	}
 	_images[index].loader = nullptr;
 	_images[index].flags &= ~Data::CloudFile::Flag::Cancelled;
+	_regularLargeLoad = false;
+	_cancelledByPreloadLease = false;
 }
 
 void PhotoData::load(
 		Data::FileOrigin origin,
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading) {
-	load(PhotoSize::Large, origin, fromCloud, autoLoading);
+	loadInternal(PhotoSize::Large, origin, fromCloud, autoLoading, false);
+}
+
+bool PhotoData::loadForPreload(
+		Data::FileOrigin origin,
+		bool requireFull) {
+	++_preloadRequests;
+	if (requireFull) {
+		++_fullPreloadRequests;
+		const auto loader = _images[PhotoSizeIndex(PhotoSize::Large)].loader.get();
+		if (loader && loader->finished()) {
+			return true;
+		}
+	}
+	loadInternal(
+		PhotoSize::Large,
+		origin,
+		LoadFromCloudOrLocal,
+		true,
+		true,
+		requireFull);
+	return false;
+}
+
+void PhotoData::continueFullPreload(Data::FileOrigin origin) {
+	loadInternal(
+		PhotoSize::Large,
+		origin,
+		LoadFromCloudOrLocal,
+		true,
+		true,
+		true);
+}
+
+void PhotoData::releasePreload(bool requireFull) {
+	Expects(_preloadRequests > 0);
+	if (requireFull) {
+		Expects(_fullPreloadRequests > 0);
+		--_fullPreloadRequests;
+	}
+	const auto large = PhotoSizeIndex(PhotoSize::Large);
+	const auto file = &_images[large];
+	if (--_preloadRequests > 0
+		&& requireFull
+		&& !_fullPreloadRequests
+		&& !_regularLargeLoad
+		&& !cancelled()
+		&& loading(PhotoSize::Large)
+		&& file->loader
+		&& !file->loader->finished()) {
+		const auto origin = file->loader->fileOrigin();
+		auto previous = base::take(file->loader);
+		previous->cancel();
+		loadInternal(
+			PhotoSize::Large,
+			origin,
+			LoadFromCloudOrLocal,
+			true,
+			true,
+			false);
+		return;
+	}
+	if (_preloadRequests == 0
+		&& !_regularLargeLoad
+		&& !cancelled()
+		&& loading(PhotoSize::Large)
+		&& file->loader
+		&& !file->loader->finished()) {
+		cancel(true);
+	}
 }
 
 TimeId PhotoData::date() const {
@@ -200,23 +271,44 @@ bool PhotoData::displayLoading() const {
 }
 
 void PhotoData::cancel() {
+	cancel(false);
+}
+
+void PhotoData::cancel(bool retryableForPreload) {
 	if (loading()) {
-		_images[PhotoSizeIndex(PhotoSize::Large)].loader->cancel();
+		auto &large = _images[PhotoSizeIndex(PhotoSize::Large)];
+		_regularLargeLoad = false;
+		_cancelledByPreloadLease = retryableForPreload;
+		large.flags |= Data::CloudFile::Flag::Cancelled;
+		large.loader->cancel();
+		_owner->photoLoadFail(this, false);
 	}
 }
 
 void PhotoData::clearLocalCache() {
+	_largeProgressivePartReady = false;
 	auto keys = base::flat_set<Storage::Cache::Key>();
+	auto cancelledLarge = false;
+	auto &large = _images[PhotoSizeIndex(PhotoSize::Large)];
 	for (auto &file : _images) {
 		if (const auto key = file.location.file().cacheKey()) {
 			keys.emplace(key);
 		}
 		if (file.loader) {
+			if (&file == &large) {
+				_regularLargeLoad = false;
+				_cancelledByPreloadLease = false;
+				file.flags |= Data::CloudFile::Flag::Cancelled;
+				cancelledLarge = true;
+			}
 			file.loader->cancel();
 		}
 	}
 	for (const auto &key : keys) {
 		_owner->cache().remove(key);
+	}
+	if (cancelledLarge) {
+		_owner->photoLoadFail(this, false);
 	}
 }
 
@@ -337,11 +429,24 @@ void PhotoData::load(
 		Data::FileOrigin origin,
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading) {
+	loadInternal(size, origin, fromCloud, autoLoading, false);
+}
+
+void PhotoData::loadInternal(
+		PhotoSize size,
+		Data::FileOrigin origin,
+		LoadFromCloudSetting fromCloud,
+		bool autoLoading,
+		bool preload,
+		bool requireFull) {
 	const auto valid = validSizeIndex(size);
 	const auto existing = existingSizeIndex(size);
 
 	// Could've changed, if the requested size didn't have a location.
 	const auto validSize = static_cast<PhotoSize>(valid);
+	if (validSize == PhotoSize::Large && !preload) {
+		_regularLargeLoad = true;
+	}
 	const auto finalCheck = [=] {
 		if (const auto active = activeMediaView()) {
 			return !active->image(size);
@@ -350,6 +455,9 @@ void PhotoData::load(
 	};
 	const auto done = [=](QImage result, QByteArray bytes) {
 		Expects(_images[valid].loader != nullptr);
+		if (validSize == PhotoSize::Large) {
+			_regularLargeLoad = false;
+		}
 
 		// Find out what progressive photo size have we loaded exactly.
 		auto goodFor = validSize;
@@ -364,6 +472,9 @@ void PhotoData::load(
 				}
 			}
 		}
+		const auto progressivePartReady = validSize == PhotoSize::Large
+			&& !result.isNull()
+			&& goodFor < validSize;
 		if (const auto active = activeMediaView()) {
 			active->set(
 				validSize,
@@ -373,10 +484,14 @@ void PhotoData::load(
 		}
 		if (validSize == PhotoSize::Large && goodFor == validSize) {
 			_owner->photoLoadDone(this);
+		} else if (progressivePartReady) {
+			_largeProgressivePartReady = true;
+			_owner->photoLoadProgress(this);
 		}
 	};
 	const auto fail = [=](bool started) {
 		if (validSize == PhotoSize::Large) {
+			_regularLargeLoad = false;
 			_owner->photoLoadFail(this, started);
 		}
 	};
@@ -385,6 +500,11 @@ void PhotoData::load(
 			_owner->photoLoadProgress(this);
 		}
 	};
+	const auto fullPhotoRequired = requireFull
+		|| (validSize == PhotoSize::Large && _fullPreloadRequests > 0);
+	const auto frontPartSize = fullPhotoRequired
+		? 0
+		: _images[existing].progressivePartSize;
 	Data::LoadCloudFile(
 		&session(),
 		_images[valid],
@@ -396,7 +516,16 @@ void PhotoData::load(
 		done,
 		fail,
 		progress,
-		_images[existing].progressivePartSize);
+		frontPartSize);
+	if (validSize == PhotoSize::Large
+		&& !(_images[valid].flags & Data::CloudFile::Flag::Cancelled)) {
+		_cancelledByPreloadLease = false;
+	}
+	if (validSize == PhotoSize::Large
+		&& !preload
+		&& !_images[valid].loader) {
+		_regularLargeLoad = false;
+	}
 
 	if (size == PhotoSize::Large) {
 		_owner->notifyPhotoLayoutChanged(this);
@@ -407,6 +536,7 @@ std::shared_ptr<PhotoMedia> PhotoData::createMediaView() {
 	if (auto result = activeMediaView()) {
 		return result;
 	}
+	_largeProgressivePartReady = false;
 	auto result = std::make_shared<PhotoMedia>(this);
 	_media = result;
 	return result;
@@ -435,7 +565,27 @@ void PhotoData::updateImages(
 			data,
 			owner().cache(),
 			Data::kImageCacheTag,
-			[=](Data::FileOrigin origin) { load(size, origin); },
+			[=](Data::FileOrigin origin) {
+				if (size == PhotoSize::Large
+					&& !_regularLargeLoad
+					&& !_preloadRequests) {
+					return;
+				}
+				const auto preload = (size == PhotoSize::Large)
+					&& (_preloadRequests > 0)
+					&& !_regularLargeLoad;
+				if (preload) {
+					loadInternal(
+						size,
+						origin,
+						LoadFromCloudOrLocal,
+						true,
+						true,
+						_fullPreloadRequests > 0);
+				} else {
+					load(size, origin);
+				}
+			},
 			[=](QImage preloaded, QByteArray bytes) {
 				if (const auto media = activeMediaView()) {
 					media->set(
@@ -448,6 +598,10 @@ void PhotoData::updateImages(
 				}
 			});
 	};
+	const auto largeIndex = PhotoSizeIndex(PhotoSize::Large);
+	if (_images[largeIndex].location != large.location) {
+		_largeProgressivePartReady = false;
+	}
 	update(PhotoSize::Small, small);
 	update(PhotoSize::Thumbnail, thumbnail);
 	update(PhotoSize::Large, large);
@@ -548,25 +702,32 @@ bool PhotoData::videoFailed(Data::PhotoSize size) const {
 		&& (videoFile(size).flags & Data::CloudFile::Flag::Failed);
 }
 
-void PhotoData::loadVideo(Data::PhotoSize size, Data::FileOrigin origin) {
+void PhotoData::loadVideo(
+		Data::PhotoSize size,
+		Data::FileOrigin origin,
+		bool retryFailed) {
 	if (!_videoSizes) {
 		return;
 	}
+	auto &file = videoFile(size);
+	if (retryFailed) {
+		file.flags &= ~Data::CloudFile::Flag::Failed;
+	}
 	const auto autoLoading = false;
-	const auto finalCheck = [=] {
+	const auto finalCheck = [=, this] {
 		if (const auto active = activeMediaView()) {
 			return active->videoContent(size).isEmpty();
 		}
 		return true;
 	};
-	const auto done = [=](QByteArray result) {
+	const auto done = [=, this](QByteArray result) {
 		if (const auto active = activeMediaView()) {
 			active->setVideo(size, std::move(result));
 		}
 	};
 	Data::LoadCloudFile(
 		&session(),
-		videoFile(size),
+		file,
 		origin,
 		LoadFromCloudOrLocal,
 		autoLoading,

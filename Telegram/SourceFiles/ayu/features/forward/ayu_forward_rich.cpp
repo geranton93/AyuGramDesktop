@@ -288,7 +288,7 @@ struct RichTraversalLimits {
 }
 
 [[nodiscard]] UploadedRichMedia reuploadMedia(
-		not_null<Main::Session*> session,
+		const base::weak_ptr<Main::Session> &session,
 		PeerId peerId,
 		Data::FileOrigin origin,
 		const RichMedia &source,
@@ -573,8 +573,8 @@ void sanitizeRichText(Iv::RichPage::RichText &text) {
 
 } // namespace
 
-bool forwardRichMessage(
-	not_null<Main::Session*> session,
+AyuSync::SendSyncResult forwardRichMessage(
+	const base::weak_ptr<Main::Session> &session,
 	FullMsgId itemId,
 	const Api::SendAction &action,
 	base::weak_ptr<History> targetHistory,
@@ -587,23 +587,36 @@ bool forwardRichMessage(
 	// every bail-out point already in this function -- and every deeper
 	// AyuSync::*Sync call that periodically polls cancelled() -- also
 	// catches that case, without needing a guard at each of them.
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	auto userCancelled = cancelled
 		? std::move(cancelled)
 		: Fn<bool()>([] { return false; });
 	cancelled = [=] { return !weakSession || userCancelled(); };
 
 	if (cancelled()) {
-		return false;
+		return AyuSync::SendSyncResult::Indeterminate;
 	}
 
-	const auto source = AyuSync::loadFullRichPageSync(session, itemId);
-	if (!source || cancelled()) {
-		return false;
+	const auto source = AyuSync::loadFullRichPageSync(
+		session,
+		itemId,
+		cancelled);
+	if (!source) {
+		return cancelled()
+			? AyuSync::SendSyncResult::Indeterminate
+			: AyuSync::SendSyncResult::Failed;
+	}
+	if (cancelled()) {
+		return AyuSync::SendSyncResult::Indeterminate;
 	}
 	const auto target = SnapshotForwardTarget(session, targetHistory);
-	if (!target || cancelled()) {
-		return false;
+	if (!target) {
+		return cancelled()
+			? AyuSync::SendSyncResult::Indeterminate
+			: AyuSync::SendSyncResult::Failed;
+	}
+	if (cancelled()) {
+		return AyuSync::SendSyncResult::Indeterminate;
 	}
 	const auto peerId = target->peerId;
 
@@ -641,9 +654,13 @@ bool forwardRichMessage(
 	});
 	if (!preparedOk
 		|| prepared->premiumBlocked
-		|| !prepared->valid
-		|| cancelled()) {
-		return false;
+		|| !prepared->valid) {
+		return cancelled()
+			? AyuSync::SendSyncResult::Indeterminate
+			: AyuSync::SendSyncResult::Failed;
+	}
+	if (cancelled()) {
+		return AyuSync::SendSyncResult::Indeterminate;
 	}
 
 	const auto uploaded = reuploadMedia(
@@ -653,7 +670,7 @@ bool forwardRichMessage(
 		prepared->media,
 		cancelled);
 	if (cancelled()) {
-		return false;
+		return AyuSync::SendSyncResult::Indeterminate;
 	}
 
 	const auto serialized = std::make_shared<std::optional<MTPInputRichMessage>>();
@@ -683,15 +700,21 @@ bool forwardRichMessage(
 			*serialized = result.value;
 		}
 	});
-	if (!serializedOk || !serialized->has_value() || cancelled()) {
-		return false;
+	if (!serializedOk || !serialized->has_value()) {
+		return cancelled()
+			? AyuSync::SendSyncResult::Indeterminate
+			: AyuSync::SendSyncResult::Failed;
+	}
+	if (cancelled()) {
+		return AyuSync::SendSyncResult::Indeterminate;
 	}
 
 	return AyuSync::sendRichMessageSync(
 		session,
 		**serialized,
 		action,
-		std::move(targetHistory));
+		std::move(targetHistory),
+		cancelled);
 }
 
 } // namespace AyuForward

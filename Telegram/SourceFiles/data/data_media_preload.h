@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/weak_ptr.h"
 #include "storage/download_manager_mtproto.h"
 
 namespace Data {
@@ -16,34 +17,55 @@ struct FileOrigin;
 
 class MediaPreload {
 public:
-	explicit MediaPreload(Fn<void()> done);
+	explicit MediaPreload(Fn<void(bool)> done);
 	virtual ~MediaPreload() = default;
 
 protected:
-	void callDone();
+	void callDone(bool success);
 
 private:
-	Fn<void()> _done;
+	Fn<void(bool)> _done;
 
 };
 
-class PhotoPreload final : public MediaPreload {
+class PhotoPreload final : public MediaPreload, public base::has_weak_ptr {
 public:
+	enum class Completion {
+		Progressive,
+		Full,
+	};
+
 	[[nodiscard]] static bool Should(
 		not_null<PhotoData*> photo,
-		not_null<PeerData*> context);
+		not_null<PeerData*> context,
+		bool retryCancelled = false);
 
 	PhotoPreload(
 		not_null<PhotoData*> data,
 		FileOrigin origin,
-		Fn<void()> done);
+		Fn<void(bool)> done,
+		bool retryCancelled = true,
+		Completion completion = Completion::Progressive);
+	PhotoPreload(
+		not_null<PhotoData*> data,
+		FileOrigin origin,
+		Fn<void()> done,
+		bool retryCancelled = true,
+		Completion completion = Completion::Progressive);
 	~PhotoPreload();
 
 private:
-	void start(FileOrigin origin);
+	void start(
+		FileOrigin origin,
+		bool retryCancelled,
+		Completion completion);
+	void sessionCleared();
 
 	std::shared_ptr<PhotoMedia> _photo;
 	rpl::lifetime _lifetime;
+	rpl::lifetime _sessionLifetime;
+	bool _registered = false;
+	bool _requireFull = false;
 
 };
 
@@ -53,6 +75,10 @@ class VideoPreload final
 public:
 	[[nodiscard]] static bool Can(not_null<DocumentData*> video);
 
+	VideoPreload(
+		not_null<DocumentData*> video,
+		FileOrigin origin,
+		Fn<void(bool)> done);
 	VideoPreload(
 		not_null<DocumentData*> video,
 		FileOrigin origin,

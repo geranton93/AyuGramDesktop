@@ -8,8 +8,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/stories/media_stories_sibling.h"
 
 #include "base/weak_ptr.h"
+#include "data/data_changes.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_media_preload.h"
 #include "data/data_file_origin.h"
 #include "data/data_peer.h"
 #include "data/data_photo.h"
@@ -69,6 +71,7 @@ private:
 	const not_null<PhotoData*> _photo;
 	const Fn<void()> _update;
 	std::shared_ptr<Data::PhotoMedia> _media;
+	std::unique_ptr<Data::PhotoPreload> _preload;
 	rpl::lifetime _waitingLoading;
 
 };
@@ -109,7 +112,11 @@ Sibling::LoaderPhoto::LoaderPhoto(
 : _photo(photo)
 , _update(std::move(update))
 , _media(_photo->createMediaView()) {
-	_photo->load(origin, LoadFromCloudOrLocal, true);
+	_preload = std::make_unique<Data::PhotoPreload>(
+		_photo,
+		origin,
+		Fn<void()>(),
+		true);
 }
 
 QImage Sibling::LoaderPhoto::blurred() {
@@ -266,6 +273,35 @@ void Sibling::checkStory() {
 		return;
 	}
 	const auto story = *maybeStory;
+	if (_story != story.get()) {
+		_storyLifetime.destroy();
+		_story = story.get();
+		story->session().changes().storyUpdates(
+			story,
+			Data::StoryUpdate::Flag::Edited
+				| Data::StoryUpdate::Flag::Destroyed
+		) | rpl::on_next([=](const Data::StoryUpdate &update) {
+			if (update.flags & Data::StoryUpdate::Flag::Destroyed) {
+				_storyLifetime.destroy();
+				_story = nullptr;
+				_media = Data::StoryMedia();
+				_loader = nullptr;
+				_blurred = QImage();
+				_good = QImage();
+				_goodShown.stop();
+				setBlackThumbnail();
+				_controller->repaintSibling(this);
+			} else if (_media != update.story->media()) {
+				_loader = nullptr;
+				_blurred = QImage();
+				_good = QImage();
+				_goodShown.stop();
+				checkStory();
+				_controller->repaintSibling(this);
+			}
+		}, _storyLifetime);
+	}
+	_media = story->media();
 	const auto origin = Data::FileOrigin();
 	v::match(story->media().data, [&](not_null<PhotoData*> photo) {
 		_loader = std::make_unique<LoaderPhoto>(photo, origin, [=] {
@@ -350,6 +386,7 @@ QImage Sibling::userpicImage(const SiblingLayout &layout) {
 QImage Sibling::nameImage(const SiblingLayout &layout) {
 	if (_nameFontSize != layout.nameFontSize) {
 		_nameFontSize = layout.nameFontSize;
+		_nameImage = QImage();
 
 		const auto family = 0; // Default font family.
 		const auto font = style::font(
@@ -367,24 +404,31 @@ QImage Sibling::nameImage(const SiblingLayout &layout) {
 	if (_nameText != text) {
 		_name.reset();
 		_nameText = text;
+		_nameImage = QImage();
 	}
 	if (!_name) {
 		_nameAvailableWidth = 0;
 		_name.emplace(*_nameStyle, _nameText);
 	}
 	const auto available = layout.nameBoundingRect.width();
+	const auto ratio = style::DevicePixelRatio();
+	const auto ratioChanged = !_nameImage.isNull()
+		&& (_nameImage.devicePixelRatio() != ratio);
 	const auto wasCut = (_nameAvailableWidth < _name->maxWidth());
 	const auto nowCut = (available < _name->maxWidth());
 	if (_nameImage.isNull()
-		|| _nameAvailableWidth != layout.nameBoundingRect.width()) {
+		|| _nameAvailableWidth != layout.nameBoundingRect.width()
+		|| ratioChanged) {
 		_nameAvailableWidth = layout.nameBoundingRect.width();
-		if (_nameImage.isNull() || nowCut || wasCut) {
+		if (_nameImage.isNull() || ratioChanged || nowCut || wasCut) {
 			const auto w = std::min(_nameAvailableWidth, _name->maxWidth());
 			const auto h = _nameStyle->font->height;
-			const auto ratio = style::DevicePixelRatio();
 			_nameImage = QImage(
 				QSize(w, h) * ratio,
 				QImage::Format_ARGB32_Premultiplied);
+			if (_nameImage.isNull()) {
+				return _nameImage;
+			}
 			_nameImage.setDevicePixelRatio(ratio);
 			_nameImage.fill(Qt::transparent);
 			auto p = Painter(&_nameImage);

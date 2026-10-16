@@ -1407,36 +1407,23 @@ void History::applyServiceChanges(
 	}, [&](const MTPDmessageActionPinMessage &data) {
 		if (replyTo) {
 			replyTo->match([&](const MTPDmessageReplyHeader &data) {
-				const auto id = data.vreply_to_msg_id().value_or_empty();
+			const auto id = data.vreply_to_msg_id().value_or_empty();
 				if (id && item) {
-					session().storage().add(Storage::SharedMediaAddSlice(
-						peer->id,
-						MsgId(0), // topicRootId
-						PeerId(0), // monoforumPeerId
-						Storage::SharedMediaType::Pinned,
-						{ id },
-						{ id, ServerMaxMsgId }));
-					setHasPinnedMessages(true);
-					if (const auto topic = item->topic()) {
-						session().storage().add(Storage::SharedMediaAddSlice(
-							peer->id,
-							topic->rootId(),
-							PeerId(), // monoforumPeerId
-							Storage::SharedMediaType::Pinned,
-							{ id },
-							{ id, ServerMaxMsgId }));
-						topic->setHasPinnedMessages(true);
-					}
-					if (const auto sublist = item->savedSublist()) {
-						session().storage().add(Storage::SharedMediaAddSlice(
-							peer->id,
-							MsgId(), // topicRootId
-							item->sublistPeerId(),
-							Storage::SharedMediaType::Pinned,
-							{ id },
-							{ id, ServerMaxMsgId }));
-						sublist->setHasPinnedMessages(true);
-					}
+					const auto topicRootId = peer->forum()
+						? item->topicRootId()
+						: MsgId(0);
+					const auto topic = peer->forumTopicFor(topicRootId);
+					const auto sublist = item->savedSublist();
+					const auto sublistPeerId = (peer->monoforum()
+						&& sublist
+						&& peer->owner().peerLoaded(item->sublistPeerId()))
+						? item->sublistPeerId()
+						: PeerId(0);
+					Data::ApplyPinnedMessageId(
+						peer,
+						id,
+						topicRootId,
+						sublistPeerId);
 				}
 			}, [&](const MTPDmessageReplyStoryHeader &data) {
 				LOG(("API Error: story reply in messageActionPinMessage."));

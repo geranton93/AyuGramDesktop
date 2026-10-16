@@ -48,6 +48,7 @@ private:
 		crl::time start = 0;
 		crl::time end = 0;
 		int64 offset = 0;
+		int64 receivedBytes = 0;
 	};
 
 	bool readyToRequest() const override;
@@ -56,6 +57,8 @@ private:
 	void cancelOnFail() override;
 
 	void cancelForOffset(int64 offset);
+	void removePendingStatsForOffset(int64 offset);
+	void removePendingStats();
 	void addToQueueWithPriority();
 
 	void checkStats();

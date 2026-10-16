@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/call_delayed.h"
 #include "base/event_filter.h"
 #include "boxes/sticker_set_box.h"
+#include "core/shortcuts.h"
 #include "data/data_document.h"
 #include "data/data_photo.h"
 #include "data/data_message_reactions.h"
@@ -37,21 +38,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
-void SetupOverlayHideOnEscape(
+void SetupOverlayKeyHandling(
 		not_null<Ui::AbstractButton*> clickable,
+		Fn<bool()> menuVisible,
 		Fn<void()> hideAll) {
 	clickable->setClickedCallback(hideAll);
+	Shortcuts::Pause();
+	clickable->lifetime().add(Shortcuts::Unpause);
 	base::install_event_filter(QCoreApplication::instance(), [=](
 			not_null<QEvent*> e) {
-		if (e->type() == QEvent::KeyPress
-			&& clickable->window()->isActiveWindow()) {
-			const auto k = static_cast<QKeyEvent*>(e.get());
-			if (k->key() == Qt::Key_Escape) {
-				hideAll();
-				return base::EventFilterResult::Cancel;
-			}
+		const auto type = e->type();
+		if ((type != QEvent::KeyPress && type != QEvent::KeyRelease)
+			|| !clickable->window()->isActiveWindow()) {
+			return base::EventFilterResult::Continue;
 		}
-		return base::EventFilterResult::Continue;
+		const auto k = static_cast<QKeyEvent*>(e.get());
+		if (k->key() == Qt::Key_Escape) {
+			if (type == QEvent::KeyPress) {
+				hideAll();
+			}
+			return base::EventFilterResult::Cancel;
+		}
+		return menuVisible()
+			? base::EventFilterResult::Continue
+			: base::EventFilterResult::Cancel;
 	}, clickable->lifetime());
 }
 
@@ -115,7 +125,12 @@ template <typename MediaData>
 			st::defaultToggle.duration,
 			[=] { state->clear(); });
 	};
-	SetupOverlayHideOnEscape(state->clickable.get(), hideAll);
+	SetupOverlayKeyHandling(
+		state->clickable.get(),
+		[=] {
+			return state->menuWrap && state->menuWrap->isVisible();
+		},
+		hideAll);
 	state->mediaPreview->showPreview(origin, media);
 	state->clickable->show();
 	const auto clickableRaw = state->clickable.get();
@@ -433,7 +448,12 @@ void ShowWidgetPreview(
 				s->clickable.reset();
 			});
 	};
-	SetupOverlayHideOnEscape(state->clickable.get(), hideAll);
+	SetupOverlayKeyHandling(
+		state->clickable.get(),
+		[=] {
+			return state->menuWrap && state->menuWrap->isVisible();
+		},
+		hideAll);
 
 	auto menu = object_ptr<Ui::DropdownMenu>(
 		mainwidget,

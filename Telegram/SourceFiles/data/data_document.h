@@ -115,6 +115,11 @@ class Document;
 
 class DocumentData final {
 public:
+	enum class SaveRequest {
+		Ordinary,
+		Shared,
+	};
+
 	DocumentData(not_null<Data::Session*> owner, DocumentId id);
 	~DocumentData();
 
@@ -150,7 +155,10 @@ public:
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud = LoadFromCloudOrLocal,
 		bool autoLoading = false,
-		std::unique_ptr<QFile> destination = nullptr);
+		std::unique_ptr<QFile> destination = nullptr,
+		SaveRequest request = SaveRequest::Ordinary);
+	[[nodiscard]] uint64 loaderGeneration() const;
+	[[nodiscard]] bool cancelSharedDownloadIfUnused(uint64 generation);
 	void cancel();
 	[[nodiscard]] bool cancelled() const;
 	void resetCancelled();
@@ -262,9 +270,15 @@ public:
 	[[nodiscard]] bool goodThumbnailChecked() const;
 	[[nodiscard]] bool goodThumbnailGenerating() const;
 	[[nodiscard]] bool goodThumbnailNoData() const;
+	[[nodiscard]] bool goodThumbnailFailed() const;
+	[[nodiscard]] bool goodThumbnailRetryFailedCache() const;
+	[[nodiscard]] uint64 goodThumbnailGeneration() const;
 	void setGoodThumbnailGenerating();
 	void setGoodThumbnailDataReady();
 	void setGoodThumbnailChecked(bool hasData);
+	void setGoodThumbnailFailed(bool failed);
+	void setGoodThumbnailRetryFailedCache(bool retry);
+	void invalidateGoodThumbnail(bool removeCache);
 
 	[[nodiscard]] std::shared_ptr<Data::DocumentMedia> createMediaView();
 	[[nodiscard]] auto activeMediaView() const
@@ -361,6 +375,8 @@ private:
 		Mask = 0x03,
 
 		DataReady = 0x04,
+		Failed = 0x08,
+		RetryFailedCache = 0x10,
 	};
 	using GoodThumbnailState = base::flags<GoodThumbnailFlag>;
 	friend constexpr bool is_flag_type(GoodThumbnailFlag) { return true; };
@@ -418,8 +434,11 @@ private:
 	std::unique_ptr<DocumentAdditionalData> _additional;
 	mutable Flags _flags = kStreamingSupportedUnknown;
 	GoodThumbnailState _goodThumbnailState = GoodThumbnailState();
+	uint64 _goodThumbnailGeneration = 0;
 	Core::NameType _nameType = Core::NameType();
 	std::unique_ptr<FileLoader> _loader;
+	uint64 _loaderGeneration = 0;
+	bool _hasOrdinarySaveDemand = false;
 
 };
 

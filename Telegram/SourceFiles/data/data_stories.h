@@ -269,6 +269,7 @@ public:
 	void incrementPreloadingHiddenSources();
 	void decrementPreloadingHiddenSources();
 	void setPreloadingInViewer(std::vector<FullStoryId> ids);
+	void photoLoadSettingsChanged();
 
 	struct PeerSourceState {
 		StoryId maxId = 0;
@@ -470,8 +471,10 @@ private:
 
 	base::flat_set<FullStoryId> _preloaded;
 	std::vector<FullStoryId> _toPreloadSources[kStorySourcesListCount];
+	std::vector<FullStoryId> _preloadViewerIds;
 	std::vector<FullStoryId> _toPreloadViewer;
 	std::unique_ptr<StoryPreload> _preloading;
+	uint64 _preloadSettingsGeneration = 0;
 	int _preloadingHiddenSourcesCounter = 0;
 	int _preloadingMainSourcesCounter = 0;
 

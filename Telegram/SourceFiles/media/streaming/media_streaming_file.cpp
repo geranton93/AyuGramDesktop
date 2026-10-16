@@ -356,6 +356,7 @@ void File::Context::sendFullInCache(bool force) {
 }
 
 void File::Context::readNextPacket() {
+	_reader->processPendingDownloaderCancellationFromStreamingThread();
 	auto result = readPacket();
 	if (unroll()) {
 		return;

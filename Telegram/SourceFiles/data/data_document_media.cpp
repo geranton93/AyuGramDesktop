@@ -29,6 +29,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rect.h"
 
 #include <QtCore/QBuffer>
+#include <QtCore/QCryptographicHash>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtGui/QImageReader>
 
 namespace Data {
@@ -48,6 +51,55 @@ enum class FileType {
 	Theme,
 	SvgImage,
 };
+
+[[nodiscard]] QByteArray GoodThumbnailFailureCacheValue(
+		const QByteArray &data,
+		const Core::FileLocation *location,
+		const QString &filepath) {
+	if (!data.isEmpty()) {
+		const auto hash = QCryptographicHash::hash(
+			data,
+			QCryptographicHash::Sha256);
+		return QByteArray("(failed):bytes:")
+			+ QByteArray::number(data.size())
+			+ ':'
+			+ hash.toHex();
+	} else if (location && !location->isEmpty()) {
+		const auto name = location->name().toUtf8();
+		const auto nameHash = QCryptographicHash::hash(
+			name,
+			QCryptographicHash::Sha256);
+		const auto unavailable = [&] {
+			return QByteArray("(failed):file-unavailable:")
+				+ QByteArray::number(location->size)
+				+ ':'
+				+ QByteArray::number(
+					location->modified.toMSecsSinceEpoch())
+				+ ':'
+				+ nameHash.toHex();
+		};
+		if (filepath.isEmpty()) {
+			return unavailable();
+		}
+		const auto info = QFileInfo(filepath);
+		if (!info.isFile() || !info.isReadable()) {
+			return unavailable();
+		}
+		return QByteArray("(failed):file:")
+			+ QByteArray::number(info.size())
+			+ ':'
+			+ QByteArray::number(
+				info.lastModified().toMSecsSinceEpoch())
+			+ ':'
+			+ QByteArray::number(
+				info.metadataChangeTime().toMSecsSinceEpoch())
+			+ ':'
+			+ QByteArray::number(info.birthTime().toMSecsSinceEpoch())
+			+ ':'
+			+ nameHash.toHex();
+	}
+	return QByteArray();
+}
 
 [[nodiscard]] bool MayHaveGoodThumbnail(not_null<DocumentData*> owner) {
 	return owner->isVideoFile()
@@ -190,10 +242,17 @@ void DocumentMedia::goodThumbnailWanted() {
 	_flags |= Flag::GoodThumbnailWanted;
 }
 
+void DocumentMedia::goodThumbnailSourceChanged() {
+	_goodThumbnail.reset();
+	if (_flags & Flag::GoodThumbnailWanted) {
+		ReadOrGenerateThumbnail(_owner);
+	}
+}
+
 Image *DocumentMedia::goodThumbnail() const {
 	Expects((_flags & Flag::GoodThumbnailWanted) != 0);
 
-	if (!_goodThumbnail) {
+	if (!_goodThumbnail && !_owner->goodThumbnailFailed()) {
 		ReadOrGenerateThumbnail(_owner);
 	}
 	return _goodThumbnail.get();
@@ -203,6 +262,7 @@ void DocumentMedia::setGoodThumbnail(QImage thumbnail) {
 	if (!(_flags & Flag::GoodThumbnailWanted) || thumbnail.isNull()) {
 		return;
 	}
+	_owner->setGoodThumbnailFailed(false);
 	_goodThumbnail = std::make_unique<Image>(std::move(thumbnail));
 	_owner->session().notifyDownloaderTaskFinished();
 }
@@ -338,7 +398,7 @@ void DocumentMedia::automaticLoad(
 		: LoadFromLocalOnly;
 	if (_owner->loading()) {
 		if (loadFromCloud == LoadFromCloudOrLocal) {
-			_owner->permitLoadFromCloud();
+			_owner->save(origin, QString(), loadFromCloud, true);
 		}
 		return;
 	}
@@ -350,6 +410,7 @@ void DocumentMedia::automaticLoad(
 }
 
 void DocumentMedia::collectLocalData(not_null<DocumentMedia*> local) {
+	const auto hadGoodThumbnail = (local->_goodThumbnail != nullptr);
 	if (const auto image = local->_goodThumbnail.get()) {
 		_goodThumbnail = std::make_unique<Image>(image->original());
 	}
@@ -362,14 +423,64 @@ void DocumentMedia::collectLocalData(not_null<DocumentMedia*> local) {
 	if (const auto image = local->_sticker.get()) {
 		_sticker = std::make_unique<Image>(image->original());
 	}
-	_bytes = local->_bytes;
+	const auto bytesChanged = (_bytes != local->_bytes);
+	if (bytesChanged) {
+		const auto retry = !_bytes.isEmpty()
+			|| _owner->goodThumbnailNoData()
+			|| _owner->goodThumbnailGenerating()
+			|| _owner->goodThumbnailFailed();
+		const auto unchecked = !_owner->goodThumbnailChecked()
+			&& !_owner->goodThumbnailNoData()
+			&& !_owner->goodThumbnailGenerating()
+			&& !_owner->goodThumbnailFailed();
+		const auto removeCache = !_bytes.isEmpty()
+			|| _owner->goodThumbnailGenerating()
+			|| _owner->goodThumbnailFailed();
+		_bytes = local->_bytes;
+		if (retry && removeCache && !hadGoodThumbnail) {
+			_goodThumbnail.reset();
+		}
+		if (retry) {
+			_owner->invalidateGoodThumbnail(removeCache);
+		} else if (unchecked && !_goodThumbnail) {
+			_owner->setGoodThumbnailRetryFailedCache(true);
+		}
+	}
 	_videoThumbnailBytes = local->_videoThumbnailBytes;
 	_flags = local->_flags;
+	if (bytesChanged
+		&& !_goodThumbnail
+		&& !_bytes.isEmpty()
+		&& (_flags & Flag::GoodThumbnailWanted)) {
+		ReadOrGenerateThumbnail(_owner);
+	}
 }
 
 void DocumentMedia::setBytes(const QByteArray &bytes) {
-	if (!bytes.isEmpty()) {
+	if (!bytes.isEmpty() && (_bytes != bytes)) {
+		const auto retry = !_bytes.isEmpty()
+			|| _owner->goodThumbnailNoData()
+			|| _owner->goodThumbnailGenerating()
+			|| _owner->goodThumbnailFailed();
+		const auto unchecked = !_owner->goodThumbnailChecked()
+			&& !_owner->goodThumbnailNoData()
+			&& !_owner->goodThumbnailGenerating()
+			&& !_owner->goodThumbnailFailed();
+		const auto removeCache = !_bytes.isEmpty()
+			|| _owner->goodThumbnailGenerating()
+			|| _owner->goodThumbnailFailed();
 		_bytes = bytes;
+		if (retry && removeCache) {
+			_goodThumbnail.reset();
+		}
+		if (retry) {
+			_owner->invalidateGoodThumbnail(removeCache);
+		} else if (unchecked && !_goodThumbnail) {
+			_owner->setGoodThumbnailRetryFailedCache(true);
+		}
+		if (!_goodThumbnail && (_flags & Flag::GoodThumbnailWanted)) {
+			ReadOrGenerateThumbnail(_owner);
+		}
 	}
 }
 
@@ -439,7 +550,8 @@ void DocumentMedia::checkStickerLarge(not_null<FileLoader*> loader) {
 
 void DocumentMedia::GenerateGoodThumbnail(
 		not_null<DocumentData*> document,
-		QByteArray data) {
+		QByteArray data,
+		uint64 generation) {
 	const auto type = document->isPatternWallPaperSVG()
 		? FileType::WallPatternSVG
 		: document->isPatternWallPaperPNG()
@@ -459,16 +571,27 @@ void DocumentMedia::GenerateGoodThumbnail(
 		? nullptr
 		: std::make_unique<Core::FileLocation>(document->location());
 	if (data.isEmpty() && !location) {
-		document->setGoodThumbnailChecked(false);
+		if (document->goodThumbnailGeneration() == generation) {
+			document->setGoodThumbnailChecked(false);
+		}
 		return;
 	}
 	const auto guard = base::make_weak(&document->session());
 	crl::async([=, location = std::move(location)] {
-		const auto filepath = (location && location->accessEnable())
+		const auto locationAccessEnabled = location
+			&& location->accessEnable();
+		const auto filepath = locationAccessEnabled
 			? location->name()
 			: QString();
+		const auto failureCacheValue = data.isEmpty()
+			? GoodThumbnailFailureCacheValue(
+				data,
+				location.get(),
+				filepath)
+			: QByteArray();
 		auto result = PrepareGoodThumbnail(filepath, data, type);
 		auto bytes = QByteArray();
+		auto encoded = false;
 		if (!result.isNull()) {
 			auto buffer = QBuffer(&bytes);
 			const auto format = (type == FileType::AnimatedSticker
@@ -479,22 +602,40 @@ void DocumentMedia::GenerateGoodThumbnail(
 					|| type == FileType::SvgImage)
 				? "PNG"
 				: "JPG";
-			result.save(&buffer, format, kGoodThumbQuality);
+			encoded = buffer.open(QIODevice::WriteOnly)
+				&& result.save(&buffer, format, kGoodThumbQuality)
+				&& !bytes.isEmpty();
 		}
-		if (!filepath.isEmpty()) {
+		auto cache = QByteArray();
+		if (result.isNull()) {
+			cache = failureCacheValue.isEmpty()
+				? GoodThumbnailFailureCacheValue(
+					data,
+					location.get(),
+					filepath)
+				: failureCacheValue;
+		} else if (encoded) {
+			cache = bytes;
+		}
+		if (locationAccessEnabled) {
 			location->accessDisable();
 		}
-		const auto cache = bytes.isEmpty() ? QByteArray("(failed)") : bytes;
 		crl::on_main(guard, [=] {
+			if (document->goodThumbnailGeneration() != generation) {
+				return;
+			}
 			document->setGoodThumbnailChecked(true);
+			document->setGoodThumbnailFailed(result.isNull());
 			if (const auto active = document->activeMediaView()) {
 				active->setGoodThumbnail(result);
 			}
-			document->owner().cache().put(
-				document->goodThumbnailCacheKey(),
-				Storage::Cache::Database::TaggedValue{
-					base::duplicate(cache),
-					kImageCacheTag });
+			if (!cache.isEmpty()) {
+				document->owner().cache().put(
+					document->goodThumbnailCacheKey(),
+					Storage::Cache::Database::TaggedValue{
+						base::duplicate(cache),
+						kImageCacheTag });
+			}
 		});
 	});
 }
@@ -509,24 +650,101 @@ void DocumentMedia::ReadOrGenerateThumbnail(
 		not_null<DocumentData*> document) {
 	if (document->goodThumbnailGenerating()
 		|| document->goodThumbnailNoData()
+		|| document->goodThumbnailFailed()
 		|| !MayHaveGoodThumbnail(document)) {
 		return;
 	}
 	document->setGoodThumbnailGenerating();
 
 	const auto guard = base::make_weak(&document->session());
+	const auto generation = document->goodThumbnailGeneration();
 	const auto active = document->activeMediaView();
 	const auto got = [=](QByteArray value) {
-		if (value.isEmpty()) {
+		if (value == "(failed)" || value.startsWith("(failed):")) {
+			crl::on_main(guard, [=] {
+				if (document->goodThumbnailGeneration() != generation) {
+					return;
+				}
+				const auto media = document->activeMediaView();
+				const auto sourceData = media
+					? media->bytes()
+					: QByteArray();
+				const auto retryLegacyFailure =
+					document->goodThumbnailRetryFailedCache();
+				auto location = document->location().isEmpty()
+					? std::unique_ptr<Core::FileLocation>()
+					: std::make_unique<Core::FileLocation>(
+						document->location());
+				crl::async([=, location = std::move(location)] {
+					const auto locationAccessEnabled = location
+						&& location->accessEnable();
+					const auto filepath = locationAccessEnabled
+						? location->name()
+						: QString();
+					const auto hasSource = !sourceData.isEmpty()
+						|| !filepath.isEmpty();
+					const auto legacyFailure = (value == "(failed)");
+					const auto currentCacheValue = (!legacyFailure && hasSource)
+						? GoodThumbnailFailureCacheValue(
+							sourceData,
+							location.get(),
+							filepath)
+						: QByteArray();
+					if (locationAccessEnabled) {
+						location->accessDisable();
+					}
+					const auto retryForSource = legacyFailure
+						? (retryLegacyFailure || hasSource)
+						: (hasSource && value != currentCacheValue);
+					crl::on_main(
+						guard,
+						[=] {
+							if (document->goodThumbnailGeneration()
+								!= generation) {
+								return;
+							}
+							if (retryForSource) {
+								document->setGoodThumbnailRetryFailedCache(false);
+								document->owner().cache().remove(
+									document->goodThumbnailCacheKey());
+								GenerateGoodThumbnail(
+									document,
+									sourceData,
+									generation);
+								return;
+							}
+							document->setGoodThumbnailChecked(true);
+							document->setGoodThumbnailFailed(true);
+						});
+				});
+			});
+		} else if (value.isEmpty()) {
 			const auto bytes = active ? active->bytes() : QByteArray();
 			crl::on_main(guard, [=] {
-				GenerateGoodThumbnail(document, bytes);
+				if (document->goodThumbnailGeneration() != generation) {
+					return;
+				}
+				GenerateGoodThumbnail(document, bytes, generation);
 			});
 		} else if (active) {
 			crl::async([=] {
 				auto image = Images::Read({ .content = value }).image;
 				crl::on_main(guard, [=, image = std::move(image)]() mutable {
+					if (document->goodThumbnailGeneration() != generation) {
+						return;
+					}
+					if (image.isNull()) {
+						document->owner().cache().remove(
+							document->goodThumbnailCacheKey());
+						const auto media = document->activeMediaView();
+						GenerateGoodThumbnail(
+							document,
+							media ? media->bytes() : QByteArray(),
+							generation);
+						return;
+					}
 					document->setGoodThumbnailChecked(true);
+					document->setGoodThumbnailFailed(false);
 					if (const auto active = document->activeMediaView()) {
 						active->setGoodThumbnail(std::move(image));
 					}
@@ -534,7 +752,11 @@ void DocumentMedia::ReadOrGenerateThumbnail(
 			});
 		} else {
 			crl::on_main(guard, [=] {
+				if (document->goodThumbnailGeneration() != generation) {
+					return;
+				}
 				document->setGoodThumbnailChecked(true);
+				document->setGoodThumbnailFailed(false);
 			});
 		}
 	};

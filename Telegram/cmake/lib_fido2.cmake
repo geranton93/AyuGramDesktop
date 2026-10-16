@@ -35,7 +35,7 @@ set(fido2_gen ${CMAKE_CURRENT_BINARY_DIR}/fido2_gen)
 
 # --- libcbor generated headers (normally produced by libcbor's own CMake). ---
 set(CBOR_VERSION_MAJOR 0)
-set(CBOR_VERSION_MINOR 11)
+set(CBOR_VERSION_MINOR 14)
 set(CBOR_VERSION_PATCH 0)
 set(CBOR_BUFFER_GROWTH 2)
 set(CBOR_MAX_STACK_SIZE 2048)
@@ -49,9 +49,15 @@ else()
     set(CBOR_INLINE_SPECIFIER inline)
     set(cbor_deprecated "__attribute__((__deprecated__))")
 endif()
-configure_file(
-    ${cbor_loc}/src/cbor/configuration.h.in
-    ${fido2_gen}/cbor/configuration.h)
+function(configure_libcbor_header)
+    set(PROJECT_VERSION_MAJOR ${CBOR_VERSION_MAJOR})
+    set(PROJECT_VERSION_MINOR ${CBOR_VERSION_MINOR})
+    set(PROJECT_VERSION_PATCH ${CBOR_VERSION_PATCH})
+    configure_file(
+        ${cbor_loc}/src/cbor/configuration.h.in
+        ${fido2_gen}/cbor/configuration.h)
+endfunction()
+configure_libcbor_header()
 # file(CONFIGURE), not file(WRITE): the latter rewrites the header on every
 # cmake run even when nothing changed, and a fresh mtime here recompiles all of
 # libcbor/libfido2 and webauthn_common.cpp, then relinks Telegram.

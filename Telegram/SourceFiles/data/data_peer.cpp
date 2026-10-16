@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
 #include "data/data_saved_messages.h"
+#include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
 #include "data/data_histories.h"
@@ -1670,6 +1671,9 @@ Data::SavedSublist *PeerData::monoforumSublistFor(
 		PeerId sublistPeerId) const {
 	if (!sublistPeerId) {
 		return nullptr;
+	} else if (isSelf()) {
+		return owner().savedMessages().sublistLoaded(
+			owner().peer(sublistPeerId));
 	} else if (const auto monoforum = this->monoforum()) {
 		return monoforum->sublistLoaded(owner().peer(sublistPeerId));
 	}
@@ -2158,14 +2162,68 @@ void SetTopPinnedMessageId(
 			0);
 		session.saveSettingsDelayed();
 	}
-	session.storage().add(Storage::SharedMediaAddExisting(
-		peer->id,
-		MsgId(0), // topicRootId
-		PeerId(0), // monoforumPeerId
-		Storage::SharedMediaType::Pinned,
+	ApplyPinnedMessageId(
+		peer,
 		messageId,
-		{ messageId, ServerMaxMsgId }));
+		MsgId(0), // topicRootId
+		PeerId(0)); // monoforumPeerId
+}
+
+void ApplyPinnedMessageId(
+		not_null<PeerData*> peer,
+		MsgId messageId,
+		MsgId topicRootId,
+		PeerId monoforumPeerId) {
+	auto &session = peer->session();
+	if (!messageId) {
+		peer->owner().history(peer)->setHasPinnedMessages(true);
+		return;
+	}
+	const auto item = peer->owner().message(peer->id, messageId);
+	const auto recoverableFromList = (item || !peer->isLoaded())
+		? false
+		: session.api().requestPinnedMessagesIfNeeded(
+			peer,
+			messageId,
+			topicRootId,
+			monoforumPeerId);
+	if (item) {
+		item->setIsPinned(true);
+	}
+	const auto addPinnedId = [&](MsgId topic, PeerId mono) {
+		session.storage().add(Storage::SharedMediaAddSlice(
+			peer->id,
+			topic,
+			mono,
+			Storage::SharedMediaType::Pinned,
+			{ messageId },
+			{ messageId, ServerMaxMsgId }));
+	};
+	addPinnedId(MsgId(0), PeerId(0));
 	peer->owner().history(peer)->setHasPinnedMessages(true);
+	if (topicRootId) {
+		if (const auto forum = peer->forum();
+			forum && !forum->topicDeleted(topicRootId)) {
+			addPinnedId(topicRootId, PeerId(0));
+			if (const auto topic = forum->topicFor(topicRootId)) {
+				topic->setHasPinnedMessages(true);
+			}
+		}
+	}
+	if (monoforumPeerId
+		&& peer->monoforum()
+		&& peer->owner().peerLoaded(monoforumPeerId)) {
+		addPinnedId(MsgId(0), monoforumPeerId);
+		if (const auto sublist = peer->monoforumSublistFor(monoforumPeerId)) {
+			sublist->setHasPinnedMessages(true);
+		}
+	}
+	if (!item
+		&& peer->isLoaded()
+		&& IsServerMsgId(messageId)
+		&& !recoverableFromList) {
+		session.api().requestMessageData(peer, messageId, {});
+	}
 }
 
 FullMsgId ResolveTopPinnedId(

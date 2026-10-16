@@ -30,6 +30,25 @@ static_assert(kDisplaySkipped != kTimeUnknown);
 
 using ::Media::ValidFrameSize;
 
+[[nodiscard]] crl::time WorldTimeDelay(crl::time trackDelay, float64 speed) {
+	if (trackDelay <= 0 || speed <= 0. || speed == 1.) {
+		return trackDelay;
+	}
+	const auto adjusted = base::SafeRound(trackDelay / speed);
+	return (adjusted < 1.) ? crl::time(1) : crl::time(adjusted);
+}
+
+[[nodiscard]] crl::time FrameDisplayTime(
+		TimePoint trackTime,
+		crl::time position,
+		float64 playbackSpeed) {
+	const auto trackLeft = position - trackTime.trackTime;
+	const auto adjustedBySpeed = trackLeft / playbackSpeed;
+	const auto roundedAdjustedBySpeed = base::SafeRound(adjustedBySpeed);
+	return trackTime.worldTime
+		+ crl::time(roundedAdjustedBySpeed);
+}
+
 [[nodiscard]] QImage ConvertToARGB32(
 		FrameFormat format,
 		const FrameYUV &data) {
@@ -276,6 +295,9 @@ int VideoTrackObject::durationByPacket(const FFmpeg::Packet &packet) {
 }
 
 void VideoTrackObject::queueReadFrames(crl::time delay) {
+	if (_pausedTime != kTimeUnknown) {
+		return;
+	}
 	if (delay > 0) {
 		_readFramesTimer.callOnce(delay);
 	} else if (!_queued) {
@@ -288,7 +310,7 @@ void VideoTrackObject::queueReadFrames(crl::time delay) {
 }
 
 void VideoTrackObject::readFrames() {
-	if (interrupted()) {
+	if (interrupted() || _pausedTime != kTimeUnknown) {
 		return;
 	}
 	auto time = trackTime().trackTime;
@@ -320,7 +342,10 @@ void VideoTrackObject::readFrames() {
 auto VideoTrackObject::readEnoughFrames(crl::time trackTime)
 -> ReadEnoughState {
 	const auto dropStaleFrames = !_options.waitForMarkAsShown;
-	const auto state = _shared->prepareState(trackTime, dropStaleFrames);
+	const auto state = _shared->prepareState(
+		trackTime,
+		_options.speed,
+		dropStaleFrames);
 	return v::match(state, [&](Shared::PrepareFrame frame)
 	-> ReadEnoughState {
 		while (true) {
@@ -595,6 +620,7 @@ void VideoTrackObject::pause(crl::time time) {
 		return;
 	} else if (_pausedTime == kTimeUnknown) {
 		_pausedTime = time;
+		_readFramesTimer.cancel();
 	}
 }
 
@@ -614,6 +640,9 @@ void VideoTrackObject::resume(crl::time time) {
 	} else {
 		_syncTimePoint.worldTime = time;
 	}
+	if (_shared->rebaseDisplayTime(trackTime(), _options.speed)) {
+		_checkNextFrame.fire({});
+	}
 	queueReadFrames();
 
 	Ensures(_syncTimePoint.valid());
@@ -624,11 +653,30 @@ void VideoTrackObject::setSpeed(float64 speed) {
 	if (interrupted()) {
 		return;
 	}
-	if (_syncTimePoint.valid()) {
-		const auto time = trackTime();
-		_syncTimePoint = time;
+	const auto hasSyncTime = _syncTimePoint.valid();
+	auto time = TimePoint();
+	auto isBeforeSyncPoint = false;
+	if (hasSyncTime) {
+		time = trackTime();
+		isBeforeSyncPoint = (time.worldTime < _syncTimePoint.worldTime);
+		if (!isBeforeSyncPoint) {
+			_syncTimePoint = time;
+		}
 	}
 	_options.speed = speed;
+	if (hasSyncTime
+		&& _pausedTime == kTimeUnknown) {
+		if (isBeforeSyncPoint) {
+			time = trackTime();
+		}
+		if (_shared->rebaseDisplayTime(time, speed)) {
+			_checkNextFrame.fire({});
+		}
+	}
+	if (_readFramesTimer.isActive()) {
+		_readFramesTimer.cancel();
+		queueReadFrames();
+	}
 }
 
 void VideoTrackObject::setWaitForMarkAsShown(bool wait) {
@@ -811,10 +859,14 @@ TimePoint VideoTrackObject::trackTime() const {
 	}
 
 	Assert(_resumedTime != kTimeUnknown);
-	if (_options.syncVideoByAudio && _audioId.externalPlayId()) {
+	if (_options.syncVideoByAudio
+		&& _audioId.externalPlayId()
+		&& result.worldTime >= _syncTimePoint.worldTime) {
 		const auto mixer = Media::Player::mixer();
 		const auto point = mixer->getExternalSyncTimePoint(_audioId);
-		if (point && point.worldTime > _resumedTime) {
+		if (point
+			&& point.worldTime > _resumedTime
+			&& point.worldTime >= _syncTimePoint.worldTime) {
 			_syncTimePoint = point;
 		}
 	}
@@ -877,6 +929,7 @@ not_null<const VideoTrack::Frame*> VideoTrack::Shared::getFrame(
 
 auto VideoTrack::Shared::prepareState(
 	crl::time trackTime,
+	float64 playbackSpeed,
 	bool dropStaleFrames)
 -> PrepareState {
 	const auto prepareNext = [&](int index) -> PrepareState {
@@ -906,7 +959,9 @@ auto VideoTrack::Shared::prepareState(
 			Assert(frame->position >= trackTime);
 			Assert(frame->position - trackTime + 1 > 0);
 
-			return PrepareNextCheck(frame->position - trackTime + 1);
+			return PrepareNextCheck(WorldTimeDelay(
+				frame->position - trackTime + 1,
+				playbackSpeed));
 		}
 	};
 	const auto finishPrepare = [&](int index) -> PrepareState {
@@ -957,12 +1012,13 @@ auto VideoTrack::Shared::presentFrame(
 			// Error happened during frame prepare.
 			return { kTimeUnknown, kTimeUnknown, addedWorldTimeDelay };
 		}
-		const auto trackLeft = position - time.trackTime;
-		const auto adjustedBySpeed = trackLeft / playbackSpeed;
-		const auto roundedAdjustedBySpeed = base::SafeRound(adjustedBySpeed);
-		frame->display = time.worldTime
-			+ addedWorldTimeDelay
-			+ crl::time(roundedAdjustedBySpeed);
+		_pendingDisplayTime.store(
+			FrameDisplayTime(
+				time,
+				position,
+				playbackSpeed)
+			+ addedWorldTimeDelay,
+			std::memory_order_release);
 
 		// Release this frame to the main thread for rendering.
 		_counter.store(
@@ -983,7 +1039,8 @@ auto VideoTrack::Shared::presentFrame(
 			|| IsStale(frame, time.trackTime)) {
 			return { kTimeUnknown, kTimeUnknown };
 		}
-		return { kTimeUnknown, (frame->position - time.trackTime + 1) };
+		const auto delay = frame->position - time.trackTime + 1;
+		return { kTimeUnknown, WorldTimeDelay(delay, playbackSpeed) };
 	};
 
 	switch (counter()) {
@@ -999,6 +1056,31 @@ auto VideoTrack::Shared::presentFrame(
 	Unexpected("Counter value in VideoTrack::Shared::prepareState.");
 }
 
+bool VideoTrack::Shared::rebaseDisplayTime(
+		TimePoint trackTime,
+		float64 playbackSpeed) {
+	const auto current = counter();
+	if (current < 0 || (current % 2) == 0) {
+		return false;
+	}
+	const auto next = (current + 1) % (2 * kFramesCount);
+	const auto frame = getFrame(next / 2);
+	auto previous = _pendingDisplayTime.load(std::memory_order_acquire);
+	if (previous == kTimeUnknown
+		|| previous == kFrameDisplayTimeAlreadyDone) {
+		return false;
+	}
+	const auto replacement = FrameDisplayTime(
+		trackTime,
+		frame->position,
+		playbackSpeed);
+	return _pendingDisplayTime.compare_exchange_strong(
+		previous,
+		replacement,
+		std::memory_order_acq_rel,
+		std::memory_order_acquire);
+}
+
 crl::time VideoTrack::Shared::nextFrameDisplayTime() const {
 	const auto frameDisplayTime = [&](int counter) {
 		const auto next = (counter + 1) % (2 * kFramesCount);
@@ -1009,9 +1091,10 @@ crl::time VideoTrack::Shared::nextFrameDisplayTime() const {
 			return kFrameDisplayTimeAlreadyDone;
 		}
 		Assert(IsRasterized(frame));
-		Assert(frame->display != kTimeUnknown);
-
-		return frame->display;
+		const auto result = _pendingDisplayTime.load(
+			std::memory_order_acquire);
+		Assert(result != kTimeUnknown);
+		return result;
 	};
 
 	switch (counter()) {
@@ -1034,6 +1117,24 @@ crl::time VideoTrack::Shared::markFrameDisplayed(crl::time now) {
 		const auto frame = getFrame(index);
 		Assert(frame->position != kTimeUnknown);
 		if (frame->displayed == kTimeUnknown) {
+			auto pending = _pendingDisplayTime.load(
+				std::memory_order_acquire);
+			while (pending != kTimeUnknown
+				&& pending != kFrameDisplayTimeAlreadyDone) {
+				if (now < pending) {
+					return kTimeUnknown;
+				} else if (_pendingDisplayTime.compare_exchange_weak(
+							pending,
+							kFrameDisplayTimeAlreadyDone,
+							std::memory_order_acq_rel,
+							std::memory_order_acquire)) {
+					break;
+				}
+			}
+			if (pending == kTimeUnknown
+				|| pending == kFrameDisplayTimeAlreadyDone) {
+				return kTimeUnknown;
+			}
 			frame->displayed = now;
 		}
 		return frame->position;
@@ -1056,29 +1157,19 @@ void VideoTrack::Shared::addTimelineDelay(crl::time delayed) {
 	if (!delayed) {
 		return;
 	}
-	const auto recountCurrentFrame = [&](int counter) {
+	const auto addDelay = [&] {
 		_delay += delayed;
-		//const auto next = (counter + 1) % (2 * kFramesCount);
-		//const auto index = next / 2;
-		//const auto frame = getFrame(index);
-		//if (frame->displayed != kTimeUnknown) {
-		//	// Frame already displayed.
-		//	return;
-		//}
-		//Assert(IsRasterized(frame));
-		//Assert(frame->display != kTimeUnknown);
-		//frame->display = countFrameDisplayTime(frame->index);
 	};
 
 	switch (counter()) {
 	case 0: Unexpected("Value 0 in VideoTrack::Shared::addTimelineDelay.");
-	case 1: return recountCurrentFrame(1);
+	case 1: return addDelay();
 	case 2: Unexpected("Value 2 in VideoTrack::Shared::addTimelineDelay.");
-	case 3: return recountCurrentFrame(3);
+	case 3: return addDelay();
 	case 4: Unexpected("Value 4 in VideoTrack::Shared::addTimelineDelay.");
-	case 5: return recountCurrentFrame(5);
+	case 5: return addDelay();
 	case 6: Unexpected("Value 6 in VideoTrack::Shared::addTimelineDelay.");
-	case 7: return recountCurrentFrame(7);
+	case 7: return addDelay();
 	}
 	Unexpected("Counter value in VideoTrack::Shared::addTimelineDelay.");
 }
@@ -1091,6 +1182,7 @@ bool VideoTrack::Shared::markFrameShown() {
 		if (frame->displayed == kTimeUnknown) {
 			return false;
 		}
+		_pendingDisplayTime.store(kTimeUnknown, std::memory_order_release);
 		_counter.store(
 			next,
 			std::memory_order_release);
@@ -1199,10 +1291,7 @@ crl::time VideoTrack::nextFrameDisplayTime() const {
 }
 
 crl::time VideoTrack::markFrameDisplayed(crl::time now) {
-	const auto result = _shared->markFrameDisplayed(now);
-
-	Ensures(result != kTimeUnknown);
-	return result;
+	return _shared->markFrameDisplayed(now);
 }
 
 void VideoTrack::addTimelineDelay(crl::time delayed) {

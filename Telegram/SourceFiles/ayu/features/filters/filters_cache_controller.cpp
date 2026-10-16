@@ -7,12 +7,14 @@
 #include "ayu/features/filters/filters_cache_controller.h"
 
 #include "ayu/data/ayu_database.h"
+#include "ayu/features/filters/filter_cache.h"
 #include "ayu/features/filters/filters_controller.h"
 #include "data/data_groups.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "main/main_session.h"
 #include "rpl/event_stream.h"
 
 #include <memory>
@@ -37,8 +39,44 @@ rpl::producer<> updates() {
 
 std::shared_ptr<const Cache> cache;
 
-std::unordered_map<long long, std::unordered_map<int64, bool>> filteredMessages;
-std::unordered_set<BareId> dialogsWithHiddenBlockedMessages; // purely for show / hide filtered messages
+MessageCache filteredMessages;
+
+DialogKey keyFor(not_null<PeerData*> peer) {
+	return { peer->session().uniqueId(), peer->id.value };
+}
+
+QVector<int64> groupSignature(const Data::Group *group) {
+	auto result = QVector<int64>();
+	if (group) {
+		result.reserve(group->items.size());
+		for (const auto &groupItem : group->items) {
+			result.push_back(groupItem->id.bare);
+		}
+	}
+	return result;
+}
+
+void invalidateRemoved(not_null<const HistoryItem*> item) {
+	std::lock_guard lock(filteredMessagesMutex);
+	const auto peer = item->history()->peer;
+	filteredMessages.removeForItem(
+		keyFor(peer),
+		&peer->session(),
+		item->id.bare,
+		groupSignature(item->history()->owner().groups().find(item)));
+}
+
+void trackItemRemovals(not_null<PeerData*> peer) {
+	static auto subscriptions = ItemRemovalSubscriptions();
+	auto *session = &peer->session();
+	subscriptions.track(
+		session,
+		session->data().itemRemoved(),
+		session->lifetime(),
+		[](not_null<const HistoryItem*> item) {
+			invalidateRemoved(item);
+		});
+}
 
 std::shared_ptr<const Cache> buildCache() {
 	const auto filters = AyuDatabase::getAllRegexFilters();
@@ -95,7 +133,6 @@ void rebuildCache() {
 		std::lock_guard filteredLock(filteredMessagesMutex);
 		cache = std::move(next);
 		filteredMessages.clear();
-		dialogsWithHiddenBlockedMessages.clear();
 	}
 }
 
@@ -143,40 +180,32 @@ std::shared_ptr<const Cache> snapshot() {
 
 std::optional<bool> isFiltered(not_null<HistoryItem*> item) {
 	std::lock_guard lock(filteredMessagesMutex);
-	auto dialogIt = filteredMessages.find(item->history()->peer->id.value);
-
-	if (dialogIt == filteredMessages.end()) {
-		return std::nullopt;
-	}
-
-	const auto it = dialogIt->second.find(item->id.bare);
-	if (it == dialogIt->second.end()) {
-		return std::nullopt;
-	}
-
-	return it->second;
+	const auto peer = item->history()->peer;
+	const auto key = keyFor(peer);
+	auto *owner = &peer->session();
+	const auto group = item->history()->owner().groups().find(item);
+	filteredMessages.unmarkBlocked(key, owner, item->id.bare);
+	return filteredMessages.lookup(
+		key,
+		owner,
+		item->id.bare,
+		groupSignature(group));
 }
 
 bool hasFilteredMessages(not_null<PeerData*> peer) {
+	trackItemRemovals(peer);
 	std::lock_guard lock(filteredMessagesMutex);
-	if (dialogsWithHiddenBlockedMessages.contains(peer->id.value)) {
-		return true;
-	}
-	const auto dialogIt = filteredMessages.find(peer->id.value);
-	if (dialogIt == filteredMessages.end()) {
-		return false;
-	}
-	for (const auto &entry : dialogIt->second) {
-		if (entry.second) {
-			return true;
-		}
-	}
-	return false;
+	return filteredMessages.hasFiltered(keyFor(peer), &peer->session());
 }
 
 void putHiddenBlockedMessage(not_null<HistoryItem*> item) {
+	trackItemRemovals(item->history()->peer);
 	std::lock_guard lock(filteredMessagesMutex);
-	dialogsWithHiddenBlockedMessages.insert(item->history()->peer->id.value);
+	const auto peer = item->history()->peer;
+	filteredMessages.markBlocked(
+		keyFor(peer),
+		&peer->session(),
+		item->id.bare);
 }
 
 void putFiltered(
@@ -184,33 +213,37 @@ void putFiltered(
 		const Data::Group *group,
 		bool res,
 		const std::shared_ptr<const Cache> &matchedCache) {
+	trackItemRemovals(item->history()->peer);
 	std::lock_guard cacheLock(cacheMutex);
 	if (cache != matchedCache) {
 		return;
 	}
 
 	std::lock_guard filteredLock(filteredMessagesMutex);
-	filteredMessages[item->history()->peer->id.value][item->id.bare] = res;
+	const auto peer = item->history()->peer;
+	const auto key = keyFor(peer);
+	const auto signature = groupSignature(group);
+	filteredMessages.put(
+		key,
+		&peer->session(),
+		item->id.bare,
+		res,
+		signature);
 	if (group && res) {
-		for (const auto& groupItem : group->items) {
-			filteredMessages[item->history()->peer->id.value][groupItem->id.bare] = true;
+		for (const auto &groupItem : group->items) {
+			filteredMessages.put(
+				key,
+				&peer->session(),
+				groupItem->id.bare,
+				true,
+				signature);
 		}
 	}
 }
 
 void invalidateSingle(not_null<HistoryItem*> item) {
-	const auto dialogIt = filteredMessages.find(item->history()->peer->id.value);
-
-	if (dialogIt == filteredMessages.end()) {
-		return;
-	}
-
-	const auto it = dialogIt->second.find(item->id.bare);
-	if (it == dialogIt->second.end()) {
-		return;
-	}
-
-	dialogIt->second.erase(it);
+	const auto peer = item->history()->peer;
+	filteredMessages.remove(keyFor(peer), &peer->session(), item->id.bare);
 }
 
 void invalidate(not_null<HistoryItem*> item) {

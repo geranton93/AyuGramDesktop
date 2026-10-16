@@ -26,6 +26,7 @@ namespace Data {
 class Session;
 class ReplyPreview;
 class PhotoMedia;
+class PhotoPreload;
 
 inline constexpr auto kPhotoSizeCount = 3;
 
@@ -142,7 +143,10 @@ public:
 	[[nodiscard]] bool hasVideoSmall() const;
 	[[nodiscard]] bool videoLoading(Data::PhotoSize size) const;
 	[[nodiscard]] bool videoFailed(Data::PhotoSize size) const;
-	void loadVideo(Data::PhotoSize size, Data::FileOrigin origin);
+	void loadVideo(
+		Data::PhotoSize size,
+		Data::FileOrigin origin,
+		bool retryFailed = false);
 	[[nodiscard]] const ImageLocation &videoLocation(
 		Data::PhotoSize size) const;
 	[[nodiscard]] int videoByteSize(Data::PhotoSize size) const;
@@ -178,6 +182,22 @@ public:
 	}
 
 private:
+	friend class Data::PhotoPreload;
+
+	[[nodiscard]] bool loadForPreload(
+		Data::FileOrigin origin,
+		bool requireFull);
+	void continueFullPreload(Data::FileOrigin origin);
+	void releasePreload(bool requireFull);
+	void cancel(bool retryableForPreload);
+	void loadInternal(
+		Data::PhotoSize size,
+		Data::FileOrigin origin,
+		LoadFromCloudSetting fromCloud,
+		bool autoLoading,
+		bool preload,
+		bool requireFull = false);
+
 	[[nodiscard]] Data::CloudFile &videoFile(Data::PhotoSize size);
 	[[nodiscard]] const Data::CloudFile &videoFile(
 		Data::PhotoSize size) const;
@@ -202,6 +222,11 @@ private:
 	QByteArray _fileReference;
 	std::unique_ptr<Data::ReplyPreview> _replyPreview;
 	std::weak_ptr<Data::PhotoMedia> _media;
+	int _preloadRequests = 0;
+	int _fullPreloadRequests = 0;
+	bool _largeProgressivePartReady = false;
+	bool _regularLargeLoad = false;
+	bool _cancelledByPreloadLease = false;
 
 	not_null<Data::Session*> _owner;
 

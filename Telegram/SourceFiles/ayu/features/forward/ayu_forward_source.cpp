@@ -162,10 +162,10 @@ public:
 	using Callback = std::function<void(MessageIdsList)>;
 
 	static void Start(
-			not_null<Main::Session*> session,
+			const base::weak_ptr<Main::Session> &session,
 			MessageIdsList itemIds,
 			Callback callback) {
-		const auto weakSession = base::make_weak(session);
+		const auto weakSession = session;
 		std::shared_ptr<Callback> callbackHolder;
 		try {
 			callbackHolder = std::make_shared<Callback>(std::move(callback));
@@ -499,7 +499,7 @@ bool isFullAyuForwardNeeded(not_null<HistoryItem*> item) {
 }
 
 void resolveForwardSources(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	MessageIdsList itemIds,
 	std::function<void(MessageIdsList)> callback) {
 	ForwardSourceResolver::Start(

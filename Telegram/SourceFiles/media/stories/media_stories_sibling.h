@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/weak_ptr.h"
 #include "data/data_stories.h"
+#include "rpl/lifetime.h"
 #include "ui/effects/animations.h"
 #include "ui/userpic_view.h"
 
@@ -58,6 +59,8 @@ private:
 	const not_null<Controller*> _controller;
 
 	FullStoryId _id;
+	Data::Story *_story = nullptr;
+	Data::StoryMedia _media;
 	not_null<PeerData*> _peer;
 	QImage _blurred;
 	QImage _good;
@@ -75,6 +78,7 @@ private:
 	int _nameFontSize = 0;
 
 	std::unique_ptr<Loader> _loader;
+	rpl::lifetime _storyLifetime;
 
 };
 

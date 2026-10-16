@@ -1831,6 +1831,14 @@ bool HistoryItem::markEffectWatched() {
 	return true;
 }
 
+bool HistoryItem::markEmojiInteractionWatched() {
+	if (_flags & MessageFlag::EmojiInteractionWatched) {
+		return false;
+	}
+	_flags |= MessageFlag::EmojiInteractionWatched;
+	return true;
+}
+
 bool HistoryItem::mentionsMe() const {
 	if (Has<HistoryServicePinned>()
 		&& !Core::App().settings().notifyAboutPinned()) {
@@ -1979,7 +1987,8 @@ void HistoryItem::setIsPinned(bool pinned) {
 			PeerId(0), // monoforumPeerId
 			Storage::SharedMediaType::Pinned,
 			id,
-			{ id, id }));
+			{ id, id },
+			changed));
 		_history->setHasPinnedMessages(true);
 		if (const auto topic = this->topic()) {
 			storage.add(Storage::SharedMediaAddExisting(
@@ -1988,7 +1997,8 @@ void HistoryItem::setIsPinned(bool pinned) {
 				PeerId(), // monoforumPeerId
 				Storage::SharedMediaType::Pinned,
 				id,
-				{ id, id }));
+				{ id, id },
+				changed));
 			topic->setHasPinnedMessages(true);
 		}
 		if (const auto sublist = this->savedSublist()) {
@@ -1998,12 +2008,13 @@ void HistoryItem::setIsPinned(bool pinned) {
 				sublistPeerId(),
 				Storage::SharedMediaType::Pinned,
 				id,
-				{ id, id }));
+				{ id, id },
+				changed));
 			sublist->setHasPinnedMessages(true);
 		}
 	} else {
 		_flags &= ~MessageFlag::Pinned;
-		if (_flags & MessageFlag::StoryItem) {
+		if (!changed || (_flags & MessageFlag::StoryItem)) {
 			return;
 		}
 
@@ -2609,6 +2620,7 @@ void HistoryItem::applyEdition(const MTPDmessageService &message) {
 			reply->clearData(this);
 		}
 		clearDependencyMessage();
+		unarmMediaDestroy();
 		UpdateComponents(0);
 		createServiceFromMtp(message);
 		applyServiceDateEdition(message);
@@ -2637,13 +2649,16 @@ void HistoryItem::applyEdition(const MTPDmessageService &message) {
 
 		updateReactions(message.vreactions());
 	} else if (isService()) {
+		removeFromSharedMediaIndex();
 		if (const auto reply = Get<HistoryMessageReply>()) {
 			reply->clearData(this);
 		}
 		clearDependencyMessage();
+		unarmMediaDestroy();
 		UpdateComponents(0);
 		createServiceFromMtp(message);
 		applyServiceDateEdition(message);
+		addToSharedMediaIndex();
 		finishEdition(-1);
 		_flags &= ~MessageFlag::DisplayFromChecked;
 
@@ -2696,7 +2711,15 @@ void HistoryItem::applySentMessage(const MTPDmessage &data) {
 	} else {
 		_flags &= ~MessageFlag::InvertMedia;
 	}
+	if (data.is_noforwards()) {
+		_flags |= MessageFlag::AyuNoForwards;
+	} else {
+		_flags &= ~MessageFlag::AyuNoForwards;
+	}
 
+	const auto wasTypes = sharedMediaTypes();
+	const auto wasTopicRootId = topicRootId();
+	const auto wasSublistPeerId = sublistPeerId();
 	updateSentContent(data);
 	updateReplyMarkup(HistoryMessageMarkupData(data.vreply_markup()));
 	updateForwardedInfo(data.vfwd_from());
@@ -2727,9 +2750,41 @@ void HistoryItem::applySentMessage(const MTPDmessage &data) {
 		});
 	}
 	setPostAuthor(data.vpost_author().value_or_empty());
-	setIsPinned(data.is_pinned());
 	contributeToSlowmode(data.vdate().v);
-	addToSharedMediaIndex();
+	if (isRegular()) {
+		const auto keyMoved = (topicRootId() != wasTopicRootId)
+			|| (sublistPeerId() != wasSublistPeerId);
+		const auto nowTypes = sharedMediaTypes();
+		auto goneTypes = Storage::SharedMediaTypesMask();
+		auto addedTypes = Storage::SharedMediaTypesMask();
+		for (auto index = 0; index != Storage::kSharedMediaTypeCount; ++index) {
+			const auto type = static_cast<Storage::SharedMediaType>(index);
+			if (wasTypes.test(type) && (keyMoved || !nowTypes.test(type))) {
+				goneTypes.set(type);
+			}
+			if (nowTypes.test(type) && (keyMoved || !wasTypes.test(type))) {
+				addedTypes.set(type);
+			}
+		}
+		if (wasTypes && goneTypes) {
+			_history->session().storage().remove(Storage::SharedMediaRemoveOne(
+				_history->peer->id,
+				wasTopicRootId,
+				wasSublistPeerId,
+				goneTypes,
+				id,
+				!keyMoved));
+		}
+		if (addedTypes) {
+			_history->session().storage().add(Storage::SharedMediaAddNew(
+				_history->peer->id,
+				topicRootId(),
+				sublistPeerId(),
+				addedTypes,
+				id));
+		}
+	}
+	setIsPinned(data.is_pinned());
 	addToMessagesIndex();
 	invalidateChatListEntry();
 	if (const auto period = data.vttl_period(); period && period->v > 0) {
@@ -5308,6 +5363,9 @@ void HistoryItem::setupForwardedComponent(const CreateConfig &config) {
 }
 
 void HistoryItem::applyInitialEffectWatched() {
+	if (out() || (_history->inboxReadTillId() && !unread(_history))) {
+		_flags |= MessageFlag::EmojiInteractionWatched;
+	}
 	if (!effectId()) {
 		return;
 	} else if (out()) {
@@ -5319,8 +5377,11 @@ void HistoryItem::applyInitialEffectWatched() {
 }
 
 void HistoryItem::applyEffectWatchedOnUnreadKnown() {
-	if (effectId() && !out() && !unread(_history)) {
-		_flags |= MessageFlag::EffectWatched;
+	if (!out() && !unread(_history)) {
+		_flags |= MessageFlag::EmojiInteractionWatched;
+		if (effectId()) {
+			_flags |= MessageFlag::EffectWatched;
+		}
 	}
 }
 

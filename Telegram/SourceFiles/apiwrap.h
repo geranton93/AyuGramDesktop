@@ -63,7 +63,14 @@ class Show;
 } // namespace Ui
 
 namespace Api {
+enum class SendResult;
+enum class ForwardMessagesResult {
+	Succeeded,
+	Failed,
+	Indeterminate,
+};
 
+class SendRequest;
 struct SearchResult;
 struct GlobalMediaResult;
 
@@ -324,6 +331,11 @@ public:
 		Storage::SharedMediaType type,
 		MsgId messageId,
 		SliceType slice);
+	[[nodiscard]] bool requestPinnedMessagesIfNeeded(
+		not_null<PeerData*> peer,
+		MsgId messageId,
+		MsgId topicRootId = 0,
+		PeerId monoforumPeerId = 0);
 	mtpRequestId requestGlobalMedia(
 		Storage::SharedMediaType type,
 		const QString &query,
@@ -343,6 +355,13 @@ public:
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,
 		FnMut<void()> &&successCallback = nullptr);
+	void forwardMessagesWithResult(
+		Data::ResolvedForwardDraft &&draft,
+		SendAction action,
+		FnMut<void(Api::ForwardMessagesResult)> &&callback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback = nullptr,
+		Fn<bool()> shouldCancel = nullptr,
+		Fn<void(Api::SendResult, int)> requestResultCallback = nullptr);
 	void shareContact(
 		const QString &phone,
 		const QString &firstName,
@@ -362,12 +381,14 @@ public:
 		VoiceWaveform waveform,
 		crl::time duration,
 		bool video,
-		const SendAction &action);
+		const SendAction &action,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 	void sendFiles(
 		Ui::PreparedList &&list,
 		SendMediaType type,
 		std::shared_ptr<SendingAlbum> album,
-		SendAction action);
+		SendAction action,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 	void sendFile(
 		const QByteArray &fileContent,
 		SendMediaType type,
@@ -382,11 +403,13 @@ public:
 	void sendUploadedPhoto(
 		FullMsgId localId,
 		Api::RemoteFileInfo info,
-		Api::SendOptions options);
+		Api::SendOptions options,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 	void sendUploadedDocument(
 		FullMsgId localId,
 		Api::RemoteFileInfo file,
-		Api::SendOptions options);
+		Api::SendOptions options,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 
 	void cancelLocalItem(not_null<HistoryItem*> item);
 
@@ -404,6 +427,11 @@ public:
 	void sendMessage(
 		MessageToSend &&message,
 		std::optional<MsgId> localMessageId = std::nullopt);
+	void sendMessageWithResult(
+		MessageToSend &&message,
+		FnMut<void(Api::SendResult)> &&callback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback,
+		Fn<bool()> shouldCancel = nullptr);
 	void sendBotStart(
 		std::shared_ptr<Ui::Show> show,
 		not_null<UserData*> bot,
@@ -483,6 +511,21 @@ public:
 		return _fileLoader;
 	}
 private:
+	void forwardMessagesInternal(
+		Data::ResolvedForwardDraft &&draft,
+		SendAction action,
+		FnMut<void(Api::ForwardMessagesResult)> &&callback,
+		FnMut<void()> &&legacySuccessCallback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback,
+		Fn<bool()> shouldCancel,
+		Fn<void(Api::SendResult, int)> requestResultCallback);
+	void sendMessageInternal(
+		MessageToSend &&message,
+		std::optional<MsgId> localMessageId,
+		FnMut<void(Api::SendResult)> &&callback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback,
+		Fn<bool()> shouldCancel);
+
 	struct MessageDataRequest {
 		using Callbacks = std::vector<Fn<void()>>;
 
@@ -623,7 +666,8 @@ private:
 	void uploadAlbumMedia(
 		not_null<HistoryItem*> item,
 		const MessageGroupId &groupId,
-		const MTPInputMedia &media);
+		const MTPInputMedia &media,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 	void sendAlbumWithUploaded(
 		not_null<HistoryItem*> item,
 		const MessageGroupId &groupId,
@@ -636,17 +680,20 @@ private:
 		not_null<HistoryItem*> item,
 		const MTPInputMedia &media,
 		Api::SendOptions options,
-		Fn<void(bool)> done = nullptr);
+		Fn<void(bool)> done = nullptr,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 	void sendMediaWithRandomId(
 		not_null<HistoryItem*> item,
 		const MTPInputMedia &media,
 		Api::SendOptions options,
 		uint64 randomId,
-		Fn<void(bool)> done = nullptr);
+		Fn<void(bool)> done = nullptr,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 	void sendMultiPaidMedia(
 		not_null<HistoryItem*> item,
 		not_null<SendingAlbum*> album,
-		Fn<void(bool)> done = nullptr);
+		Fn<void(bool)> done = nullptr,
+		std::shared_ptr<Api::SendRequest> sendRequest = nullptr);
 
 	void sendNotifySettingsUpdates();
 

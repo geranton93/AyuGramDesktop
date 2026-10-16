@@ -303,14 +303,17 @@ private:
 
 class StoryPreload final : public base::has_weak_ptr {
 public:
-	StoryPreload(not_null<Story*> story, Fn<void()> done);
+	StoryPreload(not_null<Story*> story, std::shared_ptr<int> token);
 	~StoryPreload();
 
+	void start(Fn<void(bool)> done);
+	[[nodiscard]] const std::shared_ptr<int> &token() const;
 	[[nodiscard]] FullStoryId id() const;
 	[[nodiscard]] not_null<Story*> story() const;
 
 private:
 	const not_null<Story*> _story;
+	const std::shared_ptr<int> _token;
 
 	std::unique_ptr<MediaPreload> _task;
 

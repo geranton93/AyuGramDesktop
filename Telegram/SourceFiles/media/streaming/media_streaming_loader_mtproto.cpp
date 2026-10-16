@@ -19,6 +19,11 @@ namespace {
 constexpr auto kCheckStatsInterval = crl::time(1000);
 constexpr auto kInitialStatsWait = 5 * crl::time(1000);
 
+template <typename Entry>
+[[nodiscard]] bool IsPendingStatsEntry(const Entry &entry, int64 offset) {
+	return (entry.offset == offset) && !entry.end;
+}
+
 } // namespace
 
 LoaderMtproto::LoaderMtproto(
@@ -68,6 +73,7 @@ void LoaderMtproto::stop() {
 	crl::on_main(this, [=] {
 		cancelAllRequests();
 		_requested.clear();
+		removePendingStats();
 		removeFromQueue();
 	});
 }
@@ -89,12 +95,27 @@ void LoaderMtproto::cancel(int64 offset) {
 void LoaderMtproto::cancelForOffset(int64 offset) {
 	if (haveSentRequestForOffset(offset)) {
 		cancelRequestForOffset(offset);
+		removePendingStatsForOffset(offset);
 		if (!_requested.empty()) {
 			addToQueueWithPriority();
 		}
 	} else {
 		_requested.remove(offset);
 	}
+}
+
+void LoaderMtproto::removePendingStatsForOffset(int64 offset) {
+	const auto firstRemoved = ranges::remove_if(_stats, [=](const auto &entry) {
+		return IsPendingStatsEntry(entry, offset);
+	});
+	_stats.erase(firstRemoved, end(_stats));
+}
+
+void LoaderMtproto::removePendingStats() {
+	const auto firstRemoved = ranges::remove_if(_stats, [](const auto &entry) {
+		return !entry.end;
+	});
+	_stats.erase(firstRemoved, end(_stats));
 }
 
 void LoaderMtproto::attachDownloader(
@@ -117,7 +138,7 @@ void LoaderMtproto::setPriority(int priority) {
 		return;
 	}
 	_priority = priority;
-	if (haveSentRequests()) {
+	if (haveSentRequests() || readyToRequest()) {
 		addToQueueWithPriority();
 	}
 }
@@ -143,7 +164,8 @@ int64 LoaderMtproto::takeNextRequestOffset() {
 bool LoaderMtproto::feedPart(int64 offset, const QByteArray &bytes) {
 	const auto time = crl::now();
 	for (auto &entry : _stats) {
-		if (entry.offset == offset && entry.start < time) {
+		if (IsPendingStatsEntry(entry, offset) && entry.start < time) {
+			entry.receivedBytes = bytes.size();
 			entry.end = time;
 			if (!_statsTimer.isActive()) {
 				const auto checkAt = std::max(
@@ -159,6 +181,7 @@ bool LoaderMtproto::feedPart(int64 offset, const QByteArray &bytes) {
 }
 
 void LoaderMtproto::cancelOnFail() {
+	removePendingStats();
 	_parts.fire({ LoadedPart::kFailedOffset });
 }
 
@@ -205,7 +228,7 @@ void LoaderMtproto::checkStats() {
 			durationCountedTill = till;
 		}
 		if (entry.end) {
-			received += Storage::kDownloadPartSize;
+			received += entry.receivedBytes;
 			latency += entry.end - entry.start;
 			++latencyCount;
 		}

@@ -227,6 +227,9 @@ Stories::~Stories() {
 }
 
 void Stories::clear() {
+	_preloading = nullptr;
+	_preloadViewerIds.clear();
+	_toPreloadViewer.clear();
 	_pollingSettings.clear();
 	_pollingViews.clear();
 	_stories.clear();
@@ -590,10 +593,15 @@ Story *Stories::parseAndApply(
 			_preloaded.remove(fullId);
 			if (_preloading && _preloading->id() == fullId) {
 				_preloading = nullptr;
-				rebuildPreloadSources(StorySourcesList::NotHidden);
-				rebuildPreloadSources(StorySourcesList::Hidden);
-				continuePreloading();
 			}
+			rebuildPreloadSources(StorySourcesList::NotHidden);
+			rebuildPreloadSources(StorySourcesList::Hidden);
+			auto viewer = _preloadViewerIds;
+			viewer.erase(ranges::remove_if(viewer, [&](FullStoryId id) {
+				return _preloaded.contains(id);
+			}), end(viewer));
+			_toPreloadViewer = std::move(viewer);
+			continuePreloading();
 			_owner->refreshStoryItemViews(fullId);
 		}
 		return result;
@@ -902,6 +910,22 @@ void Stories::finalizeResolve(FullStoryId id) {
 
 void Stories::applyDeleted(not_null<PeerData*> peer, StoryId id) {
 	const auto fullId = FullStoryId{ peer->id, id };
+	const auto wasPreloading = _preloading && (_preloading->id() == fullId);
+	auto wasQueued = ranges::contains(_toPreloadViewer, fullId);
+	for (const auto &source : _toPreloadSources) {
+		wasQueued = wasQueued || ranges::contains(source, fullId);
+	}
+	_deleted.emplace(fullId);
+	_preloaded.remove(fullId);
+	_preloadViewerIds.erase(
+		ranges::remove(_preloadViewerIds, fullId),
+		end(_preloadViewerIds));
+	if (wasPreloading) {
+		_preloading = nullptr;
+	}
+	if (wasPreloading || wasQueued) {
+		preloadFinished(fullId);
+	}
 	applyRemovedFromActive(fullId);
 
 	if (const auto channel = peer->asChannel()) {
@@ -910,7 +934,6 @@ void Stories::applyDeleted(not_null<PeerData*> peer, StoryId id) {
 		}
 	}
 
-	_deleted.emplace(fullId);
 	const auto peerId = peer->id;
 	const auto i = _stories.find(peerId);
 	if (i != end(_stories)) {
@@ -952,10 +975,6 @@ void Stories::applyDeleted(not_null<PeerData*> peer, StoryId id) {
 			}
 			for (const auto id : story->albumIds()) {
 				removeFromAlbum(id);
-			}
-			if (_preloading && _preloading->id() == fullId) {
-				_preloading = nullptr;
-				preloadFinished(fullId);
 			}
 			_owner->refreshStoryItemViews(fullId);
 			Assert(!_pollingSettings.contains(story.get()));
@@ -1251,7 +1270,7 @@ void Stories::markAsRead(FullStoryId id, bool viewed) {
 	}
 
 	const auto story = *maybeStory;
-	if (story->expired() && story->inProfile()) {
+	if (viewed && story->expired() && story->inProfile()) {
 		_incrementViewsPending[id.peer].emplace(id.story);
 		if (!_incrementViewsTimer.isActive()) {
 			_incrementViewsTimer.callOnce(kIncrementViewsDelay);
@@ -2363,11 +2382,33 @@ void Stories::decrementPreloadingHiddenSources() {
 }
 
 void Stories::setPreloadingInViewer(std::vector<FullStoryId> ids) {
+	if (_preloadViewerIds != ids) {
+		_preloadViewerIds = ids;
+	}
 	ids.erase(ranges::remove_if(ids, [&](FullStoryId id) {
 		return _preloaded.contains(id);
 	}), end(ids));
 	if (_toPreloadViewer != ids) {
 		_toPreloadViewer = std::move(ids);
+		continuePreloading();
+	}
+}
+
+void Stories::photoLoadSettingsChanged() {
+	++_preloadSettingsGeneration;
+	const auto hiddenChanged = rebuildPreloadSources(
+		StorySourcesList::Hidden);
+	const auto mainChanged = rebuildPreloadSources(
+		StorySourcesList::NotHidden);
+	auto viewer = _preloadViewerIds;
+	viewer.erase(ranges::remove_if(viewer, [&](FullStoryId id) {
+		return _preloaded.contains(id);
+	}), end(viewer));
+	const auto viewerChanged = (_toPreloadViewer != viewer);
+	if (viewerChanged) {
+		_toPreloadViewer = std::move(viewer);
+	}
+	if (hiddenChanged || mainChanged || viewerChanged) {
 		continuePreloading();
 	}
 }
@@ -2641,13 +2682,23 @@ void Stories::startPreloading(not_null<Story*> story) {
 	Expects(!_preloaded.contains(story->fullId()));
 
 	const auto id = story->fullId();
-	auto preloading = std::make_unique<StoryPreload>(story, [=] {
-		_preloading = nullptr;
-		preloadFinished(id, true);
-	});
-	if (!_preloaded.contains(id)) {
-		_preloading = std::move(preloading);
-	}
+	const auto settingsGeneration = _preloadSettingsGeneration;
+	const auto token = std::make_shared<int>();
+	_preloading = std::make_unique<StoryPreload>(story, token);
+	_preloading->start(
+		[this, id, token, settingsGeneration](bool success) {
+			crl::on_main(this, [this, id, settingsGeneration, success, token] {
+				if (!_preloading || (_preloading->token() != token)) {
+					return;
+				}
+				_preloading = nullptr;
+				preloadFinished(id, success);
+				if (!success
+					&& settingsGeneration != _preloadSettingsGeneration) {
+					photoLoadSettingsChanged();
+				}
+			});
+		});
 }
 
 void Stories::preloadFinished(FullStoryId id, bool markAsPreloaded) {

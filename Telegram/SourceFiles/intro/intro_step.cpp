@@ -468,9 +468,11 @@ void Step::paintCover(QPainter &p, int top) {
 	}
 	if (top < 0) {
 		auto shown = float64(coverHeight) / st::introCoverHeight;
-		auto leftShown = qRound(shown * (left + st::introCoverLeft.width()));
+		const auto leftFull = left + st::introCoverLeft.width();
+		auto leftShown = int(base::SafeRound(shown * leftFull));
 		left = leftShown - st::introCoverLeft.width();
-		auto rightShown = qRound(shown * (right + st::introCoverRight.width()));
+		const auto rightFull = right + st::introCoverRight.width();
+		auto rightShown = int(base::SafeRound(shown * rightFull));
 		right = rightShown - st::introCoverRight.width();
 	}
 	st::introCoverLeft.paint(p, left, coverHeight - st::introCoverLeft.height(), width());
@@ -478,7 +480,17 @@ void Step::paintCover(QPainter &p, int top) {
 
 	auto planeTop = top + st::introCoverIconTop;
 	const auto ayuGramIcon = Ui::PixmapFromImage(AyuAssets::currentAppLogo());
-	QIcon(ayuGramIcon).paint(&p, QRect(width() / 2 - ayuGramIcon.width() / 2, planeTop - 16, ayuGramIcon.width(), st::introCoverIcon.height()));
+	auto planeLeft = width() / 2 - ayuGramIcon.width() / 2;
+	if (top < 0 && !_hasCover) {
+		const auto ratio = float64(st::introPlaneWidth) / st::introPlaneHeight;
+		auto deltaLeft = -int(base::SafeRound(ratio * top));
+		planeLeft += deltaLeft;
+	}
+	QIcon(ayuGramIcon).paint(&p, QRect(
+		planeLeft,
+		planeTop - 16,
+		ayuGramIcon.width(),
+		st::introCoverIcon.height()));
 }
 
 int Step::contentLeft() const {
@@ -495,7 +507,7 @@ int Step::contentTop() const {
 				/ (st::introStepHeightFull - st::windowMinHeight),
 			0.,
 			1.);
-		result += qRound(added * st::introContentTopAdd);
+		result += int(base::SafeRound(added * st::introContentTopAdd));
 	}
 	return result;
 }

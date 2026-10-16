@@ -198,9 +198,22 @@ std::shared_ptr<QMimeData> ShareMimeMediaData(
 	return result;
 }
 
-MimeImageData ReadMimeImage(not_null<const QMimeData*> data) {
-	if (data->hasFormat(u"application/x-td-use-jpeg"_q)) {
-		auto bytes = data->data(u"image/jpeg"_q);
+MimeImageSource CopyMimeImageSource(not_null<const QMimeData*> data) {
+	const auto preferContent = data->hasFormat(u"application/x-td-use-jpeg"_q);
+	return {
+		.image = (!preferContent && data->hasImage())
+			? qvariant_cast<QImage>(data->imageData())
+			: QImage(),
+		.content = preferContent
+			? data->data(u"image/jpeg"_q)
+			: QByteArray(),
+		.preferContent = preferContent,
+	};
+}
+
+MimeImageData ReadMimeImage(MimeImageSource source) {
+	if (source.preferContent) {
+		auto bytes = std::move(source.content);
 		auto read = Images::Read({ .content = bytes });
 		if (read.format == "jpeg" && !read.image.isNull()) {
 			return {
@@ -208,8 +221,8 @@ MimeImageData ReadMimeImage(not_null<const QMimeData*> data) {
 				.content = std::move(bytes),
 			};
 		}
-	} else if (data->hasImage()) {
-		auto image = qvariant_cast<QImage>(data->imageData());
+	} else if (!source.image.isNull()) {
+		auto image = std::move(source.image);
 		// The same area limit Images::Read() applies to files: a huge
 		// image can't be scaled down for the preview, because the smooth
 		// scale converts the whole source first, needing a second full
@@ -220,6 +233,10 @@ MimeImageData ReadMimeImage(not_null<const QMimeData*> data) {
 		return { .image = std::move(image) };
 	}
 	return {};
+}
+
+MimeImageData ReadMimeImage(not_null<const QMimeData*> data) {
+	return ReadMimeImage(CopyMimeImageSource(data));
 }
 
 QString ReadMimeText(not_null<const QMimeData*> data) {

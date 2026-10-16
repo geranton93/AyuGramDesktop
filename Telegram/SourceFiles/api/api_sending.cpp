@@ -36,12 +36,142 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_upload.h"
 #include "mainwidget.h"
 #include "apiwrap.h"
+#include "mtproto/mtproto_response.h"
 
 // AyuGram includes
 #include "ayu/utils/telegram_helpers.h"
 
+#include <mutex>
+
 
 namespace Api {
+
+SendResult SendResultForError(const MTP::Error &error) {
+	return (error.type() == u"CLIENT_RESPONSE_PARSE_FAILED"_q)
+		? SendResult::Indeterminate
+		: SendResult::Failed;
+}
+
+struct SendRequest::State {
+	State(
+		int expectedResults,
+		FnMut<void(SendResult)> callback,
+		Fn<bool()> shouldCancel)
+	: remaining(expectedResults)
+	, callback(std::move(callback))
+	, shouldCancel(std::move(shouldCancel)) {
+	}
+
+	mutable std::mutex mutex;
+	int remaining = 0;
+	int succeeded = 0;
+	bool finished = false;
+	bool cancelled = false;
+	bool cancelPending = false;
+	FnMut<void(SendResult)> callback;
+	Fn<bool()> shouldCancel;
+	std::vector<Fn<void()>> cancellations;
+};
+
+SendRequest::SendRequest(
+		int expectedResults,
+		FnMut<void(SendResult)> callback,
+		Fn<bool()> shouldCancel)
+: _state(std::make_shared<State>(
+	expectedResults,
+	std::move(callback),
+	std::move(shouldCancel))) {
+	Expects(expectedResults > 0);
+}
+
+SendRequest::~SendRequest() = default;
+
+void SendRequest::finishOne(SendResult result) {
+	auto callback = FnMut<void(SendResult)>();
+	auto cancellations = std::vector<Fn<void()>>();
+	auto terminal = SendResult::Succeeded;
+	{
+		const auto lock = std::lock_guard(_state->mutex);
+		if (_state->finished) {
+			return;
+		}
+		if (result != SendResult::Succeeded) {
+			_state->finished = true;
+			_state->cancelPending = true;
+			terminal = (_state->remaining > 1 || _state->succeeded > 0)
+				? SendResult::Indeterminate
+				: result;
+			cancellations = base::take(_state->cancellations);
+		} else {
+			++_state->succeeded;
+			if (--_state->remaining != 0) {
+				return;
+			}
+			_state->finished = true;
+			_state->cancellations.clear();
+		}
+		callback = base::take(_state->callback);
+	}
+	for (auto &cancellation : cancellations) {
+		cancellation();
+	}
+	if (callback) {
+		callback(terminal);
+	}
+}
+
+void SendRequest::registerCancellation(Fn<void()> cancellation) {
+	if (!cancellation) {
+		return;
+	}
+	auto runNow = false;
+	{
+		const auto lock = std::lock_guard(_state->mutex);
+		if (_state->cancelPending) {
+			runNow = true;
+		} else if (!_state->finished) {
+			_state->cancellations.push_back(std::move(cancellation));
+		}
+	}
+	if (runNow) {
+		cancellation();
+	}
+}
+
+void SendRequest::cancel() {
+	auto callback = FnMut<void(SendResult)>();
+	auto cancellations = std::vector<Fn<void()>>();
+	{
+		const auto lock = std::lock_guard(_state->mutex);
+		if (_state->finished) {
+			return;
+		}
+		_state->finished = true;
+		_state->cancelled = true;
+		_state->cancelPending = true;
+		callback = base::take(_state->callback);
+		cancellations = base::take(_state->cancellations);
+	}
+	for (auto &cancellation : cancellations) {
+		cancellation();
+	}
+	if (callback) {
+		callback(SendResult::Indeterminate);
+	}
+}
+
+bool SendRequest::shouldCancel() const {
+	auto shouldCancel = Fn<bool()>();
+	{
+		const auto lock = std::lock_guard(_state->mutex);
+		if (_state->finished || _state->cancelled) {
+			return true;
+		}
+		shouldCancel = _state->shouldCancel;
+	}
+	return shouldCancel && shouldCancel();
+}
+
 namespace {
 
 void InnerFillMessagePostFlags(
@@ -188,16 +318,24 @@ void SendExistingMedia(
 		not_null<MediaData*> media,
 		Fn<MTPInputMedia()> inputMedia,
 		Data::FileOrigin origin,
-		std::optional<MsgId> localMessageId) {
+		std::optional<MsgId> localMessageId,
+		std::shared_ptr<SendRequest> sendRequest = nullptr) {
 	const auto history = message.action.history;
 	const auto peer = history->peer;
 	const auto session = &history->session();
 	const auto api = &session->api();
 	const auto welcomeTemplate = message.action.options.welcomeTemplate;
+	if (sendRequest && sendRequest->shouldCancel()) {
+		sendRequest->finishOne(SendResult::Indeterminate);
+		return;
+	}
 
 	if (welcomeTemplate
 		&& session->welcomeMessages().count(history)
 			>= Data::WelcomeMessagesLimit(session)) {
+		if (sendRequest) {
+			sendRequest->finishOne(SendResult::Indeterminate);
+		}
 		return;
 	}
 
@@ -310,6 +448,9 @@ void SendExistingMedia(
 		welcome.appendSending(item);
 		welcome.sendMedia(item, inputMedia(), origin, inputMedia);
 		api->finishForwarding(action);
+		if (sendRequest) {
+			sendRequest->finishOne(SendResult::Indeterminate);
+		}
 		return;
 	}
 
@@ -321,14 +462,27 @@ void SendExistingMedia(
 			origin,
 			inputMedia)) {
 		api->finishForwarding(action);
+		session->data().unregisterMessageRandomId(randomId);
+		if (sendRequest) {
+			sendRequest->finishOne(SendResult::Indeterminate);
+		}
 		return;
 	}
 
 	const auto performRequest = [=](const auto &repeatRequest) -> void {
+		if (sendRequest && sendRequest->shouldCancel()) {
+			session->data().unregisterMessageRandomId(randomId);
+			if (const auto pending = session->data().message(newId);
+				pending && pending->isSending()) {
+				pending->destroy();
+			}
+			sendRequest->finishOne(SendResult::Indeterminate);
+			return;
+		}
 		auto &histories = history->owner().histories();
 		const auto session = &history->session();
 		const auto usedFileReference = media->fileReference();
-		histories.sendPreparedMessage(
+		const auto requestId = histories.sendPreparedMessage(
 			history,
 			action.replyTo,
 			randomId,
@@ -349,20 +503,48 @@ void SendExistingMedia(
 				MTP_long(starsPaid),
 				SuggestToMTP(action.options.suggest)
 			), [=](const MTPUpdates &result, const MTP::Response &response) {
+				if (sendRequest) {
+					sendRequest->finishOne(SendResult::Succeeded);
+				}
 		}, [=](const MTP::Error &error, const MTP::Response &response) {
+			if (sendRequest && sendRequest->shouldCancel()) {
+				sendRequest->cancel();
+				return;
+			}
 			if (error.code() == 400
 				&& error.type().startsWith(u"FILE_REFERENCE_"_q)) {
 				api->refreshFileReference(origin, [=](const auto &result) {
-					if (media->fileReference() != usedFileReference) {
+					if (sendRequest && sendRequest->shouldCancel()) {
+						sendRequest->cancel();
+					} else if (media->fileReference() != usedFileReference) {
 						repeatRequest(repeatRequest);
 					} else {
 						api->sendMessageFail(error, peer, randomId, newId);
+						if (sendRequest) {
+							sendRequest->finishOne(SendResultForError(error));
+						}
 					}
 				});
 			} else {
 				api->sendMessageFail(error, peer, randomId, newId);
+				if (sendRequest) {
+					sendRequest->finishOne(SendResultForError(error));
+				}
 			}
 		});
+		if (sendRequest) {
+			const auto weakSession = base::make_weak(session);
+			sendRequest->registerCancellation([=] {
+				if (const auto current = weakSession.get()) {
+					current->data().histories().cancelRequest(requestId);
+					current->data().unregisterMessageRandomId(randomId);
+					if (const auto pending = current->data().message(newId);
+						pending && pending->isSending()) {
+						pending->destroy();
+					}
+				}
+			});
+		}
 	};
 	performRequest(performRequest);
 
@@ -710,7 +892,8 @@ void SendMusicSelectionBatch(
 void SendExistingDocument(
 		MessageToSend &&message,
 		not_null<DocumentData*> document,
-		std::optional<MsgId> localMessageId) {
+		std::optional<MsgId> localMessageId,
+		std::shared_ptr<SendRequest> sendRequest) {
 	if (!document->sticker()
 		&& !document->isVideoMessage()
 		&& !document->isVoiceMessage()) {
@@ -746,7 +929,8 @@ void SendExistingDocument(
 		document,
 		inputMedia,
 		document->stickerOrGifOrigin(),
-		std::move(localMessageId));
+		std::move(localMessageId),
+		std::move(sendRequest));
 
 	if (document->sticker()) {
 		document->owner().stickers().incrementSticker(document);
@@ -1055,11 +1239,8 @@ struct ConfirmedLocalFile {
 		const QString &caption,
 		bool isEditing) {
 	const auto welcomeTemplate = file->to.options.welcomeTemplate;
-	const auto groupId = welcomeTemplate
-		? uint64(0)
-		: file->album
-		? file->album->groupId
-		: uint64(0);
+	const auto album = welcomeTemplate ? nullptr : file->album.lock();
+	const auto groupId = album ? album->groupId : uint64(0);
 	auto flags = isEditing ? MessageFlags() : NewMessageFlags(peer);
 	if (welcomeTemplate) {
 		flags &= ~MessageFlag::Outgoing;
@@ -1183,12 +1364,12 @@ struct ConfirmedLocalFile {
 			? file->to.replaceMediaOf
 			: session->data().nextLocalMessageId()));
 	const auto welcomeTemplate = file->to.options.welcomeTemplate;
-	if (!welcomeTemplate && file->album) {
+	if (const auto album = welcomeTemplate ? nullptr : file->album.lock()) {
 		const auto it = ranges::find(
-			file->album->items,
+			album->items,
 			file->taskId,
 			&SendingAlbum::Item::taskId);
-		Assert(it != file->album->items.end());
+		Assert(it != album->items.end());
 
 		it->msgId = newId;
 	}
@@ -1279,6 +1460,9 @@ void AddConfirmedLocalPlaceholder(const ConfirmedLocalFile &local) {
 	}
 
 	const auto welcomeTemplate = local.file->to.options.welcomeTemplate;
+	const auto album = welcomeTemplate
+		? nullptr
+		: local.file->album.lock();
 	const auto item = local.history->addNewLocalMessage({
 		.id = local.newId.msg,
 		.flags = local.flags,
@@ -1289,11 +1473,7 @@ void AddConfirmedLocalPlaceholder(const ConfirmedLocalFile &local) {
 		.shortcutId = local.file->to.options.shortcutId,
 		.starsPaid = local.starsPaid,
 		.postAuthor = NewMessagePostAuthor(local.action),
-		.groupedId = welcomeTemplate
-			? uint64(0)
-			: local.file->album
-			? local.file->album->groupId
-			: uint64(0),
+		.groupedId = album ? album->groupId : uint64(0),
 		.effectId = local.file->to.options.effectId,
 		.suggest = HistoryMessageSuggestInfo(local.file->to.options),
 	}, local.caption, local.media);
@@ -1305,7 +1485,7 @@ void AddConfirmedLocalPlaceholder(const ConfirmedLocalFile &local) {
 [[nodiscard]] bool FlushPreparedMusicBatch(
 		not_null<Main::Session*> session,
 		const std::shared_ptr<FilePrepareResult> &sample) {
-	const auto album = sample->album;
+	const auto album = sample->album.lock();
 	if (!album || !album->preparedMusicBatching()) {
 		return false;
 	}
@@ -1354,14 +1534,24 @@ void AddConfirmedLocalPlaceholder(const ConfirmedLocalFile &local) {
 void SendConfirmedFile(
 		not_null<Main::Session*> session,
 		const std::shared_ptr<FilePrepareResult> &file) {
+	const auto sendRequest = file->sendRequest;
+	if (sendRequest && sendRequest->shouldCancel()) {
+		return;
+	}
 	const auto welcomeTemplate = file->to.options.welcomeTemplate;
 	if (welcomeTemplate && file->to.replaceMediaOf) {
+		if (sendRequest) {
+			sendRequest->finishOne(SendResult::Indeterminate);
+		}
 		return;
 	}
 	if (welcomeTemplate) {
 		const auto history = session->data().history(file->to.peer);
 		if (session->welcomeMessages().count(history)
 			>= Data::WelcomeMessagesLimit(session)) {
+			if (sendRequest) {
+				sendRequest->finishOne(SendResult::Failed);
+			}
 			return;
 		}
 	}
@@ -1376,9 +1566,25 @@ void SendConfirmedFile(
 		std::min(
 			history->peer->starsPerMessageChecked(),
 			file->to.options.starsApproved));
-	session->uploader().upload(local.newId, file);
 	session->api().sendAction(local.action);
 	AddConfirmedLocalPlaceholder(local);
+	if (sendRequest) {
+		const auto weakSession = base::make_weak(session);
+		const auto localId = local.newId;
+		sendRequest->registerCancellation([=] {
+			if (const auto current = weakSession.get()) {
+				current->uploader().cancel(localId);
+				if (const auto pending = current->data().message(localId);
+					pending && pending->isSending()) {
+					current->data().destroyMessageWithCacheCleanup(pending);
+				}
+			}
+		});
+		if (sendRequest->shouldCancel()) {
+			return;
+		}
+	}
+	session->uploader().upload(local.newId, file);
 
 	if (local.itemToEdit) {
 		return;

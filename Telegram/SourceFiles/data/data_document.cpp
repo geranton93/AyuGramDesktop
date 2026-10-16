@@ -45,6 +45,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QBuffer>
 #include <QtCore/QMimeType>
 #include <QtCore/QMimeDatabase>
+#include <QtCore/QtEndian>
 
 namespace {
 
@@ -106,6 +107,15 @@ void UpdateStickerSetIdentifier(
 			|| attributesQuality > transcodeMax * 1.5))
 		? transcodeMax
 		: attributesQuality;
+}
+
+[[nodiscard]] bool CanCancelSharedDocumentLoad(
+		uint64 requestedGeneration,
+		uint64 activeGeneration,
+		bool hasOrdinarySaveDemand) {
+	return requestedGeneration
+		&& (requestedGeneration == activeGeneration)
+		&& !hasOrdinarySaveDemand;
 }
 
 } // namespace
@@ -964,6 +974,18 @@ bool DocumentData::goodThumbnailNoData() const {
 		== GoodThumbnailFlag::NoData;
 }
 
+bool DocumentData::goodThumbnailFailed() const {
+	return (_goodThumbnailState & GoodThumbnailFlag::Failed);
+}
+
+bool DocumentData::goodThumbnailRetryFailedCache() const {
+	return (_goodThumbnailState & GoodThumbnailFlag::RetryFailedCache);
+}
+
+uint64 DocumentData::goodThumbnailGeneration() const {
+	return _goodThumbnailGeneration;
+}
+
 void DocumentData::setGoodThumbnailGenerating() {
 	_goodThumbnailState = (_goodThumbnailState & ~GoodThumbnailFlag::Mask)
 		| GoodThumbnailFlag::Generating;
@@ -973,20 +995,51 @@ void DocumentData::setGoodThumbnailDataReady() {
 	_goodThumbnailState = GoodThumbnailFlag::DataReady
 		| (goodThumbnailNoData()
 			? GoodThumbnailFlag(0)
-			: (_goodThumbnailState & GoodThumbnailFlag::Mask));
+			: (_goodThumbnailState & GoodThumbnailFlag::Mask))
+		| (_goodThumbnailState & GoodThumbnailFlag::Failed)
+		| (_goodThumbnailState & GoodThumbnailFlag::RetryFailedCache);
 }
 
 void DocumentData::setGoodThumbnailChecked(bool hasData) {
 	if (!hasData && (_goodThumbnailState & GoodThumbnailFlag::DataReady)) {
+		_goodThumbnailState &= ~GoodThumbnailFlag::RetryFailedCache;
 		_goodThumbnailState &= ~GoodThumbnailFlag::DataReady;
 		_goodThumbnailState &= ~GoodThumbnailFlag::Mask;
 		Data::DocumentMedia::CheckGoodThumbnail(this);
 		return;
 	}
-	_goodThumbnailState = (_goodThumbnailState & ~GoodThumbnailFlag::Mask)
+	_goodThumbnailState = (_goodThumbnailState
+		& ~(GoodThumbnailFlag::Mask | GoodThumbnailFlag::RetryFailedCache))
 		| (hasData
 			? GoodThumbnailFlag::Checked
 			: GoodThumbnailFlag::NoData);
+}
+
+void DocumentData::setGoodThumbnailFailed(bool failed) {
+	_goodThumbnailState &= ~GoodThumbnailFlag::RetryFailedCache;
+	if (failed) {
+		_goodThumbnailState |= GoodThumbnailFlag::Failed;
+	} else {
+		_goodThumbnailState &= ~GoodThumbnailFlag::Failed;
+	}
+}
+
+void DocumentData::setGoodThumbnailRetryFailedCache(bool retry) {
+	if (retry) {
+		_goodThumbnailState |= GoodThumbnailFlag::RetryFailedCache;
+	} else {
+		_goodThumbnailState &= ~GoodThumbnailFlag::RetryFailedCache;
+	}
+}
+
+void DocumentData::invalidateGoodThumbnail(bool removeCache) {
+	++_goodThumbnailGeneration;
+	_goodThumbnailState &= ~(GoodThumbnailFlag::Mask
+		| GoodThumbnailFlag::Failed
+		| GoodThumbnailFlag::RetryFailedCache);
+	if (removeCache) {
+		owner().cache().remove(goodThumbnailCacheKey());
+	}
 }
 
 std::shared_ptr<Data::DocumentMedia> DocumentData::createMediaView() {
@@ -1060,11 +1113,35 @@ void DocumentData::finishLoad() {
 		_flags |= Flag::DownloadCancelled;
 		return;
 	}
+	const auto thumbnailGeneration = goodThumbnailGeneration();
+	const auto retryGoodThumbnail = goodThumbnailNoData()
+		|| goodThumbnailGenerating()
+		|| goodThumbnailFailed();
+	const auto uncheckedGoodThumbnail = !goodThumbnailChecked()
+		&& !goodThumbnailNoData()
+		&& !goodThumbnailGenerating()
+		&& !goodThumbnailFailed();
 	setLocation(Core::FileLocation(_loader->fileName()));
 	setGoodThumbnailDataReady();
 	if (const auto media = activeMediaView()) {
 		media->setBytes(_loader->bytes());
 		media->checkStickerLarge(_loader.get());
+	}
+	if (_loader->bytes().isEmpty()
+		&& (goodThumbnailGeneration() == thumbnailGeneration)) {
+		if (retryGoodThumbnail) {
+			invalidateGoodThumbnail(false);
+			setGoodThumbnailRetryFailedCache(true);
+			if (const auto media = activeMediaView()) {
+				media->goodThumbnailSourceChanged();
+			}
+		} else if (uncheckedGoodThumbnail
+			&& !goodThumbnailRetryFailedCache()) {
+			setGoodThumbnailRetryFailedCache(true);
+			if (const auto media = activeMediaView()) {
+				media->goodThumbnailSourceChanged();
+			}
+		}
 	}
 }
 
@@ -1098,6 +1175,10 @@ bool DocumentData::forbidsFileSave() const {
 
 QString DocumentData::loadingFilePath() const {
 	return loading() ? _loader->fileName() : QString();
+}
+
+uint64 DocumentData::loaderGeneration() const {
+	return _loaderGeneration;
 }
 
 bool DocumentData::displayLoading() const {
@@ -1210,8 +1291,21 @@ bool DocumentData::enforceNameType(Core::NameType nameType) {
 }
 
 void DocumentData::setLoadedInMediaCacheLocation() {
+	const auto changed = !_location.isEmpty();
 	_location = Core::FileLocation();
 	_flags |= Flag::LoadedInMediaCache;
+	const auto media = activeMediaView();
+	const auto retry = goodThumbnailNoData()
+		|| goodThumbnailGenerating()
+		|| goodThumbnailFailed();
+	if (changed && retry && (!media || media->bytes().isEmpty())) {
+		const auto removeCache = goodThumbnailGenerating()
+			|| goodThumbnailFailed();
+		invalidateGoodThumbnail(removeCache);
+		if (media) {
+			media->goodThumbnailSourceChanged();
+		}
+	}
 }
 
 void DocumentData::setWaitingForAlbum() {
@@ -1229,7 +1323,8 @@ void DocumentData::save(
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading,
-		std::unique_ptr<QFile> destination) {
+		std::unique_ptr<QFile> destination,
+		SaveRequest request) {
 	Test::NotifyDocumentSave(this, toFile, autoLoading);
 	if (const auto media = activeMediaView(); media && media->loaded(true)) {
 		const auto &l = location(true);
@@ -1373,6 +1468,10 @@ void DocumentData::save(
 				cacheTag());
 		}
 		createdLoader = true;
+		if (++_loaderGeneration == 0) {
+			++_loaderGeneration;
+		}
+		_hasOrdinarySaveDemand = false;
 	}
 	if (destination) {
 		if (!_loader->setDestinationFile(std::move(destination))) {
@@ -1382,10 +1481,13 @@ void DocumentData::save(
 			return;
 		}
 	}
+	if (_loader && request == SaveRequest::Ordinary) {
+		_hasOrdinarySaveDemand = true;
+	}
 	if (createdLoader) {
 		handleLoaderUpdates();
 	}
-	if (loading()) {
+	if (createdLoader && loading()) {
 		_loader->start();
 	}
 	// This affects a display of tooltips.
@@ -1438,8 +1540,26 @@ void DocumentData::cancel() {
 	}
 
 	_flags |= Flag::DownloadCancelled;
-	destroyLoader();
+	const auto loader = base::take(_loader);
+	loader->lifetime().destroy();
+	loader->cancel();
 	_owner->documentLoadDone(this);
+}
+
+bool DocumentData::cancelSharedDownloadIfUnused(
+		uint64 generation) {
+	if (!loading()
+		|| !CanCancelSharedDocumentLoad(
+			generation,
+			_loaderGeneration,
+			_hasOrdinarySaveDemand)) {
+		return false;
+	}
+	const auto loader = base::take(_loader);
+	loader->lifetime().destroy();
+	loader->cancel();
+	_owner->documentLoadDone(this);
+	return true;
 }
 
 bool DocumentData::cancelled() const {
@@ -1470,14 +1590,14 @@ VoiceWaveform documentWaveformDecode(const QByteArray &encoded5bit) {
 	for (auto i = 0, l = valuesCount - 1; i != l; ++i) {
 		auto byteIndex = (i * 5) / 8;
 		auto bitShift = (i * 5) % 8;
-		auto value = *reinterpret_cast<const uint16*>(bitsData + byteIndex);
+		auto value = qFromUnaligned<uint16>(bitsData + byteIndex);
 		result[i] = static_cast<char>((value >> bitShift) & 0x1F);
 	}
 	auto lastByteIndex = ((valuesCount - 1) * 5) / 8;
 	auto lastBitShift = ((valuesCount - 1) * 5) % 8;
 	auto lastValue = (lastByteIndex == encoded5bit.size() - 1)
 		? static_cast<uint16>(*reinterpret_cast<const uchar*>(bitsData + lastByteIndex))
-		: *reinterpret_cast<const uint16*>(bitsData + lastByteIndex);
+		: qFromUnaligned<uint16>(bitsData + lastByteIndex);
 	result[valuesCount - 1] = static_cast<char>((lastValue >> lastBitShift) & 0x1F);
 
 	return result;
@@ -1496,7 +1616,8 @@ QByteArray documentWaveformEncode5bit(const VoiceWaveform &waveform) {
 		auto byteIndex = (i * 5) / 8;
 		auto bitShift = (i * 5) % 8;
 		auto value = (static_cast<uint16>(waveform[i]) & 0x1F) << bitShift;
-		*reinterpret_cast<uint16*>(bitsData + byteIndex) |= value;
+		const auto previous = qFromUnaligned<uint16>(bitsData + byteIndex);
+		qToUnaligned(uint16(previous | value), bitsData + byteIndex);
 	}
 	result.resize(bytesCount);
 	return result;
@@ -1508,6 +1629,8 @@ const Core::FileLocation &DocumentData::location(bool check) const {
 		const auto that = const_cast<DocumentData*>(this);
 		if (location.inMediaCache()) {
 			that->setLoadedInMediaCacheLocation();
+		} else if (location.check()) {
+			that->setLocation(location);
 		} else {
 			that->_location = location;
 		}
@@ -1519,7 +1642,28 @@ void DocumentData::setLocation(const Core::FileLocation &loc) {
 	if (loc.inMediaCache()) {
 		setLoadedInMediaCacheLocation();
 	} else if (loc.check()) {
+		const auto changed = (_location != loc);
 		_location = loc;
+		const auto media = activeMediaView();
+		const auto retry = goodThumbnailNoData()
+			|| goodThumbnailGenerating()
+			|| goodThumbnailFailed();
+		if (changed && retry && (!media || media->bytes().isEmpty())) {
+			const auto removeCache = goodThumbnailGenerating()
+				|| goodThumbnailFailed();
+			invalidateGoodThumbnail(removeCache);
+			if (media) {
+				media->goodThumbnailSourceChanged();
+			}
+		} else if (changed
+			&& !goodThumbnailChecked()
+			&& !goodThumbnailRetryFailedCache()
+			&& (!media || media->bytes().isEmpty())) {
+			setGoodThumbnailRetryFailedCache(true);
+			if (media) {
+				media->goodThumbnailSourceChanged();
+			}
+		}
 	}
 }
 
@@ -1561,7 +1705,7 @@ bool DocumentData::saveFromDataChecked() {
 		return false;
 	}
 	file.close();
-	_location = Core::FileLocation(path);
+	setLocation(Core::FileLocation(path));
 	session().local().writeFileLocation(mediaKey(), _location);
 	return true;
 }
@@ -2022,10 +2166,15 @@ void DocumentData::setRemoteLocation(
 			if (_location.check()) {
 				session().local().writeFileLocation(mediaKey(), _location);
 			} else {
-				_location = session().local().readFileLocation(mediaKey());
-				if (_location.inMediaCache()) {
+				const auto location = session().local().readFileLocation(mediaKey());
+				if (location.inMediaCache()) {
 					setLoadedInMediaCacheLocation();
-				} else if (_location.isEmpty() && loadedInMediaCache()) {
+				} else if (location.check()) {
+					setLocation(location);
+				} else {
+					_location = location;
+				}
+				if (_location.isEmpty() && loadedInMediaCache()) {
 					session().local().writeFileLocation(
 						mediaKey(),
 						Core::FileLocation::InMediaCacheLocation());
@@ -2062,14 +2211,18 @@ void DocumentData::collectLocalData(not_null<DocumentData*> local) {
 	}
 
 	_owner->cache().copyIfEmpty(local->cacheKey(), cacheKey());
+	if (!local->_location.inMediaCache() && !local->_location.isEmpty()) {
+		if (local->_location.check()) {
+			setLocation(local->_location);
+		} else {
+			_location = local->_location;
+		}
+		session().local().writeFileLocation(mediaKey(), _location);
+	}
 	if (const auto localMedia = local->activeMediaView()) {
 		auto media = createMediaView();
 		media->collectLocalData(localMedia.get());
 		_owner->keepAlive(std::move(media));
-	}
-	if (!local->_location.inMediaCache() && !local->_location.isEmpty()) {
-		_location = local->_location;
-		session().local().writeFileLocation(mediaKey(), _location);
 	}
 }
 

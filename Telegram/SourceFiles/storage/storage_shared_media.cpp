@@ -70,7 +70,8 @@ void SharedMedia::add(SharedMediaAddExisting &&query) {
 		if (query.types.test(type)) {
 			peerIt->second[index].addExisting(
 				query.messageId,
-				query.noSkipRange);
+				query.noSkipRange,
+				query.incrementCount);
 		}
 	}
 }
@@ -91,29 +92,34 @@ void SharedMedia::add(SharedMediaAddSlice &&query) {
 }
 
 void SharedMedia::remove(SharedMediaRemoveOne &&query) {
-	const auto removeByIt = [&](const auto i) {
+	const auto removeByIt = [&](
+			const auto i,
+			SharedMediaTypesMask &matchedTypes) {
 		for (auto index = 0; index != kSharedMediaTypeCount; ++index) {
 			auto type = static_cast<SharedMediaType>(index);
-			if (query.types.test(type)) {
-				i->second[index].removeOne(query.messageId);
+			if (query.types.test(type)
+				&& i->second[index].removeOne(
+					query.messageId,
+					query.onlyMatched)) {
+				matchedTypes.set(type);
 			}
 		}
 	};
 	const auto peerIt = _lists.find({ query.peerId, MsgId(0) });
 	if (peerIt != end(_lists)) {
-		removeByIt(peerIt);
+		removeByIt(peerIt, query.matchedPeerWideTypes);
 	}
 	const auto topicIt = query.topicRootId
 		? _lists.find({ query.peerId, query.topicRootId })
 		: end(_lists);
 	if (topicIt != end(_lists)) {
-		removeByIt(topicIt);
+		removeByIt(topicIt, query.matchedTopicTypes);
 	}
 	const auto monoforumPeerIt = query.monoforumPeerId
 		? _lists.find({ query.peerId, MsgId(), query.monoforumPeerId })
 		: end(_lists);
 	if (monoforumPeerIt != end(_lists)) {
-		removeByIt(monoforumPeerIt);
+		removeByIt(monoforumPeerIt, query.matchedMonoforumTypes);
 	}
 	_oneRemoved.fire(std::move(query));
 }
@@ -154,6 +160,17 @@ void SharedMedia::invalidate(SharedMediaInvalidateBottom &&query) {
 
 void SharedMedia::unload(SharedMediaUnloadThread &&query) {
 	_lists.erase({ query.peerId, query.topicRootId, query.monoforumPeerId });
+}
+
+void SharedMedia::unload(SharedMediaUnloadAllTopics &&query) {
+	auto peerIt = _lists.lower_bound({ query.peerId, MsgId(0) });
+	while (peerIt != end(_lists) && peerIt->first.peerId == query.peerId) {
+		if (peerIt->first.topicRootId) {
+			peerIt = _lists.erase(peerIt);
+		} else {
+			++peerIt;
+		}
+	}
 }
 
 rpl::producer<SharedMediaResult> SharedMedia::query(SharedMediaQuery &&query) const {

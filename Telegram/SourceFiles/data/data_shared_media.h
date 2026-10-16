@@ -15,10 +15,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Main {
 class Session;
 } // namespace Main
+class PeerData;
 
 [[nodiscard]] std::optional<Storage::SharedMediaType> SharedMediaOverviewType(
 	Storage::SharedMediaType type);
 bool SharedMediaAllowSearch(Storage::SharedMediaType type);
+[[nodiscard]] bool SharedMediaThreadFilterSupported(
+	not_null<PeerData*> peer,
+	MsgId topicRootId,
+	Storage::SharedMediaType type);
+[[nodiscard]] Storage::SharedMediaKey SharedMediaLoadableKey(
+	not_null<PeerData*> peer,
+	Storage::SharedMediaKey key);
 
 rpl::producer<SparseIdsSlice> SharedMediaViewer(
 	not_null<Main::Session*> session,

@@ -26,6 +26,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/tabbed_panel.h"
 #include "chat_helpers/tabbed_selector.h"
 #include "editor/photo_editor_layer_widget.h"
+#include "editor/scene/scene.h"
+#include "editor/scene/scene_item_video.h"
 #include "editor/video/video_editor_layer.h"
 #include "history/history_drag_area.h"
 #include "history/view/controls/history_view_characters_limit.h"
@@ -52,6 +54,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/attach/attach_single_file_preview.h"
 #include "ui/chat/attach/attach_single_media_preview.h"
 #include "ui/grouped_layout.h"
+#include "ui/image/image_prepare.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
 #include "ui/controls/compose_ai_button_factory.h"
@@ -81,7 +84,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_media_player.h"
 #include "styles/style_menu_icons.h"
 
+#include <QtCore/QFile>
 #include <QtCore/QMimeData>
+
+#include <vector>
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
@@ -107,6 +113,64 @@ using Ui::SendFilesWay;
 
 [[nodiscard]] bool CanAddFiles(not_null<const QMimeData*> data) {
 	return data->hasImage() || CanAddUrls(Core::ReadMimeUrls(data));
+}
+
+using AnimatedSource = std::shared_ptr<Editor::ItemVideo::Source>;
+
+struct AnimatedSourceContent {
+	AnimatedSource source;
+	QByteArray content;
+};
+
+[[nodiscard]] std::vector<AnimatedSource> AnimatedSources(
+		const Ui::PreparedList &list) {
+	auto result = std::vector<AnimatedSource>();
+	for (const auto &file : list.files) {
+		const auto image = file.information
+			? std::get_if<Ui::PreparedFileInformation::Image>(
+				&file.information->media)
+			: nullptr;
+		if (!image || !image->modifications.paint) {
+			continue;
+		}
+		for (const auto &item : image->modifications.paint->items()) {
+			if (item->type() != Editor::ItemVideo::Type) {
+				continue;
+			}
+			const auto video = static_cast<Editor::ItemVideo*>(item.get());
+			const auto source = video->source();
+			if (source->path.isEmpty()
+				|| !source->content.isEmpty()
+				|| source->contentResolved) {
+				continue;
+			}
+			if (ranges::find(result, source) == result.end()) {
+				result.push_back(source);
+			}
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] std::vector<AnimatedSourceContent> ReadAnimatedSourceContents(
+		std::vector<AnimatedSource> sources) {
+	auto result = std::vector<AnimatedSourceContent>();
+	result.reserve(sources.size());
+	for (const auto &source : sources) {
+		auto content = QByteArray();
+		auto file = QFile(source->path);
+		const auto size = file.size();
+		if (size >= 0
+			&& size <= Images::kReadBytesLimit
+			&& file.open(QIODevice::ReadOnly)) {
+			auto loaded = file.read(Images::kReadBytesLimit + 1);
+			if (loaded.size() <= Images::kReadBytesLimit && file.atEnd()) {
+				content = std::move(loaded);
+			}
+		}
+		result.push_back({ source, std::move(content) });
+	}
+	return result;
 }
 
 void FileDialogCallback(
@@ -902,6 +966,7 @@ void SendFilesBox::prepare() {
 	setCloseByOutsideClick(false);
 
 	boxClosing() | rpl::on_next([=] {
+		_closing = true;
 		if (!_confirmed && !_textTaken && _cancelledCallback) {
 			_cancelledCallback();
 		}
@@ -1491,7 +1556,9 @@ void SendFilesBox::pushBlock(int from, int till) {
 			&_list.files[index],
 			st::sendMediaPreviewSize,
 			std::move(done),
-			PhotoSideLimit(true));
+			PhotoSideLimit(true),
+			QSize(),
+			true);
 	};
 	const auto replaceAttachment = [=, show = _show](int index) {
 		applyBlockChanges();
@@ -2688,7 +2755,39 @@ void SendFilesBox::send(
 				return;
 			}
 		}
-		Storage::ApplyModifications(_list, true);
+		const auto animated = (_limits & SendFilesAllow::Gifs)
+			|| (_limits & SendFilesAllow::Videos);
+		if (_prefetchingAnimatedContent) {
+			_confirmed = false;
+			return;
+		}
+		if (animated) {
+			if (auto sources = AnimatedSources(_list); !sources.empty()) {
+				_confirmed = false;
+				_prefetchingAnimatedContent = true;
+				const auto done = crl::guard(this, [=](
+						std::vector<AnimatedSourceContent> contents) {
+					_prefetchingAnimatedContent = false;
+					if (_closing) {
+						return;
+					}
+					for (auto &entry : contents) {
+						entry.source->content = std::move(entry.content);
+						entry.source->contentResolved = true;
+					}
+					send(options, ctrlShiftEnter);
+				});
+				crl::async([=, sources = std::move(sources)]() mutable {
+					auto contents = ReadAnimatedSourceContents(
+						std::move(sources));
+					crl::on_main([=, contents = std::move(contents)]() mutable {
+						done(std::move(contents));
+					});
+				});
+				return;
+			}
+		}
+		Storage::ApplyModifications(_list, animated);
 		saveSendWaySettings(_wayRemember && _wayRemember->checked());
 		options.invertCaption = _invertCaption;
 		options.price = hasPrice() ? _price.current() : 0;

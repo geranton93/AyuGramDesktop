@@ -11,12 +11,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QString>
 
+#include <memory>
 #include <vector>
 
 class History;
 class PhotoData;
 class DocumentData;
 struct FilePrepareResult;
+
+namespace MTP {
+class Error;
+} // namespace MTP
 
 namespace Data {
 struct InputVenue;
@@ -28,6 +33,32 @@ class Session;
 
 namespace Api {
 
+enum class SendResult {
+	Succeeded,
+	Failed,
+	Indeterminate,
+};
+
+[[nodiscard]] SendResult SendResultForError(const MTP::Error &error);
+
+class SendRequest final {
+public:
+	SendRequest(
+		int expectedResults,
+		FnMut<void(SendResult)> callback,
+		Fn<bool()> shouldCancel = nullptr);
+	~SendRequest();
+
+	void finishOne(SendResult result);
+	void registerCancellation(Fn<void()> cancellation);
+	void cancel();
+	[[nodiscard]] bool shouldCancel() const;
+
+private:
+	struct State;
+	std::shared_ptr<State> _state;
+};
+
 struct MessageToSend;
 struct SendAction;
 struct MusicSelectionItem {
@@ -38,7 +69,8 @@ struct MusicSelectionItem {
 void SendExistingDocument(
 	MessageToSend &&message,
 	not_null<DocumentData*> document,
-	std::optional<MsgId> localMessageId = std::nullopt);
+	std::optional<MsgId> localMessageId = std::nullopt,
+	std::shared_ptr<SendRequest> sendRequest = nullptr);
 
 void SendMusicSelection(
 	MessageToSend &&message,

@@ -30,6 +30,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "styles/style_menu_icons.h"
 
+#include <vector>
+
 namespace Dialogs::Stories {
 namespace {
 
@@ -42,11 +44,13 @@ public:
 	[[nodiscard]] Content next();
 
 private:
+	using Userpics = base::flat_map<
+		not_null<PeerData*>,
+		std::shared_ptr<Ui::DynamicImage>>;
+
 	const not_null<Data::Stories*> _data;
 	const Data::StorySourcesList _list;
-	base::flat_map<
-		not_null<PeerData*>,
-		std::shared_ptr<Ui::DynamicImage>> _userpics;
+	Userpics _userpics;
 
 };
 
@@ -59,6 +63,8 @@ Content State::next() {
 	const auto &sources = _data->sources(_list);
 	auto result = Content{ .total = int(sources.size()) };
 	result.elements.reserve(sources.size());
+	auto userpicEntries = std::vector<Userpics::value_type>();
+	userpicEntries.reserve(sources.size());
 	for (const auto &info : sources) {
 		const auto source = _data->source(info.id);
 		Assert(source != nullptr);
@@ -69,8 +75,8 @@ Content State::next() {
 			userpic = i->second;
 		} else {
 			userpic = Ui::MakeUserpicThumbnail(peer, true);
-			_userpics.emplace(peer, userpic);
 		}
+		userpicEntries.emplace_back(peer, userpic);
 		result.elements.push_back({
 			.id = uint64(peer->id.value),
 			.name = peer->shortName(),
@@ -81,6 +87,7 @@ Content State::next() {
 			.skipSmall = peer->isSelf() ? 1U : 0U,
 		});
 	}
+	_userpics = Userpics(begin(userpicEntries), end(userpicEntries));
 	return result;
 }
 

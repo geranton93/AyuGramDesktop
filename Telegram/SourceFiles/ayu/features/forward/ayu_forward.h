@@ -6,12 +6,18 @@
 // Copyright @Radolyn, 2026
 #pragma once
 
+#include "api/api_common.h"
 #include "history/history.h"
 #include "main/main_session.h"
 #include "base/weak_ptr.h"
 
 #include <atomic>
+#include <mutex>
 #include <optional>
+
+namespace Api {
+enum class ForwardMessagesResult;
+} // namespace Api
 
 namespace AyuForward {
 bool isForwarding(const Main::Session &session, const PeerId &id);
@@ -30,39 +36,61 @@ public:
 		Sending,
 		Finished
 	};
+	struct Progress {
+		int currentChunk = 0;
+		int totalMessages = 0;
+		int sentMessages = 0;
+	};
 
 	explicit ForwardState(
 		int totalChunks,
-		not_null<Main::Session*> session)
+		const base::weak_ptr<Main::Session> &session)
 	: totalChunks(totalChunks)
-	, owner(base::make_weak(session)) {
+	, owner(session) {
 	}
 
 	ForwardState(const ForwardState &other)
 	: totalChunks(other.totalChunks)
 	, owner(other.owner)
-	, currentChunk(other.currentChunk.load())
-	, totalMessages(other.totalMessages.load())
-	, sentMessages(other.sentMessages.load())
 	, state(other.state.load())
-	, stopRequested(other.stopRequested.load()) {
+	, stopRequested(other.stopRequested.load())
+	, _progress(other.progress()) {
 	}
 
-	void updateBottomBar(const Main::Session &session, const PeerId *peer, const State &st);
+	void updateBottomBar(const PeerId *peer, const State &st);
+	[[nodiscard]] Progress progress() const {
+		const auto lock = std::lock_guard(_progressMutex);
+		return _progress;
+	}
+	void setProgress(Progress progress) {
+		const auto lock = std::lock_guard(_progressMutex);
+		_progress = progress;
+	}
+	void setMessageProgress(int totalMessages, int sentMessages) {
+		const auto lock = std::lock_guard(_progressMutex);
+		_progress.totalMessages = totalMessages;
+		_progress.sentMessages = sentMessages;
+	}
+	void setSentMessages(int sentMessages) {
+		const auto lock = std::lock_guard(_progressMutex);
+		_progress.sentMessages = sentMessages;
+	}
+	void addSentMessages(int sentMessages) {
+		const auto lock = std::lock_guard(_progressMutex);
+		_progress.sentMessages += sentMessages;
+	}
 
-	// Written from a crl::async background thread (forwardMessages /
-	// intelligentForward) and read from the main thread (isForwarding,
-	// stateName, cancelForward) concurrently, so every field that crosses
-	// threads must be atomic. totalChunks is set once in the constructor
-	// and never mutated afterwards, so it doesn't need to be.
+	// Progress is read and written under one lock so the UI never combines
+	// counters from different chunks. State and cancellation remain atomic
+	// because they are queried independently across the main and worker threads.
 	const int totalChunks = 0;
 	base::weak_ptr<Main::Session> owner;
-	std::atomic<int> currentChunk = 0;
-	std::atomic<int> totalMessages = 0;
-	std::atomic<int> sentMessages = 0;
-
 	std::atomic<State> state = State::Preparing;
 	std::atomic<bool> stopRequested = false;
+
+private:
+	mutable std::mutex _progressMutex;
+	Progress _progress;
 
 };
 
@@ -73,7 +101,7 @@ struct ForwardTargetSnapshot {
 };
 
 [[nodiscard]] std::optional<ForwardTargetSnapshot> SnapshotForwardTarget(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const base::weak_ptr<History> &targetHistory);
 
 bool isAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items);
@@ -81,17 +109,21 @@ bool isAyuForwardNeeded(not_null<HistoryItem*> item);
 bool isFullAyuForwardNeeded(const std::vector<not_null<HistoryItem*>> &items);
 bool isFullAyuForwardNeeded(not_null<HistoryItem*> item);
 void intelligentForward(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const Api::SendAction &action,
 	const MessageIdsList &itemIds,
 	Data::ForwardOptions options,
-	base::weak_ptr<History> targetHistory);
-void forwardMessages(
-	not_null<Main::Session*> session,
+	base::weak_ptr<History> targetHistory,
+	Fn<void(Api::ForwardMessagesResult)> done = nullptr,
+	Fn<bool()> cancelled = nullptr);
+Api::ForwardMessagesResult forwardMessages(
+	const base::weak_ptr<Main::Session> &session,
 	const Api::SendAction &action,
 	bool forwardState,
 	const MessageIdsList &itemIds,
 	Data::ForwardOptions options,
-	base::weak_ptr<History> targetHistory);
+	base::weak_ptr<History> targetHistory,
+	bool trackProgress = true,
+	Fn<bool()> cancelled = nullptr);
 
 }

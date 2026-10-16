@@ -11,6 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_loader.h"
 #include "storage/cache/storage_cache_database.h"
 
+#include <QtCore/QtEndian>
+
+#include <utility>
+
 namespace Media {
 namespace Streaming {
 namespace {
@@ -33,7 +37,7 @@ struct ParsedCacheEntry {
 	std::optional<PartsMap> included;
 };
 
-bool IsContiguousSerialization(int serializedSize, int maxSliceSize) {
+bool IsContiguousSerialization(int serializedSize, int64 maxSliceSize) {
 	return !(serializedSize % kPartSize) || (serializedSize == maxSliceSize);
 }
 
@@ -55,7 +59,7 @@ bool ComputeIsGoodHeader(int64 size, const PartsMap &header) {
 }
 
 int SlicesCount(uint32 size) {
-	const auto result = (size + kInSlice - 1) / kInSlice;
+	const auto result = (uint64(size) + kInSlice - 1) / kInSlice;
 
 	Ensures(result < 0x1FFU);
 	return result;
@@ -63,7 +67,7 @@ int SlicesCount(uint32 size) {
 
 int MaxSliceSize(int sliceNumber, uint32 size) {
 	return !sliceNumber
-		? size
+		? int(std::min(size, uint32(kMaxOnlyInHeader)))
 		: (sliceNumber == SlicesCount(size))
 		? (size - (sliceNumber - 1) * kInSlice)
 		: kInSlice;
@@ -72,18 +76,17 @@ int MaxSliceSize(int sliceNumber, uint32 size) {
 bytes::const_span ParseComplexCachedMap(
 		PartsMap &result,
 		bytes::const_span data,
-		int maxSize) {
+		int64 maxSize) {
 	const auto takeInt = [&]() -> std::optional<uint32> {
 		if (data.size() < sizeof(uint32)) {
 			return std::nullopt;
 		}
-		const auto bytes = data.data();
-		const auto result = *reinterpret_cast<const uint32*>(bytes);
+		const auto result = qFromUnaligned<uint32>(data.data());
 		data = data.subspan(sizeof(uint32));
 		return result;
 	};
 	const auto takeBytes = [&](int count) {
-		if (count <= 0 || data.size() < count) {
+		if (count <= 0 || data.size() < uint32(count)) {
 			return bytes::const_span();
 		}
 		const auto result = data.subspan(0, count);
@@ -95,18 +98,30 @@ bytes::const_span ParseComplexCachedMap(
 		return {};
 	}
 	const auto count = *maybeCount;
-	if (!count || count > (kMaxOnlyInHeader / kPartSize)) {
+	if (!count || count > uint32(kMaxOnlyInHeader / kPartSize)) {
 		return data;
 	}
-	for (auto i = 0; i != count; ++i) {
-		const auto offset = takeInt().value_or(0);
-		const auto size = takeInt().value_or(0);
-		const auto bytes = takeBytes(size);
-		if (offset >= maxSize
+	for (auto i = uint32(); i != count; ++i) {
+		const auto maybeOffset = takeInt();
+		const auto maybeSize = takeInt();
+		if (!maybeOffset || !maybeSize) {
+			return {};
+		}
+		const auto offset = *maybeOffset;
+		const auto size = *maybeSize;
+		const auto end = uint64(offset) + size;
+		if ((maxSize <= 0)
+			|| (uint64(offset) >= uint64(maxSize))
+			|| (offset % kPartSize)
 			|| !size
-			|| size > maxSize
-			|| offset + size > maxSize
-			|| bytes.size() != size) {
+			|| (size > uint32(kPartSize))
+			|| (end > uint64(maxSize))
+			|| ((size != uint32(kPartSize))
+				&& (end != uint64(maxSize)))) {
+			return {};
+		}
+		const auto bytes = takeBytes(int(size));
+		if (bytes.size() != size) {
 			return {};
 		}
 		result.try_emplace(
@@ -120,9 +135,58 @@ bytes::const_span ParseComplexCachedMap(
 bytes::const_span ParseCachedMap(
 		PartsMap &result,
 		bytes::const_span data,
-		int maxSize) {
+		int64 maxSize,
+		bool allowIncluded = false) {
 	const auto size = int(data.size());
 	if (IsContiguousSerialization(size, maxSize)) {
+		if (data.size() >= sizeof(uint32)) {
+			auto complex = PartsMap();
+			const auto remaining = ParseComplexCachedMap(
+				complex,
+				data,
+				maxSize);
+			const auto count = qFromUnaligned<uint32>(data.data());
+			const auto validComplexTail = [&] {
+				if (remaining.size() < sizeof(uint32)) {
+					return false;
+				}
+				auto included = PartsMap();
+				const auto tail = ParseComplexCachedMap(
+					included,
+					remaining,
+					kPartsInSlice * kPartSize);
+				const auto includedCount = qFromUnaligned<uint32>(
+					remaining.data());
+				return includedCount
+					&& includedCount <= uint32(kPartsInSlice)
+					&& included.size() == includedCount
+					&& tail.empty();
+			};
+			const auto validTail = [&] {
+				if (remaining.empty()) {
+					return true;
+				}
+				if (!allowIncluded) {
+					return false;
+				}
+				return ((uint64(remaining.size())
+					<= uint64(kPartsInSlice * kPartSize))
+					&& !(remaining.size() % kPartSize))
+					|| validComplexTail();
+			};
+			if (count
+				&& count <= uint32(kMaxOnlyInHeader / kPartSize)
+				&& complex.size() == count
+				&& validTail()) {
+				if (size <= maxSize && !allowIncluded) {
+					return {};
+				}
+				for (auto &[offset, part] : complex) {
+					result.try_emplace(offset, std::move(part));
+				}
+				return remaining;
+			}
+		}
 		if (size > maxSize) {
 			return {};
 		}
@@ -145,10 +209,14 @@ ParsedCacheEntry ParseCacheEntry(
 		int sliceNumber,
 		int64 size) {
 	auto result = ParsedCacheEntry();
+	const auto maxSize = sliceNumber
+		? int64(MaxSliceSize(sliceNumber, size))
+		: size;
 	const auto remaining = ParseCachedMap(
 		result.parts,
 		data,
-		MaxSliceSize(sliceNumber, size));
+		maxSize,
+		(!sliceNumber && !IsFullInHeader(size)));
 	if (!sliceNumber && ComputeIsGoodHeader(size, result.parts)) {
 		result.included = PartsMap();
 		ParseCachedMap(*result.included, remaining, MaxSliceSize(1, size));
@@ -230,7 +298,7 @@ struct Reader::CacheHelper {
 	QMutex mutex;
 	base::flat_map<uint32, PartsMap> results;
 	std::vector<int> sizes;
-	std::atomic<crl::semaphore*> waiting = nullptr;
+	crl::semaphore *waiting = nullptr;
 };
 
 Reader::CacheHelper::CacheHelper(Storage::Cache::Key baseKey)
@@ -887,7 +955,11 @@ Reader::Reader(
 		}
 		if (_attachedDownloader) {
 			const auto weak = base::make_weak(this);
-			_partsForDownloader.fire_copy(part);
+			if (part.valid(size())) {
+				_partsForDownloader.fire_copy(part);
+			} else {
+				_partsForDownloader.fire({ LoadedPart::kFailedOffset });
+			}
 			if (!weak) {
 				// Reader can be destroyed synchronously, if this part
 				// finished the streamed file downloader owning it.
@@ -897,8 +969,16 @@ Reader::Reader(
 		if (_streamingActive) {
 			_loadedParts.emplace(std::move(part));
 		}
-		if (const auto waiting = _waiting.load(std::memory_order_acquire)) {
-			_waiting.store(nullptr, std::memory_order_release);
+		if (_cacheHelper) {
+			QMutexLocker lock(&_cacheHelper->mutex);
+			if (const auto waiting = std::exchange(
+					_cacheHelper->waiting,
+					nullptr)) {
+				waiting->release();
+			}
+		} else if (const auto waiting = _waiting.exchange(
+				nullptr,
+				std::memory_order_acq_rel)) {
 			waiting->release();
 		}
 	}, _lifetime);
@@ -926,9 +1006,24 @@ void Reader::startSleep(not_null<crl::semaphore*> wake) {
 }
 
 void Reader::wakeFromSleep() {
-	if (const auto sleeping = _sleeping.load(std::memory_order_acquire)) {
-		_sleeping.store(nullptr, std::memory_order_release);
+	if (const auto sleeping = _sleeping.exchange(
+			nullptr,
+			std::memory_order_acq_rel)) {
 		sleeping->release();
+	} else if (_downloaderCancellationPending.load(
+				std::memory_order_acquire)) {
+		if (_cacheHelper) {
+			QMutexLocker lock(&_cacheHelper->mutex);
+			if (const auto waiting = std::exchange(
+					_cacheHelper->waiting,
+					nullptr)) {
+				waiting->release();
+			}
+		} else if (const auto waiting = _waiting.exchange(
+				nullptr,
+				std::memory_order_acq_rel)) {
+			waiting->release();
+		}
 	}
 }
 
@@ -964,15 +1059,24 @@ void Reader::stopStreaming(bool stillActive) {
 
 	_stopStreamingAsync = false;
 	_waiting.store(nullptr, std::memory_order_release);
-	if (_cacheHelper && _cacheHelper->waiting != nullptr) {
+	if (_cacheHelper) {
 		QMutexLocker lock(&_cacheHelper->mutex);
-		_cacheHelper->waiting.store(nullptr, std::memory_order_release);
+		_cacheHelper->waiting = nullptr;
 	}
 	if (!stillActive) {
 		_streamingActive = false;
-		refreshLoaderPriority();
-		_loadingOffsets.clear();
+		const auto fileSize = size();
+		Expects(fileSize >= 0
+			&& fileSize <= std::numeric_limits<uint32>::max());
+		const auto till = (fileSize > 0)
+			? uint32(fileSize)
+			: std::numeric_limits<uint32>::max();
+		cancelLoadInRange(
+			0,
+			till);
 		processDownloaderRequests();
+		refreshLoaderPriority();
+		_loader->tryRemoveFromQueue();
 	}
 }
 
@@ -992,15 +1096,30 @@ void Reader::loadForDownloader(
 		_attachedDownloader = downloader;
 		_loader->attachDownloader(downloader);
 	}
-	_downloaderOffsetRequests.emplace(uint32(offset));
+	_downloaderOffsetRequests.emplace(DownloaderOffsetRequest{
+		.type = DownloaderOffsetRequest::Type::Load,
+		.generation = _downloaderGeneration,
+		.offset = uint32(offset),
+	});
+	_downloaderCancellationPending.store(
+		true,
+		std::memory_order_release);
 	// Will be processed in continueDownloaderFromMainThread()
 	// from StreamedFileDownloader::requestParts().
 }
 
-void Reader::doneForDownloader(int64 offset) {
+void Reader::doneForDownloader(
+		not_null<Storage::StreamedFileDownloader*> downloader,
+		int64 offset) {
 	Expects(offset >= 0 && offset <= std::numeric_limits<uint32>::max());
 
-	_downloaderOffsetAcks.emplace(offset);
+	if (_attachedDownloader == downloader) {
+		_downloaderOffsetRequests.emplace(DownloaderOffsetRequest{
+			.type = DownloaderOffsetRequest::Type::Acknowledge,
+			.generation = _downloaderGeneration,
+			.offset = uint32(offset),
+		});
+	}
 	// Will be processed in continueDownloaderFromMainThread()
 	// from StreamedFileDownloader::requestParts().
 }
@@ -1008,15 +1127,36 @@ void Reader::doneForDownloader(int64 offset) {
 void Reader::cancelForDownloader(
 		not_null<Storage::StreamedFileDownloader*> downloader) {
 	if (_attachedDownloader == downloader) {
-		_downloaderOffsetRequests.take();
-		_attachedDownloader = nullptr;
-		_loader->clearAttachedDownloader();
+		{
+			const auto lock = std::lock_guard(_downloaderDispatchMutex);
+			_attachedDownloader = nullptr;
+			const auto generation = ++_downloaderGeneration;
+			_downloaderOffsetRequests.emplace(DownloaderOffsetRequest{
+				.type = DownloaderOffsetRequest::Type::Cancel,
+				.generation = generation,
+			});
+			_loader->clearAttachedDownloader();
+			_downloaderCancellationPending.store(
+				true,
+				std::memory_order_release);
+		}
+		continueDownloaderFromMainThread();
 	}
 }
 
 void Reader::enqueueDownloaderOffsets() {
-	auto offsets = _downloaderOffsetRequests.take();
-	if (!empty(offsets)) {
+	auto requests = _downloaderOffsetRequests.take();
+	const auto enqueue = [&](auto from, auto till) {
+		auto offsets = std::vector<uint32>();
+		for (auto i = from; i != till; ++i) {
+			if (i->type == DownloaderOffsetRequest::Type::Load
+				&& i->generation == _activeDownloaderGeneration) {
+				offsets.push_back(i->offset);
+			}
+		}
+		if (empty(offsets)) {
+			return;
+		}
 		if (!empty(_offsetsForDownloader)) {
 			_offsetsForDownloader.insert(
 				end(_offsetsForDownloader),
@@ -1024,10 +1164,45 @@ void Reader::enqueueDownloaderOffsets() {
 				std::make_move_iterator(end(offsets)));
 			checkForDownloaderChange(offsets.size() + 1);
 		} else {
-			_offsetsForDownloader = std::move(offsets);
+			_offsetsForDownloader.insert(
+				end(_offsetsForDownloader),
+				std::make_move_iterator(begin(offsets)),
+				std::make_move_iterator(end(offsets)));
 			checkForDownloaderChange(offsets.size());
 		}
+	};
+	auto from = begin(requests);
+	const auto till = end(requests);
+	for (auto i = from; i != till; ++i) {
+		if (i->type == DownloaderOffsetRequest::Type::Load) {
+			continue;
+		}
+		enqueue(from, i);
+		if (i->type == DownloaderOffsetRequest::Type::Acknowledge) {
+			if (i->generation == _activeDownloaderGeneration) {
+				_downloaderOffsetsRequested.remove(i->offset);
+				const auto request = ranges::find(
+					_offsetsForDownloader,
+					i->offset);
+				if (request != end(_offsetsForDownloader)) {
+					_offsetsForDownloader.erase(request);
+				}
+			}
+		} else {
+			for (const auto offset : _downloaderOffsetsRequested) {
+				if (!_loadingOffsets.contains(offset)) {
+					_loader->cancel(offset);
+				}
+			}
+			_offsetsForDownloader.clear();
+			_downloaderOffsetsRequested.clear();
+			_downloaderReadCache.clear();
+			_activeDownloaderGeneration = i->generation;
+			_loader->tryRemoveFromQueue();
+		}
+		from = i + 1;
 	}
+	enqueue(from, till);
 }
 
 void Reader::checkForDownloaderChange(int checkItemsCount) {
@@ -1045,7 +1220,6 @@ void Reader::checkForDownloaderChange(int checkItemsCount) {
 			begin(_offsetsForDownloader),
 			changed + 1);
 		_downloaderReadCache.clear();
-		_downloaderOffsetAcks.take();
 	}
 }
 
@@ -1084,14 +1258,22 @@ void Reader::checkForDownloaderReadyOffsets() {
 }
 
 void Reader::processDownloaderRequests() {
+	_downloaderCancellationPending.store(false, std::memory_order_release);
 	processCacheResults();
+	processDownloaderOffsets();
+}
+
+void Reader::processDownloaderOffsets() {
 	enqueueDownloaderOffsets();
 	checkForDownloaderReadyOffsets();
-	pruneDoneDownloaderRequests();
-	if (!empty(_offsetsForDownloader)) {
-		pruneDownloaderCache(_offsetsForDownloader.front());
-		sendDownloaderRequests();
+	if (_downloaderCancellationPending.load(std::memory_order_acquire)) {
+		processPendingDownloaderCancellationFromStreamingThread();
 	}
+	if (empty(_offsetsForDownloader)) {
+		return;
+	}
+	pruneDownloaderCache(_offsetsForDownloader.front());
+	sendDownloaderRequests();
 }
 
 void Reader::pruneDownloaderCache(uint32 minimalOffset) {
@@ -1104,24 +1286,33 @@ void Reader::pruneDownloaderCache(uint32 minimalOffset) {
 	_downloaderReadCache.erase(_downloaderReadCache.begin(), removeTill);
 }
 
-void Reader::pruneDoneDownloaderRequests() {
-	for (const auto done : _downloaderOffsetAcks.take()) {
-		_downloaderOffsetsRequested.remove(done);
-		const auto i = ranges::find(_offsetsForDownloader, done);
-		if (i != end(_offsetsForDownloader)) {
-			_offsetsForDownloader.erase(i);
-		}
-	}
-}
-
 void Reader::sendDownloaderRequests() {
-	auto &&offsets = ranges::views::all(
-		_offsetsForDownloader
-	) | ranges::views::take(kDownloaderRequestsLimit);
-	for (const auto offset : offsets) {
-		if ((!_cacheHelper || !downloaderWaitForCachedSlice(offset))
-			&& _downloaderOffsetsRequested.emplace(offset).second) {
-			_loader->load(offset);
+	auto count = 0;
+	for (const auto offset : _offsetsForDownloader) {
+		if (count == kDownloaderRequestsLimit) {
+			break;
+		}
+		++count;
+		if (_downloaderCancellationPending.load(std::memory_order_acquire)) {
+			processPendingDownloaderCancellationFromStreamingThread();
+			return;
+		}
+		if (_cacheHelper && downloaderWaitForCachedSlice(offset)) {
+			continue;
+		}
+		auto cancellationPending = false;
+		{
+			const auto lock = std::lock_guard(_downloaderDispatchMutex);
+			cancellationPending = _downloaderCancellationPending.load(
+				std::memory_order_acquire);
+			if (!cancellationPending
+				&& _downloaderOffsetsRequested.emplace(offset).second) {
+				_loader->load(offset);
+			}
+		}
+		if (cancellationPending) {
+			processPendingDownloaderCancellationFromStreamingThread();
+			return;
 		}
 	}
 }
@@ -1157,6 +1348,15 @@ void Reader::continueDownloaderFromMainThread() {
 		wakeFromSleep();
 	} else {
 		processDownloaderRequests();
+	}
+}
+
+void Reader::processPendingDownloaderCancellationFromStreamingThread() {
+	Expects(_streamingActive);
+	if (_downloaderCancellationPending.exchange(
+			false,
+			std::memory_order_acq_rel)) {
+		processDownloaderOffsets();
 	}
 }
 
@@ -1220,8 +1420,9 @@ void Reader::readFromCache(int sliceNumber) {
 					strong->results.emplace(1, std::move(*entry.included));
 				}
 				strong->sizes = std::move(sizes);
-				if (const auto waiting = strong->waiting.load()) {
-					strong->waiting.store(nullptr, std::memory_order_release);
+				if (const auto waiting = std::exchange(
+						strong->waiting,
+						nullptr)) {
 					waiting->release();
 				} else {
 					crl::on_main(weak, [=] {
@@ -1285,16 +1486,22 @@ Reader::FillState Reader::fill(
 	Expects(offset + buffer.size() <= size());
 	Expects(offset >= 0 && size() <= std::numeric_limits<uint32>::max());
 
+	auto waitingWasPublished = false;
 	const auto startWaiting = [&] {
+		waitingWasPublished = true;
 		if (_cacheHelper) {
+			QMutexLocker lock(&_cacheHelper->mutex);
 			_cacheHelper->waiting = notify.get();
+		} else {
+			_waiting.store(notify.get(), std::memory_order_release);
 		}
-		_waiting.store(notify.get(), std::memory_order_release);
 	};
 	const auto clearWaiting = [&] {
-		_waiting.store(nullptr, std::memory_order_release);
 		if (_cacheHelper) {
-			_cacheHelper->waiting.store(nullptr, std::memory_order_release);
+			QMutexLocker lock(&_cacheHelper->mutex);
+			_cacheHelper->waiting = nullptr;
+		} else {
+			_waiting.store(nullptr, std::memory_order_release);
 		}
 	};
 	const auto done = [&] {
@@ -1304,14 +1511,28 @@ Reader::FillState Reader::fill(
 		return FillState::Success;
 	};
 	const auto failed = [&] {
-		clearWaiting();
-		notify->release();
+		if (_cacheHelper) {
+			QMutexLocker lock(&_cacheHelper->mutex);
+			const auto waiting = std::exchange(
+				_cacheHelper->waiting,
+				nullptr);
+			if (waiting || !waitingWasPublished) {
+				notify->release();
+			}
+		} else {
+			const auto waiting = _waiting.exchange(
+				nullptr,
+				std::memory_order_acq_rel);
+			if (waiting || !waitingWasPublished) {
+				notify->release();
+			}
+		}
 		return FillState::Failed;
 	};
 
 	checkForSomethingMoreReceived();
 	if (_streamingError) {
-		return FillState::Failed;
+		return failed();
 	}
 
 	auto lastResult = FillState();
@@ -1321,6 +1542,7 @@ Reader::FillState Reader::fill(
 			return done();
 		}
 		startWaiting();
+		processPendingDownloaderCancellationFromStreamingThread();
 	} while (checkForSomethingMoreReceived());
 
 	return _streamingError ? failed() : lastResult;

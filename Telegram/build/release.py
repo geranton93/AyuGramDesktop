@@ -241,7 +241,7 @@ appendFile(
   'td-setup-mac-' + version + artifact_suffix + '.dmg',
   'mac',
   'application/octet-stream',
-  'macOS 10.13+: Installer')
+  'macOS 13+: Installer')
 appendFile(
   'td-setup-linux-x64-' + version + artifact_suffix + '.tar.xz',
   'linux-x64',

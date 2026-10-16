@@ -160,7 +160,7 @@ void StreamedFileDownloader::savePart(const LoadedPart &part) {
 	if (!writeResultPart(offset, bytes::make_span(part.bytes))) {
 		return;
 	}
-	_reader->doneForDownloader(offset);
+	_reader->doneForDownloader(this, offset);
 	if (_partsSaved == _partsCount) {
 		finalizeResult();
 	} else {

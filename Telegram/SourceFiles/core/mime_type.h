@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <QtCore/QByteArray>
 #include <QtCore/QFileInfo>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -65,6 +66,14 @@ struct MimeImageData {
 		return !empty();
 	}
 };
+struct MimeImageSource {
+	QImage image;
+	QByteArray content;
+	bool preferContent = false;
+};
+[[nodiscard]] MimeImageSource CopyMimeImageSource(
+	not_null<const QMimeData*> data);
+[[nodiscard]] MimeImageData ReadMimeImage(MimeImageSource source);
 [[nodiscard]] MimeImageData ReadMimeImage(not_null<const QMimeData*> data);
 [[nodiscard]] QString ReadMimeText(not_null<const QMimeData*> data);
 [[nodiscard]] QList<QUrl> ReadMimeUrls(not_null<const QMimeData*> data);

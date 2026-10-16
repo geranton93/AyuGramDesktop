@@ -94,7 +94,18 @@ not_null<FileDelegate*> Player::delegate() {
 }
 
 void Player::checkNextFrameRender() {
-	Expects(_nextFrameTime != kTimeUnknown);
+	Expects(_video != nullptr);
+	if (_paused) {
+		_renderFrameTimer.cancel();
+		return;
+	}
+
+	_nextFrameTime = _video->nextFrameDisplayTime();
+	if (_nextFrameTime == kTimeUnknown
+		|| _nextFrameTime == kFrameDisplayTimeAlreadyDone) {
+		_renderFrameTimer.cancel();
+		return;
+	}
 
 	const auto now = crl::now();
 	if (now < _nextFrameTime) {
@@ -111,10 +122,13 @@ void Player::checkNextFrameAvailability() {
 	Expects(_video != nullptr);
 
 	_nextFrameTime = _video->nextFrameDisplayTime();
-	Assert(_nextFrameTime != kFrameDisplayTimeAlreadyDone);
-	if (_nextFrameTime != kTimeUnknown) {
-		checkNextFrameRender();
+	if (_nextFrameTime == kTimeUnknown
+		|| _nextFrameTime == kFrameDisplayTimeAlreadyDone) {
+		_renderFrameTimer.cancel();
+		return;
 	}
+	_renderFrameTimer.cancel();
+	checkNextFrameRender();
 }
 
 void Player::renderFrame(crl::time now) {
@@ -123,6 +137,10 @@ void Player::renderFrame(crl::time now) {
 	Expects(_nextFrameTime != kFrameDisplayTimeAlreadyDone);
 
 	const auto position = _video->markFrameDisplayed(now);
+	if (position == kTimeUnknown) {
+		checkNextFrameAvailability();
+		return;
+	}
 	if (_options.waitForMarkAsShown) {
 		_currentFrameTime = _nextFrameTime;
 		_nextFrameTime = kFrameDisplayTimeAlreadyDone;
@@ -658,6 +676,7 @@ void Player::updatePausedState() {
 		return;
 	}
 	if (_paused) {
+		_renderFrameTimer.cancel();
 		_pausedTime = crl::now();
 		//if (_pausedByWaitingForData
 		//	&& _pausedTime - _startedTime > kLoadFullIfStuckAfterPlayback) {
@@ -749,7 +768,7 @@ void Player::start() {
 	if (guard && _video) {
 		_video->checkNextFrame(
 		) | rpl::on_next_done([=] {
-			checkVideoStep();
+			checkNextFrameAvailability();
 		}, [=] {
 			Assert(_stage == Stage::Started);
 
@@ -855,6 +874,7 @@ void Player::setSpeed(float64 speed) {
 				_audio->setSpeed(speed);
 			}
 			if (_video) {
+				_renderFrameTimer.cancel();
 				_video->setSpeed(speed);
 			}
 		}

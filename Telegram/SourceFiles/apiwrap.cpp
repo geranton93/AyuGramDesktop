@@ -48,6 +48,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/components/welcome_messages.h"
 #include "data/notify/data_notify_settings.h"
 #include "data/data_changes.h"
+#include "data/data_chat_participant_status.h"
 #include "data/data_drafts.h"
 #include "data/data_media_types.h"
 #include "data/data_web_page.h"
@@ -113,6 +114,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_worker.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "ayu/features/forward/ayu_forward.h"
+
+#include <atomic>
 
 
 namespace {
@@ -189,6 +192,199 @@ void ShowChannelsLimitBox(not_null<PeerData*> peer) {
 		: minutes
 		? u"%1m%2s"_q.arg(minutes).arg(seconds % 60)
 		: QString::number(seconds);
+}
+
+class ForwardMessagesCompletion final {
+public:
+	explicit ForwardMessagesCompletion(
+		FnMut<void(Api::ForwardMessagesResult)> callback,
+		FnMut<void()> legacySuccessCallback)
+	: _callback(std::move(callback))
+	, _legacySuccessCallback(std::move(legacySuccessCallback)) {
+	}
+
+	void finish(Api::ForwardMessagesResult result) {
+		if (_finished.exchange(true)) {
+			return;
+		}
+		if (_callback) {
+			_callback(result);
+		}
+		if (result == Api::ForwardMessagesResult::Succeeded
+			&& _legacySuccessCallback) {
+			_legacySuccessCallback();
+		}
+	}
+
+private:
+	std::atomic<bool> _finished = false;
+	FnMut<void(Api::ForwardMessagesResult)> _callback;
+	FnMut<void()> _legacySuccessCallback;
+
+};
+
+class SendMessageCompletion final {
+public:
+	explicit SendMessageCompletion(
+			FnMut<void(Api::SendResult)> callback,
+			Fn<bool()> shouldCancel)
+	: _callback(std::move(callback))
+	, _shouldCancel(std::move(shouldCancel)) {
+	}
+
+	void finish(Api::SendResult result) {
+		if (_finished) {
+			return;
+		}
+		_finished = true;
+		if (_callback) {
+			_callback(result);
+		}
+	}
+
+	void requestStarted() {
+		++_pending;
+		_hadRequests = true;
+	}
+
+	void requestFinished(Api::SendResult result) {
+		Expects(_pending > 0);
+		_succeeded = _succeeded
+			|| (result == Api::SendResult::Succeeded);
+		_failed = _failed || (result == Api::SendResult::Failed);
+		_indeterminate = _indeterminate
+			|| (result == Api::SendResult::Indeterminate);
+		--_pending;
+		finishIfReady();
+	}
+
+	void dispatchFinished(bool interrupted) {
+		_dispatchFinished = true;
+		_dispatchInterrupted = interrupted;
+		finishIfReady();
+	}
+
+private:
+	void finishIfReady() {
+		if (_finished || !_dispatchFinished || _pending) {
+			return;
+		}
+		const auto interrupted = _dispatchInterrupted
+			|| (_shouldCancel && _shouldCancel());
+		finish(interrupted
+			|| !_hadRequests
+			|| _indeterminate
+			|| (_failed && _succeeded)
+			? Api::SendResult::Indeterminate
+			: _failed
+			? Api::SendResult::Failed
+			: Api::SendResult::Succeeded);
+	}
+
+	FnMut<void(Api::SendResult)> _callback;
+	int _pending = 0;
+	bool _dispatchFinished = false;
+	bool _dispatchInterrupted = false;
+	bool _hadRequests = false;
+	bool _succeeded = false;
+	bool _failed = false;
+	bool _indeterminate = false;
+	bool _finished = false;
+	Fn<bool()> _shouldCancel;
+
+};
+
+class ForwardMessagesRequests final {
+public:
+	explicit ForwardMessagesRequests(
+			std::shared_ptr<ForwardMessagesCompletion> completion,
+			Fn<void(Api::SendResult, int)> requestResultCallback,
+			FnMut<void(Fn<void()>)> requestCancellationCallback,
+			Fn<bool()> shouldCancel)
+	: _completion(std::move(completion))
+	, _requestResultCallback(std::move(requestResultCallback))
+	, _requestCancellationCallback(
+		std::move(requestCancellationCallback))
+	, _shouldCancel(std::move(shouldCancel)) {
+	}
+
+	void requestStarted() {
+		++_pending;
+		_hadRequests = true;
+	}
+
+	void requestFinished(Api::SendResult result, int messageCount) {
+		Expects(_pending > 0);
+		if (_requestResultCallback) {
+			_requestResultCallback(result, messageCount);
+		}
+		_succeeded = _succeeded
+			|| (result == Api::SendResult::Succeeded);
+		_failed = _failed || (result == Api::SendResult::Failed);
+		_indeterminate = _indeterminate
+			|| (result == Api::SendResult::Indeterminate);
+		--_pending;
+		finishIfReady();
+	}
+
+	void dispatchFinished(bool interrupted) {
+		_dispatchFinished = true;
+		_interrupted = interrupted;
+		finishIfReady();
+	}
+
+	void registerRequestCancellation(Fn<void()> cancel) {
+		if (_requestCancellationCallback) {
+			_requestCancellationCallback(std::move(cancel));
+		}
+	}
+
+private:
+	void finishIfReady() {
+		if (!_dispatchFinished || _pending) {
+			return;
+		}
+		const auto interrupted = _interrupted
+			|| (_shouldCancel && _shouldCancel());
+		const auto result = (interrupted || !_hadRequests)
+			? Api::ForwardMessagesResult::Indeterminate
+			: (_indeterminate || (_failed && _succeeded))
+			? Api::ForwardMessagesResult::Indeterminate
+			: _failed
+			? Api::ForwardMessagesResult::Failed
+			: Api::ForwardMessagesResult::Succeeded;
+		_requestCancellationCallback = FnMut<void(Fn<void()>)>();
+		_completion->finish(result);
+	}
+
+	std::shared_ptr<ForwardMessagesCompletion> _completion;
+	Fn<void(Api::SendResult, int)> _requestResultCallback;
+	FnMut<void(Fn<void()>)> _requestCancellationCallback;
+	Fn<bool()> _shouldCancel;
+	int _pending = 0;
+	bool _dispatchFinished = false;
+	bool _hadRequests = false;
+	bool _succeeded = false;
+	bool _failed = false;
+	bool _indeterminate = false;
+	bool _interrupted = false;
+
+};
+
+void FinishForwardMessagesOnMain(
+		const std::shared_ptr<ForwardMessagesCompletion> &completion,
+		Api::ForwardMessagesResult result,
+		Fn<bool()> shouldCancel = nullptr) {
+	if (!completion) {
+		return;
+	}
+	crl::on_main([completion, result, shouldCancel = std::move(shouldCancel)] {
+		const auto terminal = shouldCancel && shouldCancel()
+			&& result == Api::ForwardMessagesResult::Succeeded
+			? Api::ForwardMessagesResult::Indeterminate
+			: result;
+		completion->finish(terminal);
+	});
 }
 
 } // namespace
@@ -3750,15 +3946,67 @@ void ApiWrap::requestSharedMedia(
 	_sharedMediaRequests.emplace(key);
 }
 
+bool ApiWrap::requestPinnedMessagesIfNeeded(
+		not_null<PeerData*> peer,
+		MsgId messageId,
+		MsgId topicRootId,
+		PeerId monoforumPeerId) {
+	if (!IsServerMsgId(messageId) || !peer->isLoaded()) {
+		return false;
+	}
+	const auto requestOne = [&](MsgId topic, PeerId mono) {
+		const auto snapshot = _session->storage().snapshot(
+			Storage::SharedMediaQuery(
+				Storage::SharedMediaKey(
+					peer->id,
+					topic,
+					mono,
+					SharedMediaType::Pinned,
+					messageId),
+				0,
+			0));
+		if (snapshot.messageIds.contains(messageId)) {
+			return false;
+		} else if (snapshot.messageIds.empty()
+			&& (!snapshot.count || !*snapshot.count)) {
+			return false;
+		}
+		requestSharedMedia(
+			peer,
+			topic,
+			mono,
+			SharedMediaType::Pinned,
+			messageId,
+			SliceType::Around);
+		return true;
+	};
+	auto requested = requestOne(MsgId(0), PeerId(0));
+	if (topicRootId) {
+		if (const auto forum = peer->forum();
+			forum && !forum->topicDeleted(topicRootId)) {
+			requested = requestOne(topicRootId, PeerId(0)) || requested;
+		}
+	}
+	if (monoforumPeerId
+		&& peer->monoforum()
+		&& peer->monoforumSublistFor(monoforumPeerId)) {
+		requested = requestOne(MsgId(0), monoforumPeerId) || requested;
+	}
+	return requested;
+}
+
 void ApiWrap::sharedMediaDone(
 		not_null<PeerData*> peer,
 		MsgId topicRootId,
 		PeerId monoforumPeerId,
 		SharedMediaType type,
 		Api::SearchResult &&parsed) {
-	const auto topic = peer->forumTopicFor(topicRootId);
+	const auto forum = peer->forum();
+	const auto topic = forum ? forum->topicFor(topicRootId) : nullptr;
 	const auto sublist = peer->monoforumSublistFor(monoforumPeerId);
-	if ((topicRootId && !topic) || (monoforumPeerId && !sublist)) {
+	if ((topicRootId
+			&& (!forum || forum->topicDeleted(topicRootId)))
+		|| (monoforumPeerId && !sublist)) {
 		return;
 	}
 	const auto hasMessages = !parsed.messageIds.empty();
@@ -3868,74 +4116,261 @@ void ApiWrap::forwardMessages(
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,
 		FnMut<void()> &&successCallback) {
-	Expects(!draft.items.empty());
+	forwardMessagesInternal(
+		std::move(draft),
+		std::move(action),
+		nullptr,
+		std::move(successCallback),
+		nullptr,
+		nullptr,
+		nullptr);
+}
+
+void ApiWrap::forwardMessagesWithResult(
+		Data::ResolvedForwardDraft &&draft,
+		SendAction action,
+		FnMut<void(Api::ForwardMessagesResult)> &&callback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback,
+		Fn<bool()> shouldCancel,
+		Fn<void(Api::SendResult, int)> requestResultCallback) {
+	forwardMessagesInternal(
+		std::move(draft),
+		std::move(action),
+		std::move(callback),
+		nullptr,
+		std::move(requestCancellationCallback),
+		std::move(shouldCancel),
+		std::move(requestResultCallback));
+}
+
+void ApiWrap::forwardMessagesInternal(
+		Data::ResolvedForwardDraft &&draft,
+		SendAction action,
+		FnMut<void(Api::ForwardMessagesResult)> &&callback,
+		FnMut<void()> &&legacySuccessCallback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback,
+		Fn<bool()> shouldCancel,
+		Fn<void(Api::SendResult, int)> requestResultCallback) {
+	const auto tracksResult = callback
+		|| legacySuccessCallback
+		|| requestCancellationCallback
+		|| shouldCancel
+		|| requestResultCallback;
+	const auto completion = tracksResult
+		? std::make_shared<ForwardMessagesCompletion>(
+			std::move(callback),
+			std::move(legacySuccessCallback))
+		: std::shared_ptr<ForwardMessagesCompletion>();
+	if (draft.items.empty()) {
+		if (completion) {
+			completion->finish(Api::ForwardMessagesResult::Failed);
+		}
+		return;
+	}
 
 	const auto fullAyuForward = AyuForward::isFullAyuForwardNeeded(draft.items);
 	const auto itemIds = _session->data().itemsToIds(draft.items);
 	if (itemIds.size() != draft.items.size()) {
+		if (completion) {
+			completion->finish(Api::ForwardMessagesResult::Failed);
+		}
 		return;
 	}
 	const auto forwardOptions = draft.options;
 	const auto sourceSession = base::make_weak(_session);
 	const auto targetHistory = base::make_weak(action.history);
+	if (shouldCancel && shouldCancel()) {
+		if (completion) {
+			completion->finish(Api::ForwardMessagesResult::Indeterminate);
+		}
+		return;
+	}
 	if (fullAyuForward) {
-		crl::async([
+		const auto cancelled = (requestCancellationCallback || shouldCancel)
+			? std::make_shared<std::atomic<bool>>(false)
+			: std::shared_ptr<std::atomic<bool>>();
+		auto isCancelled = Fn<bool()>();
+		if (cancelled || shouldCancel) {
+			isCancelled = [cancelled, shouldCancel] {
+				return (cancelled && cancelled->load())
+					|| (shouldCancel && shouldCancel());
+			};
+		}
+		if (requestCancellationCallback) {
+			requestCancellationCallback([cancelled] {
+				cancelled->store(true);
+			});
+		}
+		try {
+			crl::async([
 				sourceSession,
 				action,
 				itemIds,
 				forwardOptions,
-				targetHistory] {
-			const auto session = sourceSession.get();
-			if (!session) {
-				return;
+				targetHistory,
+				isCancelled,
+				completion] {
+				if (!sourceSession) {
+					if (completion) {
+						FinishForwardMessagesOnMain(
+							completion,
+							Api::ForwardMessagesResult::Failed);
+					}
+					return;
+				}
+				if (isCancelled && isCancelled()) {
+					if (completion) {
+						FinishForwardMessagesOnMain(
+							completion,
+							Api::ForwardMessagesResult::Indeterminate);
+					}
+					return;
+				}
+				try {
+					const auto result = AyuForward::forwardMessages(
+						sourceSession,
+						action,
+						false,
+						itemIds,
+						forwardOptions,
+						targetHistory,
+						true,
+						isCancelled);
+					if (completion) {
+						FinishForwardMessagesOnMain(
+							completion,
+							result,
+							isCancelled);
+					}
+				} catch (...) {
+					if (completion) {
+						FinishForwardMessagesOnMain(
+							completion,
+							Api::ForwardMessagesResult::Indeterminate);
+					}
+				}
+			});
+		} catch (...) {
+			if (completion) {
+				completion->finish(Api::ForwardMessagesResult::Failed);
 			}
-			AyuForward::forwardMessages(
-				not_null<Main::Session*>(session),
-				action,
-				false,
-				itemIds,
-				forwardOptions,
-				targetHistory);
-		});
+		}
 		return;
 	}
 
 	const auto ayuIntelligentForwardNeeded = AyuForward::isAyuForwardNeeded(draft.items);
 	if (ayuIntelligentForwardNeeded) {
-		crl::async([
+		const auto cancelled = (requestCancellationCallback || shouldCancel)
+			? std::make_shared<std::atomic<bool>>(false)
+			: std::shared_ptr<std::atomic<bool>>();
+		auto isCancelled = Fn<bool()>();
+		if (cancelled || shouldCancel) {
+			isCancelled = [cancelled, shouldCancel] {
+				return (cancelled && cancelled->load())
+					|| (shouldCancel && shouldCancel());
+			};
+		}
+		if (requestCancellationCallback) {
+			requestCancellationCallback([cancelled] {
+				cancelled->store(true);
+			});
+		}
+		try {
+			crl::async([
 				sourceSession,
 				action,
 				itemIds,
 				forwardOptions,
-				targetHistory] {
-			const auto session = sourceSession.get();
-			if (!session) {
-				return;
+				targetHistory,
+				isCancelled,
+				completion] {
+				if (!sourceSession) {
+					if (completion) {
+						FinishForwardMessagesOnMain(
+							completion,
+							Api::ForwardMessagesResult::Failed);
+					}
+					return;
+				}
+				try {
+					auto done = Fn<void(Api::ForwardMessagesResult)>();
+					if (completion) {
+						done = [completion, isCancelled](
+								Api::ForwardMessagesResult result) {
+							FinishForwardMessagesOnMain(
+								completion,
+								result,
+								isCancelled);
+						};
+					}
+					AyuForward::intelligentForward(
+						sourceSession,
+						action,
+						itemIds,
+						forwardOptions,
+						targetHistory,
+						std::move(done),
+						isCancelled);
+				} catch (...) {
+					if (completion) {
+						FinishForwardMessagesOnMain(
+							completion,
+							Api::ForwardMessagesResult::Indeterminate);
+					}
+				}
+			});
+		} catch (...) {
+			if (completion) {
+				completion->finish(Api::ForwardMessagesResult::Failed);
 			}
-			AyuForward::intelligentForward(
-				not_null<Main::Session*>(session),
-				action,
-				itemIds,
-				forwardOptions,
-				targetHistory);
-		});
+		}
 		return;
 	}
 
 	auto &histories = _session->data().histories();
+	const auto shared = completion
+		? std::make_shared<ForwardMessagesRequests>(
+			completion,
+			std::move(requestResultCallback),
+			std::move(requestCancellationCallback),
+			shouldCancel)
+		: std::shared_ptr<ForwardMessagesRequests>();
 
 	for (auto i = begin(draft.items); i != end(draft.items);) {
+		if (shouldCancel && shouldCancel()) {
+			if (shared) {
+				shared->dispatchFinished(true);
+			}
+			return;
+		}
 		const auto item = *i;
 		if (item->isSavedMusicItem()) {
-			SendExistingDocument(MessageToSend(action), item->media()->document());
+			auto sendRequest = std::shared_ptr<Api::SendRequest>();
+			if (shared) {
+				sendRequest = std::make_shared<Api::SendRequest>(
+					1,
+					[shared](Api::SendResult result) {
+						shared->requestFinished(result, 1);
+					},
+					shouldCancel);
+					shared->requestStarted();
+					shared->registerRequestCancellation([sendRequest] {
+						sendRequest->cancel();
+					});
+			}
+			SendExistingDocument(
+				MessageToSend(action),
+				item->media()->document(),
+				std::nullopt,
+				std::move(sendRequest));
 			i = draft.items.erase(i);
 		} else {
 			++i;
 		}
 	}
 	if (draft.items.empty()) {
-		if (successCallback) {
-			successCallback();
+		if (shared) {
+			shared->dispatchFinished(false);
 		}
 		return;
 	}
@@ -3945,22 +4380,16 @@ void ApiWrap::forwardMessages(
 		draft.options);
 
 	const auto collected = CollectForwardRanges(draft.items);
+	auto collectedCount = std::size_t(0);
+	for (const auto &range : collected) {
+		collectedCount += range.items.size();
+	}
+	const auto skippedItems = collectedCount != draft.items.size();
 	if (collected.empty()) {
-		if (successCallback) {
-			successCallback();
+		if (shared) {
+			shared->dispatchFinished(true);
 		}
 		return;
-	}
-
-	struct SharedCallback {
-		int requestsLeft = 0;
-		FnMut<void()> callback;
-	};
-	const auto shared = successCallback
-		? std::make_shared<SharedCallback>()
-		: std::shared_ptr<SharedCallback>();
-	if (successCallback) {
-		shared->callback = std::move(successCallback);
 	}
 
 	const auto count = int(draft.items.size());
@@ -4031,15 +4460,34 @@ void ApiWrap::forwardMessages(
 	auto ids = QVector<MTPint>();
 	auto randomIds = QVector<MTPlong>();
 	auto localIds = std::shared_ptr<base::flat_map<uint64, FullMsgId>>();
+	auto dispatchInterrupted = false;
+	const auto discardAccumulated = [&] {
+		if (localIds) {
+			for (const auto &[randomId, messageId] : *localIds) {
+				_session->data().unregisterMessageRandomId(randomId);
+				if (const auto item = _session->data().message(messageId);
+					item && item->isSending()) {
+					item->destroy();
+				}
+			}
+		}
+		ids.clear();
+		randomIds.clear();
+		localIds = nullptr;
+	};
 
 	const auto sendAccumulated = [&] {
+		if (dispatchInterrupted) {
+			return;
+		}
+		if (shouldCancel && shouldCancel()) {
+			dispatchInterrupted = true;
+			discardAccumulated();
+			return;
+		}
 		if (ids.isEmpty()) {
 			return;
 		}
-		if (shared) {
-			++shared->requestsLeft;
-		}
-		const auto idsCopy = localIds;
 		const auto scheduled = action.options.scheduled;
 		const auto starsPaid = std::min(
 			action.options.starsApproved,
@@ -4094,41 +4542,113 @@ void ApiWrap::forwardMessages(
 				MTP_long(starsPaid),
 				Api::SuggestToMTP(action.options.suggest));
 		};
-		histories.sendPreparedMessage(
-			history,
-			FullReplyTo{ .topicRootId = topicRootId },
-			uint64(0),
-			std::move(buildMessage),
-			[=](const MTPUpdates &result, const MTP::Response &) {
-				if (!scheduled) {
-					_session->api().updates().checkForSentToScheduled(
-						result);
+		if (shouldCancel && shouldCancel()) {
+			dispatchInterrupted = true;
+			discardAccumulated();
+			return;
+		}
+		const auto idsCopy = localIds;
+		if (shouldCancel && shouldCancel()) {
+			dispatchInterrupted = true;
+			discardAccumulated();
+			return;
+		}
+		const auto done = [=](
+				const MTPUpdates &result,
+				const MTP::Response &) {
+			if (!scheduled) {
+				_session->api().updates().checkForSentToScheduled(
+					result);
+			}
+			if (peer->isSelf() && _session->premium()) {
+				ProcessRecentSelfForwards(
+					_session,
+					result,
+					peer->id,
+					forwardFrom->id);
+			}
+		};
+		const auto fail = [=](
+				const MTP::Error &error,
+				const MTP::Response &) {
+			if (idsCopy) {
+				for (const auto &[randomId, itemId] : *idsCopy) {
+					_session->api().sendMessageFail(
+						error,
+						peer,
+						randomId,
+						itemId);
+					_session->data().unregisterMessageRandomId(randomId);
 				}
-				if (shared && !--shared->requestsLeft) {
-					shared->callback();
-				}
-
-				if (peer->isSelf() && _session->premium()) {
-					ProcessRecentSelfForwards(
-						_session,
-						result,
-						peer->id,
-						forwardFrom->id);
-				}
-			},
-			[=](const MTP::Error &error, const MTP::Response &) {
-				if (idsCopy) {
-					for (const auto &[randomId, itemId] : *idsCopy) {
-						_session->api().sendMessageFail(
-							error,
-							peer,
-							randomId,
-							itemId);
+			} else {
+				_session->api().sendMessageFail(error, peer);
+			}
+		};
+		const auto sendPrepared = [&](auto &&doneCallback, auto &&failCallback) {
+			return histories.sendPreparedMessage(
+				history,
+				FullReplyTo{ .topicRootId = topicRootId },
+				uint64(0),
+				std::move(buildMessage),
+				std::forward<decltype(doneCallback)>(doneCallback),
+				std::forward<decltype(failCallback)>(failCallback));
+		};
+		if (shared) {
+			const auto requestMessageCount = int(ids.size());
+			shared->requestStarted();
+			const auto requestFinished = std::make_shared<std::atomic<bool>>(
+				false);
+			const auto requestId = sendPrepared(
+				[=](
+						const MTPUpdates &result,
+						const MTP::Response &response) {
+					if (requestFinished->exchange(true)) {
+						return;
 					}
-				} else {
-					_session->api().sendMessageFail(error, peer);
-				}
-			});
+					done(result, response);
+					shared->requestFinished(
+						Api::SendResult::Succeeded,
+						requestMessageCount);
+				},
+				[=](
+						const MTP::Error &error,
+						const MTP::Response &response) {
+					if (requestFinished->exchange(true)) {
+						return;
+					}
+					fail(error, response);
+					shared->requestFinished(
+						Api::SendResultForError(error),
+						requestMessageCount);
+				});
+			shared->registerRequestCancellation([
+					sourceSession,
+					requestId,
+						requestMessageCount,
+						idsCopy,
+						shared,
+						requestFinished] {
+						if (!requestFinished->exchange(true)) {
+							if (const auto current = sourceSession.get()) {
+								current->data().histories().cancelRequest(requestId);
+								if (idsCopy) {
+									for (const auto &[randomId, messageId] : *idsCopy) {
+										current->data().unregisterMessageRandomId(randomId);
+										if (const auto item = current->data().message(messageId);
+											item && item->isSending()) {
+											item->destroy();
+										}
+									}
+								}
+							}
+							shared->requestFinished(
+								Api::SendResult::Indeterminate,
+								requestMessageCount);
+						}
+				});
+		} else {
+			sendPrepared(done, fail);
+		}
 
 		ids.resize(0);
 		randomIds.resize(0);
@@ -4138,8 +4658,17 @@ void ApiWrap::forwardMessages(
 	ids.reserve(count);
 	randomIds.reserve(count);
 	for (const auto &range : collected) {
+		if (shouldCancel && shouldCancel()) {
+			dispatchInterrupted = true;
+			break;
+		}
 		fromEphemeral = range.fromEphemeral;
 		for (const auto &item : range.items) {
+			if (shouldCancel && shouldCancel()) {
+				dispatchInterrupted = true;
+				discardAccumulated();
+				break;
+			}
 			const auto randomId = base::RandomValue<uint64>();
 			if (genClientSideMessage) {
 				const auto newId = FullMsgId(
@@ -4170,6 +4699,9 @@ void ApiWrap::forwardMessages(
 			const auto newFrom = item->history()->peer;
 			if (forwardFrom != newFrom) {
 				sendAccumulated();
+				if (dispatchInterrupted) {
+					break;
+				}
 				forwardFrom = newFrom;
 			}
 			ids.push_back(range.fromEphemeral
@@ -4177,7 +4709,16 @@ void ApiWrap::forwardMessages(
 				: MTP_int(item->id));
 			randomIds.push_back(MTP_long(randomId));
 		}
+		if (dispatchInterrupted) {
+			break;
+		}
 		sendAccumulated();
+		if (dispatchInterrupted) {
+			break;
+		}
+	}
+	if (shared) {
+		shared->dispatchFinished(dispatchInterrupted || skippedItems);
 	}
 	_session->data().sendHistoryChangeNotifications();
 }
@@ -4283,13 +4824,13 @@ void ApiWrap::sendVoiceMessage(
 		VoiceWaveform waveform,
 		crl::time duration,
 		bool video,
-		const SendAction &action) {
+		const SendAction &action,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
 	auto scheduledAction = action;
 	applyGhostScheduling(_session, scheduledAction.options, 17);
 	const auto caption = TextWithTags();
 	const auto to = FileLoadTaskOptions(scheduledAction);
-	_fileLoader->addTask(
-		std::make_unique<FileLoadTask>(FileLoadTask::VoiceArgs{
+	auto task = std::make_unique<FileLoadTask>(FileLoadTask::VoiceArgs{
 			.session = &session(),
 			.voice = result,
 			.duration = duration,
@@ -4297,7 +4838,22 @@ void ApiWrap::sendVoiceMessage(
 			.video = video,
 			.to = to,
 			.caption = caption,
-		}));
+			.sendRequest = sendRequest,
+		});
+	if (sendRequest) {
+		const auto taskId = task->id();
+		const auto weakSession = base::make_weak(_session);
+		sendRequest->registerCancellation([=] {
+			if (const auto current = weakSession.get()) {
+				current->api().fileLoader()->cancelTask(taskId);
+			}
+		});
+		if (sendRequest->shouldCancel()) {
+			sendRequest->cancel();
+			return;
+		}
+	}
+	_fileLoader->addTask(std::move(task));
 }
 
 void ApiWrap::editMedia(
@@ -4362,7 +4918,14 @@ void ApiWrap::sendFiles(
 		Ui::PreparedList &&list,
 		SendMediaType type,
 		std::shared_ptr<SendingAlbum> album,
-		SendAction action) {
+		SendAction action,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
+	if (list.files.empty()) {
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Failed);
+		}
+		return;
+	}
 	const auto &ephemeral = _session->ephemeralMessages();
 	if (album && !ephemeral.isEphemeralBotReply(action.replyTo.messageId)) {
 		const auto peer = action.history->peer;
@@ -4370,6 +4933,9 @@ void ApiWrap::sendFiles(
 			if (ephemeral.hasEphemeralCommand(peer, file.caption.text)) {
 				LOG(("API Error: "
 					"Dropped album send with ephemeral command caption."));
+				if (sendRequest) {
+					sendRequest->finishOne(Api::SendResult::Failed);
+				}
 				return;
 			}
 		}
@@ -4379,8 +4945,12 @@ void ApiWrap::sendFiles(
 		album = nullptr;
 	}
 	const auto to = FileLoadTaskOptions(action);
+	const auto animationAsGif = !Data::RestrictionError(
+		action.history->peer,
+		ChatRestriction::SendGifs);
 	if (album) {
 		album->options = to.options;
+		album->sendRequest = sendRequest;
 	}
 	auto tasks = std::vector<std::unique_ptr<Task>>();
 	tasks.reserve(list.files.size());
@@ -4427,10 +4997,50 @@ void ApiWrap::sendFiles(
 			.forceFile = forceFile,
 			.sendLargePhotos = file.sendLargePhotos,
 			.animationJob = file.animationJob,
+			.animationAsGif = animationAsGif,
 			.archive = file.archive,
 			.idOverride = 0,
 			.displayName = file.displayName,
+			.sendRequest = sendRequest,
 		}));
+	}
+	if (sendRequest) {
+		const auto weakSession = base::make_weak(_session);
+		for (const auto &task : tasks) {
+			const auto taskId = task->id();
+			sendRequest->registerCancellation([=] {
+				if (const auto current = weakSession.get()) {
+					current->api().fileLoader()->cancelTask(taskId);
+				}
+			});
+		}
+		if (album) {
+			const auto groupId = album->groupId;
+			sendRequest->registerCancellation([=] {
+				if (const auto current = weakSession.get()) {
+					if (const auto album = current->api()._sendingAlbums.take(
+								groupId)) {
+						auto items = std::vector<not_null<HistoryItem*>>();
+						for (const auto &part : (*album)->items) {
+							if (part.randomId) {
+								current->data().unregisterMessageRandomId(
+									part.randomId);
+							}
+							if (const auto pending = current->data().message(
+									part.msgId);
+								pending && pending->isSending()) {
+								items.push_back(pending);
+							}
+						}
+						current->data().destroyMessagesWithCacheCleanup(items);
+					}
+				}
+			});
+		}
+		if (sendRequest->shouldCancel()) {
+			sendRequest->cancel();
+			return;
+		}
 	}
 	if (album) {
 		_sendingAlbums.emplace(album->groupId, album);
@@ -4468,23 +5078,42 @@ void ApiWrap::sendFile(
 void ApiWrap::sendUploadedPhoto(
 		FullMsgId localId,
 		Api::RemoteFileInfo info,
-		Api::SendOptions options) {
+		Api::SendOptions options,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
 	if (const auto item = _session->data().message(localId)) {
+		if (sendRequest && sendRequest->shouldCancel()) {
+			return;
+		}
+		if (!item->media() || !item->media()->photo()) {
+			if (sendRequest) {
+				sendRequest->finishOne(Api::SendResult::Failed);
+			}
+			return;
+		}
 		const auto media = Api::PrepareUploadedPhoto(item, std::move(info));
 		if (const auto groupId = item->groupId()) {
-			uploadAlbumMedia(item, groupId, media);
+			uploadAlbumMedia(item, groupId, media, std::move(sendRequest));
 		} else {
-			sendMedia(item, media, options);
+			sendMedia(item, media, options, nullptr, std::move(sendRequest));
 		}
+	} else if (sendRequest) {
+		sendRequest->finishOne(Api::SendResult::Failed);
 	}
 }
 
 void ApiWrap::sendUploadedDocument(
 		FullMsgId localId,
 		Api::RemoteFileInfo info,
-		Api::SendOptions options) {
+		Api::SendOptions options,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
 	if (const auto item = _session->data().message(localId)) {
+		if (sendRequest && sendRequest->shouldCancel()) {
+			return;
+		}
 		if (!item->media() || !item->media()->document()) {
+			if (sendRequest) {
+				sendRequest->finishOne(Api::SendResult::Failed);
+			}
 			return;
 		}
 
@@ -4493,10 +5122,12 @@ void ApiWrap::sendUploadedDocument(
 			std::move(info));
 		const auto groupId = item->groupId();
 		if (groupId) {
-			uploadAlbumMedia(item, groupId, media);
+			uploadAlbumMedia(item, groupId, media, std::move(sendRequest));
 		} else {
-			sendMedia(item, media, options);
+			sendMedia(item, media, options, nullptr, std::move(sendRequest));
 		}
+	} else if (sendRequest) {
+		sendRequest->finishOne(Api::SendResult::Failed);
 	}
 }
 
@@ -4784,6 +5415,44 @@ void ApiWrap::sendRichMessage(
 void ApiWrap::sendMessage(
 		MessageToSend &&message,
 		std::optional<MsgId> localMessageId) {
+	sendMessageInternal(
+		std::move(message),
+		localMessageId,
+		nullptr,
+		nullptr,
+		nullptr);
+}
+
+void ApiWrap::sendMessageWithResult(
+		MessageToSend &&message,
+		FnMut<void(Api::SendResult)> &&callback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback,
+		Fn<bool()> shouldCancel) {
+	sendMessageInternal(
+		std::move(message),
+		std::nullopt,
+		std::move(callback),
+		std::move(requestCancellationCallback),
+		std::move(shouldCancel));
+}
+
+void ApiWrap::sendMessageInternal(
+		MessageToSend &&message,
+		std::optional<MsgId> localMessageId,
+		FnMut<void(Api::SendResult)> &&callback,
+		FnMut<void(Fn<void()>)> &&requestCancellationCallback,
+		Fn<bool()> shouldCancel) {
+	const auto completion = callback
+		? std::make_shared<SendMessageCompletion>(
+			std::move(callback),
+			shouldCancel)
+		: std::shared_ptr<SendMessageCompletion>();
+	if (shouldCancel && shouldCancel()) {
+		if (completion) {
+			completion->finish(Api::SendResult::Indeterminate);
+		}
+		return;
+	}
 	applyGhostScheduling(_session, message.action.options);
 	const auto clearReplyTo = prependPseudoReply(message);
 
@@ -4824,14 +5493,23 @@ void ApiWrap::sendMessage(
 	if (!ephemeral
 		&& !canSendTexts
 		&& !AyuForward::isForwarding(*_session, peer->id)) {
+		if (completion) {
+			completion->finish(Api::SendResult::Failed);
+		}
 		return;
 	} else if (_session->ephemeralMessages().trySend(message)) {
 		if (clearCloudDraft) {
 			history->clearCloudDraft(draftTopicRootId, draftMonoforumPeerId);
 		}
+		if (completion) {
+			completion->finish(Api::SendResult::Indeterminate);
+		}
 		return;
 	}
 	if (Api::SendDice(message)) {
+		if (completion) {
+			completion->finish(Api::SendResult::Indeterminate);
+		}
 		return;
 	}
 	local().saveRecentSentHashtags(textWithTags.text);
@@ -4856,8 +5534,13 @@ void ApiWrap::sendMessage(
 	const auto exactWebPage = !message.webPage.url.isEmpty();
 	const auto webPageDraft = message.webPage;
 	auto isFirst = true;
+	auto dispatchInterrupted = false;
 	while (TextUtilities::CutPart(sending, left, messageLengthLimit)
 		|| (isFirst && exactWebPage)) {
+		if (shouldCancel && shouldCancel()) {
+			dispatchInterrupted = true;
+			break;
+		}
 		TextUtilities::Trim(left);
 		const auto isLast = left.empty();
 
@@ -4937,10 +5620,6 @@ void ApiWrap::sendMessage(
 		if (clearCloudDraft) {
 			sendFlags |= MTPmessages_SendMessage::Flag::f_clear_draft;
 			mediaFlags |= MTPmessages_SendMedia::Flag::f_clear_draft;
-			history->clearCloudDraft(draftTopicRootId, draftMonoforumPeerId);
-			history->startSavingCloudDraft(
-				draftTopicRootId,
-				draftMonoforumPeerId);
 		}
 		const auto sendAs = action.options.sendAs;
 		if (sendAs) {
@@ -5051,59 +5730,152 @@ void ApiWrap::sendMessage(
 					draftTopicRootId,
 					draftMonoforumPeerId,
 					Api::UnixtimeFromMsgId(response.outerMsgId));
-			}
+				}
 		};
 		const auto mtpShortcut = Data::ShortcutIdToMTP(
 			_session,
 			action.options.shortcutId);
-		if (exactWebPage
-			&& !ignoreWebPage
-			&& (manualWebPage || sending.empty() || message.webPage.previewChanged)) {
-			histories.sendPreparedMessage(
-				history,
-				action.replyTo,
-				randomId,
-				Data::Histories::PrepareMessage<MTPmessages_SendMedia>(
-					MTP_flags(mediaFlags),
-					peer->input(),
-					Data::Histories::ReplyToPlaceholder(),
-					Data::WebPageForMTP(message.webPage, true),
-					msgText,
-					MTP_long(randomId),
-					MTPReplyMarkup(),
-					sentEntities,
-					MTP_int(action.options.scheduled),
-					MTP_int(action.options.scheduleRepeatPeriod),
-					(sendAs ? sendAs->input() : MTP_inputPeerEmpty()),
-					mtpShortcut,
-					MTP_long(action.options.effectId),
-					MTP_long(starsPaid),
-					Api::SuggestToMTP(action.options.suggest)
-				), done, fail);
+		const auto sendPrepared = [&](auto &&doneCallback, auto &&failCallback) {
+			if (exactWebPage
+				&& !ignoreWebPage
+				&& (manualWebPage || sending.empty() || message.webPage.previewChanged)) {
+				return histories.sendPreparedMessage(
+					history,
+					action.replyTo,
+					randomId,
+					Data::Histories::PrepareMessage<MTPmessages_SendMedia>(
+						MTP_flags(mediaFlags),
+						peer->input(),
+						Data::Histories::ReplyToPlaceholder(),
+						Data::WebPageForMTP(message.webPage, true),
+						msgText,
+						MTP_long(randomId),
+						MTPReplyMarkup(),
+						sentEntities,
+						MTP_int(action.options.scheduled),
+						MTP_int(action.options.scheduleRepeatPeriod),
+						(sendAs ? sendAs->input() : MTP_inputPeerEmpty()),
+						mtpShortcut,
+						MTP_long(action.options.effectId),
+						MTP_long(starsPaid),
+						Api::SuggestToMTP(action.options.suggest)
+					),
+					std::forward<decltype(doneCallback)>(doneCallback),
+					std::forward<decltype(failCallback)>(failCallback));
+			} else {
+				return histories.sendPreparedMessage(
+					history,
+					action.replyTo,
+					randomId,
+					Data::Histories::PrepareMessage<MTPmessages_SendMessage>(
+						MTP_flags(sendFlags),
+						peer->input(),
+						Data::Histories::ReplyToPlaceholder(),
+						msgText,
+						MTP_long(randomId),
+						MTPReplyMarkup(),
+						sentEntities,
+						MTP_int(action.options.scheduled),
+						MTP_int(action.options.scheduleRepeatPeriod),
+						(sendAs ? sendAs->input() : MTP_inputPeerEmpty()),
+						mtpShortcut,
+						MTP_long(action.options.effectId),
+						MTP_long(starsPaid),
+						Api::SuggestToMTP(action.options.suggest),
+						MTPInputRichMessage()
+					),
+					std::forward<decltype(doneCallback)>(doneCallback),
+					std::forward<decltype(failCallback)>(failCallback));
+			}
+		};
+		const auto startSavingCloudDraft = [&] {
+			if (clearCloudDraft) {
+				history->clearCloudDraft(
+					draftTopicRootId,
+					draftMonoforumPeerId);
+				history->startSavingCloudDraft(
+					draftTopicRootId,
+					draftMonoforumPeerId);
+			}
+		};
+		if (completion) {
+			if (shouldCancel && shouldCancel()) {
+				_session->data().unregisterMessageRandomId(randomId);
+				_session->data().unregisterMessageSentData(randomId);
+				if (const auto pending = _session->data().message(newId);
+					pending && pending->isSending()) {
+					pending->destroy();
+				}
+				dispatchInterrupted = true;
+				break;
+			}
+			startSavingCloudDraft();
+			completion->requestStarted();
+			const auto requestFinished = std::make_shared<std::atomic<bool>>(
+				false);
+			const auto doneWithResult = [
+					done,
+					completion,
+					requestFinished](
+					const MTPUpdates &result,
+					const MTP::Response &response) {
+				if (requestFinished->exchange(true)) {
+					return;
+				}
+				done(result, response);
+				completion->requestFinished(Api::SendResult::Succeeded);
+			};
+			const auto failWithResult = [
+					fail,
+					completion,
+					requestFinished](
+					const MTP::Error &error,
+					const MTP::Response &response) {
+				if (requestFinished->exchange(true)) {
+					return;
+				}
+				fail(error, response);
+				completion->requestFinished(Api::SendResultForError(error));
+			};
+			const auto requestId = sendPrepared(
+				doneWithResult,
+				failWithResult);
+			if (requestCancellationCallback) {
+				const auto weakSession = base::make_weak(_session);
+				const auto weakHistory = base::make_weak(history);
+				requestCancellationCallback([=] {
+					if (requestFinished->exchange(true)) {
+						return;
+					}
+					if (const auto current = weakSession.get()) {
+						current->data().histories().cancelRequest(requestId);
+						current->data().unregisterMessageRandomId(randomId);
+						current->data().unregisterMessageSentData(randomId);
+						if (const auto pending = current->data().message(newId);
+							pending && pending->isSending()) {
+							pending->destroy();
+						}
+					}
+					if (clearCloudDraft) {
+						if (const auto currentHistory = weakHistory.get()) {
+							currentHistory->finishSavingCloudDraft(
+								draftTopicRootId,
+								draftMonoforumPeerId,
+								base::unixtime::now());
+						}
+					}
+					completion->requestFinished(
+						Api::SendResult::Indeterminate);
+				});
+			}
 		} else {
-			histories.sendPreparedMessage(
-				history,
-				action.replyTo,
-				randomId,
-				Data::Histories::PrepareMessage<MTPmessages_SendMessage>(
-					MTP_flags(sendFlags),
-					peer->input(),
-					Data::Histories::ReplyToPlaceholder(),
-					msgText,
-					MTP_long(randomId),
-					MTPReplyMarkup(),
-					sentEntities,
-					MTP_int(action.options.scheduled),
-					MTP_int(action.options.scheduleRepeatPeriod),
-					(sendAs ? sendAs->input() : MTP_inputPeerEmpty()),
-					mtpShortcut,
-					MTP_long(action.options.effectId),
-					MTP_long(starsPaid),
-					Api::SuggestToMTP(action.options.suggest),
-					MTPInputRichMessage()
-				), done, fail);
+			startSavingCloudDraft();
+			sendPrepared(done, fail);
 		}
 		isFirst = false;
+	}
+	if (completion) {
+		completion->dispatchFinished(dispatchInterrupted);
 	}
 
 	finishForwarding(action);
@@ -5273,17 +6045,36 @@ void ApiWrap::sendInlineResult(
 void ApiWrap::uploadAlbumMedia(
 		not_null<HistoryItem*> item,
 		const MessageGroupId &groupId,
-		const MTPInputMedia &media) {
+		const MTPInputMedia &media,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
 	const auto localId = item->fullId();
-	const auto failed = [=] {
-
+	const auto album = _sendingAlbums.find(groupId.raw());
+	if (album == end(_sendingAlbums)) {
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Failed);
+		}
+		return;
+	}
+	if (!sendRequest) {
+		sendRequest = album->second->sendRequest;
+	}
+	const auto failed = [sendRequest] {
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Failed);
+		}
 	};
-	request(MTPmessages_UploadMedia(
+	if (sendRequest && sendRequest->shouldCancel()) {
+		return;
+	}
+	const auto requestId = request(MTPmessages_UploadMedia(
 		MTP_flags(0),
 		MTPstring(), // business_connection_id
 		item->history()->peer->input(),
 		media
 	)).done([=](const MTPMessageMedia &result) {
+		if (sendRequest && sendRequest->shouldCancel()) {
+			return;
+		}
 		const auto item = _session->data().message(localId);
 		if (!item) {
 			failed();
@@ -5358,17 +6149,32 @@ void ApiWrap::uploadAlbumMedia(
 				MTPstring()); // query
 			sendAlbumWithUploaded(item, groupId, media);
 		} break;
+		default: {
+			failed();
+		} break;
 		}
-	}).fail([=] {
+	}).fail([=](const MTP::Error &error, const MTP::Response &response) {
 		failed();
 	}).send();
+	if (sendRequest) {
+		const auto weakSession = base::make_weak(_session);
+		sendRequest->registerCancellation([=] {
+			if (const auto current = weakSession.get()) {
+				current->api().request(requestId).cancel();
+			}
+		});
+	}
 }
 
 void ApiWrap::sendMedia(
 		not_null<HistoryItem*> item,
 		const MTPInputMedia &media,
 		Api::SendOptions options,
-		Fn<void(bool)> done) {
+		Fn<void(bool)> done,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
+	if (sendRequest && sendRequest->shouldCancel()) {
+		return;
+	}
 	if (options.welcomeTemplate) {
 		const auto owned = _session->welcomeMessages().owns(item);
 		if (owned) {
@@ -5376,6 +6182,11 @@ void ApiWrap::sendMedia(
 		}
 		if (done) {
 			done(owned);
+		}
+		if (sendRequest) {
+			sendRequest->finishOne(owned
+				? Api::SendResult::Indeterminate
+				: Api::SendResult::Failed);
 		}
 		return;
 	}
@@ -5383,7 +6194,13 @@ void ApiWrap::sendMedia(
 	const auto randomId = base::RandomValue<uint64>();
 	_session->data().registerMessageRandomId(randomId, item->fullId());
 
-	sendMediaWithRandomId(item, media, options, randomId, std::move(done));
+	sendMediaWithRandomId(
+		item,
+		media,
+		options,
+		randomId,
+		std::move(done),
+		std::move(sendRequest));
 }
 
 void ApiWrap::sendMediaWithRandomId(
@@ -5391,14 +6208,26 @@ void ApiWrap::sendMediaWithRandomId(
 		const MTPInputMedia &media,
 		Api::SendOptions options,
 		uint64 randomId,
-		Fn<void(bool)> done) {
+		Fn<void(bool)> done,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
+	if (sendRequest && sendRequest->shouldCancel()) {
+		_session->data().unregisterMessageRandomId(randomId);
+		sendRequest->cancel();
+		return;
+	}
 	if (options.welcomeTemplate) {
+		_session->data().unregisterMessageRandomId(randomId);
 		const auto owned = _session->welcomeMessages().owns(item);
 		if (owned) {
 			_session->welcomeMessages().sendMedia(item, media);
 		}
 		if (done) {
 			done(owned);
+		}
+		if (sendRequest) {
+			sendRequest->finishOne(owned
+				? Api::SendResult::Indeterminate
+				: Api::SendResult::Failed);
 		}
 		return;
 	}
@@ -5410,8 +6239,12 @@ void ApiWrap::sendMediaWithRandomId(
 	const auto peer = history->peer;
 
 	if (_session->ephemeralMessages().sendMedia(item, media)) {
+		_session->data().unregisterMessageRandomId(randomId);
 		if (done) {
 			done(true);
+		}
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Indeterminate);
 		}
 		return;
 	}
@@ -5452,7 +6285,7 @@ void ApiWrap::sendMediaWithRandomId(
 
 	auto &histories = history->owner().histories();
 	const auto itemId = item->fullId();
-	histories.sendPreparedMessage(
+	const auto requestId = histories.sendPreparedMessage(
 		history,
 		replyTo,
 		randomId,
@@ -5479,24 +6312,67 @@ void ApiWrap::sendMediaWithRandomId(
 			MTP_long(starsPaid),
 			Api::SuggestToMTP(options.suggest)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
-		if (done) done(true);
+		if (done) {
+			done(true);
+		}
 		if (updateRecentStickers) {
 			requestRecentStickers(std::nullopt, true);
 		}
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Succeeded);
+		}
 	}, [=](const MTP::Error &error, const MTP::Response &response) {
-		if (done) done(false);
+		if (sendRequest && sendRequest->shouldCancel()) {
+			return;
+		}
+		if (done) {
+			done(false);
+		}
 		sendMessageFail(error, peer, randomId, itemId);
+		_session->data().unregisterMessageRandomId(randomId);
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResultForError(error));
+		}
 	});
+	if (sendRequest) {
+		const auto weakSession = base::make_weak(_session);
+		sendRequest->registerCancellation([=] {
+			if (const auto current = weakSession.get()) {
+				current->data().histories().cancelRequest(requestId);
+				current->data().unregisterMessageRandomId(randomId);
+				if (const auto pending = current->data().message(itemId);
+					pending && pending->isSending()) {
+					current->data().destroyMessageWithCacheCleanup(pending);
+				}
+			}
+		});
+	}
 }
 
 void ApiWrap::sendMultiPaidMedia(
 		not_null<HistoryItem*> item,
 		not_null<SendingAlbum*> album,
-		Fn<void(bool)> done) {
+		Fn<void(bool)> done,
+		std::shared_ptr<Api::SendRequest> sendRequest) {
 	Expects(album->options.price > 0);
-
+	if (!sendRequest) {
+		sendRequest = album->sendRequest;
+	}
 	const auto groupId = album->groupId;
 	auto &options = album->options;
+	auto partRandomIds = std::vector<uint64>();
+	partRandomIds.reserve(album->items.size());
+	for (const auto &part : album->items) {
+		if (part.randomId) {
+			partRandomIds.push_back(part.randomId);
+		}
+	}
+	if (sendRequest && sendRequest->shouldCancel()) {
+		for (const auto randomId : partRandomIds) {
+			_session->data().unregisterMessageRandomId(randomId);
+		}
+		return;
+	}
 	const auto randomId = album->items.front().randomId;
 	auto medias = album->items | ranges::view::transform([](
 			const SendingAlbum::Item &part) {
@@ -5542,8 +6418,13 @@ void ApiWrap::sendMultiPaidMedia(
 
 	auto &histories = history->owner().histories();
 	const auto itemId = item->fullId();
+	auto localIds = std::vector<FullMsgId>();
+	localIds.reserve(album->items.size());
+	for (const auto &part : album->items) {
+		localIds.push_back(part.msgId);
+	}
 	album->sent = true;
-	histories.sendPreparedMessage(
+	const auto requestId = histories.sendPreparedMessage(
 		history,
 		replyTo,
 		randomId,
@@ -5568,6 +6449,9 @@ void ApiWrap::sendMultiPaidMedia(
 			MTP_long(starsPaid),
 			Api::SuggestToMTP(options.suggest)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
+		for (const auto partRandomId : partRandomIds) {
+			_session->data().unregisterMessageRandomId(partRandomId);
+		}
 		if (const auto album = _sendingAlbums.take(groupId)) {
 			const auto copy = (*album)->items;
 			auto items = std::vector<not_null<HistoryItem*>>();
@@ -5579,11 +6463,53 @@ void ApiWrap::sendMultiPaidMedia(
 			}
 			history->owner().destroyMessagesWithCacheCleanup(items);
 		}
-		if (done) done(true);
+		if (done) {
+			done(true);
+		}
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Succeeded);
+		}
 	}, [=](const MTP::Error &error, const MTP::Response &response) {
-		if (done) done(false);
-		sendMessageFail(error, peer, randomId, itemId);
+		if (sendRequest && sendRequest->shouldCancel()) {
+			return;
+		}
+		if (done) {
+			done(false);
+		}
+		if (const auto album = _sendingAlbums.take(groupId)) {
+			for (const auto &part : (*album)->items) {
+				sendMessageFail(error, peer, part.randomId, part.msgId);
+			}
+		} else {
+			sendMessageFail(error, peer, randomId, itemId);
+		}
+		for (const auto partRandomId : partRandomIds) {
+			_session->data().unregisterMessageRandomId(partRandomId);
+		}
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResultForError(error));
+		}
 	});
+	if (sendRequest) {
+		const auto weakSession = base::make_weak(_session);
+		sendRequest->registerCancellation([=] {
+			if (const auto current = weakSession.get()) {
+				for (const auto partRandomId : partRandomIds) {
+					current->data().unregisterMessageRandomId(partRandomId);
+				}
+				current->data().histories().cancelRequest(requestId);
+				current->api()._sendingAlbums.remove(groupId);
+				auto items = std::vector<not_null<HistoryItem*>>();
+				for (const auto id : localIds) {
+					if (const auto pending = current->data().message(id);
+						pending && pending->isSending()) {
+						items.push_back(pending);
+					}
+				}
+				current->data().destroyMessagesWithCacheCleanup(items);
+			}
+		});
+	}
 }
 
 void ApiWrap::sendAlbumWithUploaded(
@@ -5615,6 +6541,16 @@ void ApiWrap::sendAlbumWithCancelled(
 		return;
 	}
 	const auto &album = albumIt->second;
+	if (!album->sent) {
+		const auto pending = ranges::find(
+			album->items,
+			item->fullId(),
+			&SendingAlbum::Item::msgId);
+		Assert(pending != end(album->items));
+		if (pending->randomId) {
+			_session->data().unregisterMessageRandomId(pending->randomId);
+		}
+	}
 	album->removeItem(item);
 	sendAlbumIfReady(album.get());
 }
@@ -5624,8 +6560,15 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		return;
 	}
 	const auto groupId = album->groupId;
+	const auto sendRequest = album->sendRequest;
+	if (sendRequest && sendRequest->shouldCancel()) {
+		return;
+	}
 	if (album->items.empty()) {
 		_sendingAlbums.remove(groupId);
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Failed);
+		}
 		return;
 	}
 	auto sample = (HistoryItem*)nullptr;
@@ -5641,6 +6584,9 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 	}
 	if (!sample) {
 		_sendingAlbums.remove(groupId);
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Failed);
+		}
 		return;
 	}
 	const auto replyTo = sample->replyTo();
@@ -5651,6 +6597,9 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 			std::pair<not_null<HistoryItem*>, MTPInputMedia>>();
 		parts.reserve(album->items.size());
 		for (const auto &part : album->items) {
+			if (part.randomId) {
+				_session->data().unregisterMessageRandomId(part.randomId);
+			}
 			const auto partItem = part.media
 				? _session->data().message(part.msgId)
 				: nullptr;
@@ -5659,13 +6608,19 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 			}
 		}
 		_sendingAlbums.remove(groupId);
+		auto result = Api::SendResult::Failed;
 		for (const auto &[partItem, media] : parts) {
-			_session->ephemeralMessages().sendMedia(partItem, media);
+			if (_session->ephemeralMessages().sendMedia(partItem, media)) {
+				result = Api::SendResult::Indeterminate;
+			}
+		}
+		if (sendRequest) {
+			sendRequest->finishOne(result);
 		}
 		return;
 	}
 	if (album->options.price > 0) {
-		sendMultiPaidMedia(sample, album);
+		sendMultiPaidMedia(sample, album, nullptr, sendRequest);
 		return;
 	} else if (medias.size() < 2) {
 		const auto &single = medias.front().data();
@@ -5674,7 +6629,9 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 			sample,
 			single.vmedia(),
 			album->options,
-			single.vrandom_id().v);
+			single.vrandom_id().v,
+			nullptr,
+			sendRequest);
 		_sendingAlbums.remove(groupId);
 		return;
 	}
@@ -5708,8 +6665,19 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		| (starsPaid ? Flag::f_allow_paid_stars : Flag(0));
 	auto &histories = history->owner().histories();
 	const auto peer = history->peer;
+	const auto localIds = album->items | ranges::views::transform(
+		[&](const SendingAlbum::Item &part) {
+			return part.msgId;
+		}) | ranges::to_vector;
+	auto randomIds = std::vector<uint64>();
+	randomIds.reserve(album->items.size());
+	for (const auto &part : album->items) {
+		if (part.randomId) {
+			randomIds.push_back(part.randomId);
+		}
+	}
 	album->sent = true;
-	histories.sendPreparedMessage(
+	const auto requestId = histories.sendPreparedMessage(
 		history,
 		replyTo,
 		uint64(0), // randomId
@@ -5726,7 +6694,14 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 			MTP_long(starsPaid)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
 		_sendingAlbums.remove(groupId);
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResult::Succeeded);
+		}
 	}, [=](const MTP::Error &error, const MTP::Response &response) {
+		if (sendRequest && sendRequest->shouldCancel()) {
+			sendRequest->cancel();
+			return;
+		}
 		if (const auto album = _sendingAlbums.take(groupId)) {
 			for (const auto &item : (*album)->items) {
 				sendMessageFail(error, peer, item.randomId, item.msgId);
@@ -5734,7 +6709,33 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		} else {
 			sendMessageFail(error, peer);
 		}
+		for (const auto randomId : randomIds) {
+			_session->data().unregisterMessageRandomId(randomId);
+		}
+		if (sendRequest) {
+			sendRequest->finishOne(Api::SendResultForError(error));
+		}
 	});
+	if (sendRequest) {
+		const auto weakSession = base::make_weak(_session);
+		sendRequest->registerCancellation([=] {
+			if (const auto current = weakSession.get()) {
+				for (const auto randomId : randomIds) {
+					current->data().unregisterMessageRandomId(randomId);
+				}
+				current->data().histories().cancelRequest(requestId);
+				current->api()._sendingAlbums.remove(groupId);
+				auto items = std::vector<not_null<HistoryItem*>>();
+				for (const auto id : localIds) {
+					if (const auto item = current->data().message(id);
+						item && item->isSending()) {
+						items.push_back(item);
+					}
+				}
+				current->data().destroyMessagesWithCacheCleanup(items);
+			}
+		});
+	}
 }
 
 void ApiWrap::reloadContactSignupSilent() {

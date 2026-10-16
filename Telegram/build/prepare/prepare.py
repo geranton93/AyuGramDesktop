@@ -120,9 +120,9 @@ elif (mac):
     environment.update({
         'SPECIAL_TARGET': 'mac',
         'MAKE_THREADS_CNT': '-j' + str(os.cpu_count()),
-        'MACOSX_DEPLOYMENT_TARGET': '10.13',
+        'MACOSX_DEPLOYMENT_TARGET': '13.0',
         'UNGUARDED': '-Werror=unguarded-availability-new',
-        'MIN_VER': '-mmacosx-version-min=10.13',
+        'MIN_VER': '-mmacosx-version-min=13.0',
         'CMAKE_GENERATOR': 'Ninja',
     })
 
@@ -458,7 +458,7 @@ if customRunCommand:
 stage('patches', """
     git clone https://github.com/desktop-app/patches.git
     cd patches
-    git checkout c2cc44fca4a8d0e20d1ef0f40884d717c750f0a4
+    git checkout c97ff78de632c72e35f9e3205e2447efeb58b986
 mac:
     git clone https://github.com/desktop-app/qt6_highsierra_patches.git qt6_highsierra
     cd qt6_highsierra
@@ -471,7 +471,7 @@ win:
     SET CHERE_INVOKING=enabled_from_arguments
     SET MSYS2_PATH_TYPE=inherit
 
-    powershell -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2025-08-30/msys2-base-x86_64-20250830.sfx.exe"
+    powershell -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.sfx.exe"
     msys64.exe
     del msys64.exe
 
@@ -520,6 +520,28 @@ mac:
         git+https://chromium.googlesource.com/external/gyp@master six
 """, 'ThirdParty')
 
+rustToolchain = '1.96.1'
+stage('rust', """
+win:
+    powershell -Command "iwr -OutFile ./rustup-init.exe https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe"
+    SET "RUSTUP_HOME=%THIRDPARTY_DIR%\\rust\\rustup"
+    SET "CARGO_HOME=%THIRDPARTY_DIR%\\rust\\cargo"
+    rustup-init.exe -y --no-modify-path --profile minimal ^
+        --default-toolchain """ + rustToolchain + """ ^
+        --component rust-src ^
+        --target aarch64-pc-windows-msvc
+    del rustup-init.exe
+mac:
+    wget -O rustup-init.sh https://sh.rustup.rs
+    export RUSTUP_HOME=$THIRDPARTY_DIR/rust/rustup
+    export CARGO_HOME=$THIRDPARTY_DIR/rust/cargo
+    sh rustup-init.sh -y --no-modify-path --profile minimal \\
+        --default-toolchain """ + rustToolchain + """ \\
+        --target aarch64-apple-darwin \\
+        --target x86_64-apple-darwin
+    rm rustup-init.sh
+""", 'ThirdParty')
+
 stage('lzma', """
 win:
     git clone https://github.com/desktop-app/lzma.git
@@ -535,9 +557,8 @@ release:
 
 stage('xz', """
 !win:
-    git clone -b v5.4.5 https://github.com/tukaani-project/xz.git
+    git clone -b v5.8.4 https://github.com/tukaani-project/xz.git
     cd xz
-    sed -i '' '\\@check_symbol_exists(futimens "sys/types.h;sys/stat.h" HAVE_FUTIMENS)@d' CMakeLists.txt
     CFLAGS="$UNGUARDED" CPPFLAGS="$UNGUARDED" cmake -B build . \\
         -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
         -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX
@@ -621,7 +642,7 @@ mac:
 """)
 
 stage('openssl3', """
-    git clone -b openssl-3.2.1 https://github.com/openssl/openssl openssl3
+    git clone -b openssl-3.6.5 https://github.com/openssl/openssl openssl3
     cd openssl3
 win32:
     perl Configure no-shared no-tests debug-VC-WIN32 /FS
@@ -897,38 +918,6 @@ mac:
     cmake --install . --config MinSizeRel
 """)
 
-stage('libde265', """
-    git clone -b v1.1.1 https://github.com/strukturag/libde265.git
-    cd libde265
-win:
-    cmake . ^
-        -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
-        -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
-        -DCMAKE_C_FLAGS="/DLIBDE265_STATIC_BUILD" ^
-        -DCMAKE_CXX_FLAGS="/DLIBDE265_STATIC_BUILD" ^
-        -DENABLE_SDL=OFF ^
-        -DBUILD_SHARED_LIBS=OFF ^
-        -DENABLE_DECODER=OFF ^
-        -DENABLE_ENCODER=OFF
-    cmake --build . --config Debug
-    cmake --install . --config Debug
-release:
-    cmake --build . --config Release
-    cmake --install . --config Release
-mac:
-    cmake . \\
-        -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
-        -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
-        -D DISABLE_SSE=ON \\
-        -D ENABLE_SDL=OFF \\
-        -D BUILD_SHARED_LIBS=OFF \\
-        -D ENABLE_DECODER=ON \\
-        -D ENABLE_ENCODER=OFF
-    cmake --build . --config MinSizeRel
-    cmake --install . --config MinSizeRel
-""")
-
 stage('libwebp', """
     git clone -b v1.6.0 https://github.com/webmproject/libwebp.git
     cd libwebp
@@ -966,66 +955,6 @@ mac:
     lipo -create build.arm64/libwebpdemux.a build/libwebpdemux.a -output build/libwebpdemux.a
     lipo -create build.arm64/libwebpmux.a build/libwebpmux.a -output build/libwebpmux.a
     cmake --install build
-""")
-
-stage('libheif', """
-    git clone -b v1.23.1 https://github.com/strukturag/libheif.git
-    cd libheif
-win:
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/LIBHEIF_EXPORTS/LIBDE265_STATIC_BUILD/g' libheif/CMakeLists.txt
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' libheif/CMakeLists.txt
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/LIBHEIF_EXPORTS/LIBDE265_STATIC_BUILD/g' heifio/CMakeLists.txt
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' heifio/CMakeLists.txt
-    cmake . ^
-        -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
-        -DBUILD_SHARED_LIBS=OFF ^
-        -DBUILD_DOCUMENTATION=OFF ^
-        -DBUILD_TESTING=OFF ^
-        -DENABLE_PLUGIN_LOADING=OFF ^
-        -DWITH_LIBDE265=ON ^
-        -DWITH_X264=OFF ^
-        -DWITH_OpenH264_DECODER=OFF ^
-        -DWITH_SvtEnc=OFF ^
-        -DWITH_SvtEnc_PLUGIN=OFF ^
-        -DWITH_RAV1E=OFF ^
-        -DWITH_RAV1E_PLUGIN=OFF ^
-        -DWITH_LIBSHARPYUV=OFF ^
-        -DCMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE ^
-        -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE ^
-        -DCMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE ^
-        -DWITH_EXAMPLES=OFF
-    cmake --build . --config Debug
-    cmake --install . --config Debug
-release:
-    cmake --build . --config Release
-    cmake --install . --config Release
-mac:
-    cmake . \\
-        -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
-        -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
-        -D BUILD_SHARED_LIBS=OFF \\
-        -D BUILD_DOCUMENTATION=OFF \\
-        -D BUILD_TESTING=OFF \\
-        -D ENABLE_PLUGIN_LOADING=OFF \\
-        -D WITH_AOM_ENCODER=OFF \\
-        -D WITH_AOM_DECODER=OFF \\
-        -D WITH_X265=OFF \\
-        -D WITH_X264=OFF \\
-        -D WITH_OpenH264_DECODER=OFF \\
-        -D WITH_SvtEnc=OFF \\
-        -D WITH_RAV1E=OFF \\
-        -D WITH_DAV1D=ON \\
-        -D WITH_LIBDE265=ON \\
-        -D LIBDE265_INCLUDE_DIR=$USED_PREFIX/include/ \\
-        -D LIBDE265_LIBRARY=$USED_PREFIX/lib/libde265.a \\
-        -D WITH_LIBSHARPYUV=OFF \\
-        -D CMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE \\
-        -D CMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE \\
-        -D CMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE \\
-        -D WITH_EXAMPLES=OFF
-    cmake --build . --config MinSizeRel
-    cmake --install . --config MinSizeRel
 """)
 
 stage('libjxl', """
@@ -1134,7 +1063,7 @@ mac:
 """)
 
 stage('liblcms2', """
-    git clone -b lcms2.16 https://github.com/mm2/Little-CMS.git liblcms2
+    git clone -b lcms2.19.1 https://github.com/mm2/Little-CMS.git liblcms2
     cd liblcms2
 win:
 depends:python/Scripts/activate.bat
@@ -1356,6 +1285,72 @@ mac:
     lipo -create out.arm64/libavutil.a out.x86_64/libavutil.a -output libavutil/libavutil.a
 
     make install
+""")
+
+stage('libheif', """
+depends:patches/libheif.patch
+depends:cache_keys/ffmpeg
+depends:local/include/libavcodec/avcodec.h
+depends:local/include/libavutil/avutil.h
+depends:local/lib/*avcodec*
+depends:local/lib/*avutil*
+    git clone -b v1.23.5 https://github.com/strukturag/libheif.git
+    cd libheif
+    git apply ../patches/libheif.patch
+win:
+    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' libheif/CMakeLists.txt
+    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' heifio/CMakeLists.txt
+    cmake . ^
+        -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DBUILD_SHARED_LIBS=OFF ^
+        -DBUILD_DOCUMENTATION=OFF ^
+        -DBUILD_TESTING=OFF ^
+        -DENABLE_PLUGIN_LOADING=OFF ^
+        -DWITH_LIBDE265=OFF ^
+        -DWITH_FFMPEG_DECODER=ON ^
+        -DFFMPEG_ROOT=%LIBS_DIR%/local ^
+        -DWITH_X264=OFF ^
+        -DWITH_OpenH264_DECODER=OFF ^
+        -DWITH_SvtEnc=OFF ^
+        -DWITH_SvtEnc_PLUGIN=OFF ^
+        -DWITH_RAV1E=OFF ^
+        -DWITH_RAV1E_PLUGIN=OFF ^
+        -DWITH_LIBSHARPYUV=OFF ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_PNG=TRUE ^
+        -DWITH_EXAMPLES=OFF
+    cmake --build . --config Debug
+    cmake --install . --config Debug
+release:
+    cmake --build . --config Release
+    cmake --install . --config Release
+mac:
+    cmake . \\
+        -D CMAKE_OSX_ARCHITECTURES="x86_64;arm64" \\
+        -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
+        -D BUILD_SHARED_LIBS=OFF \\
+        -D BUILD_DOCUMENTATION=OFF \\
+        -D BUILD_TESTING=OFF \\
+        -D ENABLE_PLUGIN_LOADING=OFF \\
+        -D WITH_AOM_ENCODER=OFF \\
+        -D WITH_AOM_DECODER=OFF \\
+        -D WITH_X265=OFF \\
+        -D WITH_X264=OFF \\
+        -D WITH_OpenH264_DECODER=OFF \\
+        -D WITH_SvtEnc=OFF \\
+        -D WITH_RAV1E=OFF \\
+        -D WITH_DAV1D=OFF \\
+        -D WITH_LIBDE265=OFF \\
+        -D WITH_FFMPEG_DECODER=ON \\
+        -D FFMPEG_ROOT=$USED_PREFIX \\
+        -D WITH_LIBSHARPYUV=OFF \\
+        -D CMAKE_DISABLE_FIND_PACKAGE_TIFF=TRUE \\
+        -D CMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE \\
+        -D WITH_EXAMPLES=OFF
+    cmake --build . --config MinSizeRel
+    cmake --install . --config MinSizeRel
 """)
 
 stage('openal-soft', """
@@ -1901,6 +1896,56 @@ mac:
     buildTd Debug
 release:
     buildTd Release
+""")
+
+stage('tlottie', """
+depends:patches/tlottie.patch
+    git clone https://github.com/dkaraush/tlottie.git
+    cd tlottie
+    git checkout 31f1b542f8
+    git apply ../patches/tlottie.patch
+win:
+    SET "RUSTUP_HOME=%THIRDPARTY_DIR%\\rust\\rustup"
+    SET "CARGO_HOME=%THIRDPARTY_DIR%\\rust\\cargo"
+    SET RUSTUP_TOOLCHAIN=""" + rustToolchain + """
+    SET "PATH=%CARGO_HOME%\\bin;%PATH%"
+win32:
+    SET "RUST_TARGET=i686-win7-windows-msvc"
+    SET "RUST_BUILD_STD=-Z build-std=std,panic_abort"
+    SET "RUSTC_BOOTSTRAP=1"
+win64:
+    SET "RUST_TARGET=x86_64-win7-windows-msvc"
+    SET "RUST_BUILD_STD=-Z build-std=std,panic_abort"
+    SET "RUSTC_BOOTSTRAP=1"
+winarm:
+    SET "RUST_TARGET=aarch64-pc-windows-msvc"
+    SET "RUST_BUILD_STD="
+win:
+    cargo rustc --lib --release --locked ^
+        --features c-api --crate-type staticlib ^
+        %RUST_BUILD_STD% ^
+        --target %RUST_TARGET% ^
+        --config "target.%RUST_TARGET%.rustflags=['-C','target-feature=+crt-static']" ^
+        -- --print native-static-libs
+    mkdir out\\lib out\\include
+    copy target\\%RUST_TARGET%\\release\\tlottie.lib out\\lib\\tlottie.lib
+    copy include\\tlottie.h out\\include\\tlottie.h
+mac:
+    export RUSTUP_HOME=$THIRDPARTY_DIR/rust/rustup
+    export CARGO_HOME=$THIRDPARTY_DIR/rust/cargo
+    export RUSTUP_TOOLCHAIN=""" + rustToolchain + """
+    export PATH=$CARGO_HOME/bin:$PATH
+    buildOneArch() {
+        cargo rustc --lib --release --locked \\
+            --features c-api --crate-type staticlib \\
+            --target $1 \\
+            -- --print native-static-libs
+    }
+    buildOneArch aarch64-apple-darwin
+    buildOneArch x86_64-apple-darwin
+    mkdir -p $USED_PREFIX/lib $USED_PREFIX/include/tlottie
+    lipo -create target/aarch64-apple-darwin/release/libtlottie.a target/x86_64-apple-darwin/release/libtlottie.a -output $USED_PREFIX/lib/libtlottie.a
+    cp include/tlottie.h $USED_PREFIX/include/tlottie/tlottie.h
 """)
 
 if win:

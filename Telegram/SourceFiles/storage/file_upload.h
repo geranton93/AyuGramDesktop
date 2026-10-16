@@ -17,6 +17,7 @@ struct FilePrepareResult;
 
 namespace Api {
 enum class SendProgressType;
+class SendRequest;
 } // namespace Api
 
 namespace Main {
@@ -34,6 +35,7 @@ struct UploadedMedia {
 	Api::RemoteFileInfo info;
 	Api::SendOptions options;
 	bool edit = false;
+	std::shared_ptr<Api::SendRequest> sendRequest;
 };
 
 struct UploadSecureProgress {
@@ -202,6 +204,7 @@ private:
 	std::vector<Request> _pendingFromRemovedDcIndices;
 
 	base::flat_map<FullMsgId, FullMsgId> _videoIdToCoverId;
+	base::flat_map<FullMsgId, mtpRequestId> _videoCoverUploadRequests;
 	base::flat_map<FullMsgId, UploadedMedia> _videoWaitingCover;
 
 	FullMsgId _pausedId;

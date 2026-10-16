@@ -14,6 +14,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "base/thread_safe_wrap.h"
 
+#include <atomic>
+#include <mutex>
+
 namespace Storage {
 class StreamedFileDownloader;
 } // namespace Storage
@@ -76,16 +79,33 @@ public:
 	void loadForDownloader(
 		not_null<Storage::StreamedFileDownloader*> downloader,
 		int64 offset);
-	void doneForDownloader(int64 offset);
+	void doneForDownloader(
+		not_null<Storage::StreamedFileDownloader*> downloader,
+		int64 offset);
 	void cancelForDownloader(
 		not_null<Storage::StreamedFileDownloader*> downloader);
 	void continueDownloaderFromMainThread();
+
+	// Streaming thread.
+	void processPendingDownloaderCancellationFromStreamingThread();
 	[[nodiscard]] rpl::producer<SpeedEstimate> speedEstimate() const;
 
 	~Reader();
 
 private:
 	static constexpr auto kLoadFromRemoteMax = Prefetch::kMaxParts;
+
+	struct DownloaderOffsetRequest {
+		enum class Type {
+			Load,
+			Acknowledge,
+			Cancel,
+		};
+
+		Type type = Type::Load;
+		uint64 generation = 0;
+		uint32 offset = 0;
+	};
 
 	struct CacheHelper;
 
@@ -235,9 +255,9 @@ private:
 	void finalizeCache();
 
 	void processDownloaderRequests();
+	void processDownloaderOffsets();
 	void checkCacheResultsForDownloader();
 	void pruneDownloaderCache(uint32 minimalOffset);
-	void pruneDoneDownloaderRequests();
 	void sendDownloaderRequests();
 	[[nodiscard]] bool downloaderWaitForCachedSlice(uint32 offset);
 	void enqueueDownloaderOffsets();
@@ -279,6 +299,7 @@ private:
 
 	// Main thread.
 	Storage::StreamedFileDownloader *_attachedDownloader = nullptr;
+	uint64 _downloaderGeneration = 0;
 	rpl::event_stream<LoadedPart> _partsForDownloader;
 	int _realPriority = 1;
 	bool _streamingActive = false;
@@ -287,11 +308,16 @@ private:
 	std::deque<uint32> _offsetsForDownloader;
 	base::flat_set<uint32> _downloaderOffsetsRequested;
 	base::flat_map<uint32, std::optional<PartsMap>> _downloaderReadCache;
+	uint64 _activeDownloaderGeneration = 0;
 
 	// Communication from main thread to streaming thread.
 	// Streaming thread to main thread communicates using crl::on_main.
-	base::thread_safe_queue<uint32> _downloaderOffsetRequests;
-	base::thread_safe_queue<uint32> _downloaderOffsetAcks;
+	base::thread_safe_queue<DownloaderOffsetRequest> _downloaderOffsetRequests;
+	std::atomic<bool> _downloaderCancellationPending = false;
+	// Cancellation barriers and individual Loader dispatches share this lock.
+	// A request already in the critical section precedes cancellation; later
+	// offsets observe the pending flag and cannot be sent ahead of the barrier.
+	std::mutex _downloaderDispatchMutex;
 
 	rpl::lifetime _lifetime;
 

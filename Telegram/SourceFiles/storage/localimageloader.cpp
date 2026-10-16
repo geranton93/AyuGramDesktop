@@ -56,6 +56,7 @@ constexpr auto kThumbnailQuality = 95;
 constexpr auto kThumbnailSize = 320;
 constexpr auto kPhotoUploadPartSize = 32 * 1024;
 constexpr auto kRecompressAfterBpp = 4;
+std::atomic<TaskId> NextTaskId = 1;
 
 using Ui::ValidateThumbDimensions;
 
@@ -215,6 +216,11 @@ struct PreparedFileThumbnail {
 
 } // namespace
 
+Task::Task()
+: _id(NextTaskId.fetch_add(1, std::memory_order_relaxed)) {
+	Expects(_id != kEmptyTaskId);
+}
+
 int PhotoSideLimit(bool large) {
 	return large ? 2560 : 1280;
 }
@@ -285,8 +291,8 @@ void TaskQueue::cancelTask(TaskId id) {
 	{
 		QMutexLocker lock(&_tasksToProcessMutex);
 		removeFrom(_tasksToProcess);
-		if (_taskInProcessId == id) {
-			_taskInProcessId = TaskId();
+		if (_taskInProcessId == id && _taskInProcess) {
+			_taskInProcess->cancel();
 		}
 	}
 	QMutexLocker lock(&_tasksToFinishMutex);
@@ -315,6 +321,12 @@ void TaskQueue::onTaskProcessed() {
 
 void TaskQueue::stop() {
 	if (_thread) {
+		{
+			QMutexLocker lock(&_tasksToProcessMutex);
+			if (_taskInProcess) {
+				_taskInProcess->cancel();
+			}
+		}
 		_thread->requestInterruption();
 		_thread->quit();
 		DEBUG_LOG(("Waiting for taskThread to finish"));
@@ -325,6 +337,7 @@ void TaskQueue::stop() {
 	_tasksToProcess.clear();
 	_tasksToFinish.clear();
 	_taskInProcessId = TaskId();
+	_taskInProcess = nullptr;
 }
 
 TaskQueue::~TaskQueue() {
@@ -345,6 +358,7 @@ void TaskQueueWorker::onTaskAdded() {
 				task = std::move(_queue->_tasksToProcess.front());
 				_queue->_tasksToProcess.pop_front();
 				_queue->_taskInProcessId = task->id();
+				_queue->_taskInProcess = task.get();
 			}
 		}
 
@@ -355,11 +369,14 @@ void TaskQueueWorker::onTaskAdded() {
 				QMutexLocker lockToProcess(&_queue->_tasksToProcessMutex);
 				if (_queue->_taskInProcessId == task->id()) {
 					_queue->_taskInProcessId = TaskId();
+					_queue->_taskInProcess = nullptr;
 					someTasksLeft = !_queue->_tasksToProcess.empty();
 
 					QMutexLocker lockToFinish(&_queue->_tasksToFinishMutex);
 					emitTaskProcessed = _queue->_tasksToFinish.empty();
-					_queue->_tasksToFinish.push_back(std::move(task));
+					if (!task->isCancelled()) {
+						_queue->_tasksToFinish.push_back(std::move(task));
+					}
 				}
 			}
 			if (emitTaskProcessed) {
@@ -528,7 +545,9 @@ FileLoadTask::FileLoadTask(Args &&args)
 , _forceFile(args.forceFile)
 , _sendLargePhotos(args.sendLargePhotos)
 , _animationJob(std::move(args.animationJob))
-, _archive(std::move(args.archive)) {
+, _animationAsGif(args.animationAsGif)
+, _archive(std::move(args.archive))
+, _sendRequest(std::move(args.sendRequest)) {
 	Expects(_to.options.scheduled
 		|| _to.options.shortcutId
 		|| !_to.replaceMediaOf
@@ -544,7 +563,8 @@ FileLoadTask::FileLoadTask(VoiceArgs &&args)
 , _duration(args.duration)
 , _waveform(std::move(args.waveform))
 , _type(args.video ? SendMediaType::Round : SendMediaType::Audio)
-, _caption(std::move(args.caption)) {
+, _caption(std::move(args.caption))
+, _sendRequest(std::move(args.sendRequest)) {
 }
 
 FileLoadTask::~FileLoadTask() = default;
@@ -626,10 +646,9 @@ bool FileLoadTask::CheckForSong(
 	return true;
 }
 
-bool FileLoadTask::CheckForVideo(
+bool FileLoadTask::IsVideoFile(
 		const QString &filepath,
-		const QByteArray &content,
-		std::unique_ptr<Ui::PreparedFileInformation> &result) {
+		const QString &filemime) {
 	static const auto mimes = {
 		u"video/mp4"_q,
 		u"video/quicktime"_q,
@@ -640,7 +659,14 @@ bool FileLoadTask::CheckForVideo(
 		u".m4v"_q,
 		u".webm"_q,
 	};
-	if (!CheckMimeOrExtensions(filepath, result->filemime, mimes, extensions)) {
+	return CheckMimeOrExtensions(filepath, filemime, mimes, extensions);
+}
+
+bool FileLoadTask::CheckForVideo(
+		const QString &filepath,
+		const QByteArray &content,
+		std::unique_ptr<Ui::PreparedFileInformation> &result) {
+	if (!IsVideoFile(filepath, result->filemime)) {
 		return false;
 	}
 
@@ -715,6 +741,9 @@ bool FileLoadTask::FillImageInformation(
 }
 
 void FileLoadTask::process(ProcessArgs &&args) {
+	if (isCancelled()) {
+		return;
+	}
 	_result = MakePreparedFile({
 		.taskId = id(),
 		.id = _id,
@@ -723,8 +752,13 @@ void FileLoadTask::process(ProcessArgs &&args) {
 		.spoiler = _spoiler,
 		.album = _album,
 	});
+	_result->sendRequest = _sendRequest;
 	if (const auto cover = _videoCover.get()) {
+		_videoCover->shareCancellationWith(*this);
 		cover->process();
+		if (isCancelled()) {
+			return;
+		}
 		if (const auto &result = cover->peekResult()) {
 			if (result->type == SendMediaType::Photo
 				&& !result->fileparts.empty()) {
@@ -755,14 +789,18 @@ void FileLoadTask::process(ProcessArgs &&args) {
 					Qt::IgnoreAspectRatio,
 					Qt::SmoothTransformation);
 			}
+			if (isCancelled()) {
+				return;
+			}
 			auto information = std::make_unique<
 				Ui::PreparedFileInformation>();
 			information->filemime = "video/mp4";
 			information->media = Ui::PreparedFileInformation::Video{
-				.isGifv = true,
+				.isGifv = _animationAsGif,
 				.supportsStreaming = true,
 				.duration = still->duration,
 				.thumbnail = std::move(preview),
+				.modifications = { .gif = _animationAsGif },
 			};
 			_information = std::move(information);
 			_content = QByteArray();
@@ -805,6 +843,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 		filename = info.fileName();
 		if (!_information) {
 			_information = readMediaInformation(Core::MimeTypeForFile(info).name());
+			if (isCancelled()) {
+				return;
+			}
 		}
 		filemime = _information->filemime;
 		if (auto image = std::get_if<Ui::PreparedFileInformation::Image>(
@@ -834,6 +875,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 		filemime = "video/mp4";
 	} else if (_archive) {
 		if (auto entries = Storage::GatherArchiveEntries(*_archive)) {
+			if (isCancelled()) {
+				return;
+			}
 			filesize = Storage::ArchiveSizeEstimate(*entries);
 			_result->archiveEntries
 				= std::make_shared<Storage::ArchiveEntries>(
@@ -907,13 +951,16 @@ void FileLoadTask::process(ProcessArgs &&args) {
 					QBuffer buffer(&_content);
 					fullimage.save(&buffer, "PNG");
 				}
+				if (isCancelled()) {
+					return;
+				}
 				filesize = _content.size();
 			}
 			fullimage = Images::Opaque(std::move(fullimage));
 			fullimagebytes = fullimageformat = QByteArray();
 		}
 	}
-	_result->filesize = qMin(filesize, qint64(UINT_MAX));
+	_result->filesize = std::min(filesize, qint64(UINT_MAX));
 
 	if (!filesize || filesize > kFileSizePremiumLimit) {
 		return;
@@ -937,6 +984,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 
 	if (isRound) {
 		_information = readMediaInformation(u"video/mp4"_q);
+		if (isCancelled()) {
+			return;
+		}
 		if (auto video = std::get_if<Ui::PreparedFileInformation::Video>(
 			&_information->media)) {
 			isVideo = true;
@@ -972,6 +1022,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 	} else if (!isVoice) {
 		if (!_information) {
 			_information = readMediaInformation(filemime);
+			if (isCancelled()) {
+				return;
+			}
 			filemime = _information->filemime;
 		}
 		if (auto song = std::get_if<Ui::PreparedFileInformation::Song>(
@@ -1008,6 +1061,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 					video->modifications,
 					{},
 					false);
+				if (isCancelled()) {
+					return;
+				}
 				source.bytes = _filepath.isEmpty() ? _content : QByteArray();
 				const auto target = Media::Encode::TranscodedSize(
 					source,
@@ -1026,6 +1082,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 						target,
 						Qt::IgnoreAspectRatio,
 						Qt::SmoothTransformation);
+					if (isCancelled()) {
+						return;
+					}
 					_result->videoCoverOffset = std::clamp(
 						video->modifications.cover
 							- video->modifications.from,
@@ -1137,6 +1196,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 					fullimagebytes = fullimageformat = QByteArray();
 				}
 				filedata = ComputePhotoJpegBytes(full, fullimagebytes, fullimageformat);
+				if (isCancelled()) {
+					return;
+				}
 
 				photoThumbs.emplace('m', PreparedPhotoThumb{ .image = medium });
 				photoSizes.push_back(MTP_photoSize(MTP_string("m"), MTP_int(medium.width()), MTP_int(medium.height()), MTP_int(0)));
@@ -1169,6 +1231,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 		filemime,
 		filesize,
 		isSticker);
+	if (isCancelled()) {
+		return;
+	}
 
 	if (_type == SendMediaType::Photo && photoThumbs.empty()) {
 		_type = SendMediaType::File;
@@ -1226,6 +1291,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 	_result->filename = filename;
 	_result->filemime = filemime;
 	_result->setFileData(filedata);
+	if (isCancelled()) {
+		return;
+	}
 
 	_result->thumbId = thumbnail.id;
 	_result->thumbname = thumbnail.name;
@@ -1244,6 +1312,12 @@ void FileLoadTask::process(ProcessArgs &&args) {
 void FileLoadTask::finish() {
 	const auto session = _session.get();
 	if (!session) {
+		if (_sendRequest) {
+			_sendRequest->finishOne(Api::SendResult::Indeterminate);
+		}
+		return;
+	}
+	if (_sendRequest && _sendRequest->shouldCancel()) {
 		return;
 	}
 	const auto premium = session->user()->isPremium();
@@ -1254,12 +1328,18 @@ void FileLoadTask::finish() {
 				: tr::lng_send_image_empty(tr::now, lt_name, _filepath)),
 			Ui::LayerOption::KeepOther);
 		removeFromAlbum();
+		if (_sendRequest) {
+			_sendRequest->finishOne(Api::SendResult::Failed);
+		}
 	} else if (_result->filesize > kFileSizePremiumLimit
 		|| (_result->filesize > kFileSizeLimit && !premium)) {
 		Ui::show(
 			Box(FileSizeLimitBox, session, _result->filesize, nullptr),
 			Ui::LayerOption::KeepOther);
 		removeFromAlbum();
+		if (_sendRequest) {
+			_sendRequest->finishOne(Api::SendResult::Failed);
+		}
 	} else if (_album && _album->preparedMusicBatching()) {
 		const auto it = ranges::find(_album->items, id(), &SendingAlbum::Item::taskId);
 		Assert(it != _album->items.end());

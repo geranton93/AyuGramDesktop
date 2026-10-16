@@ -47,6 +47,20 @@ struct DocumentSnapshot {
 
 using DocumentPaths = base::flat_map<DocumentId, QString>;
 
+enum class SendSyncResult {
+	Succeeded,
+	Failed,
+	Indeterminate,
+};
+
+enum class ForwardMessagesSyncResult {
+	Succeeded,
+	Failed,
+	Cancelled,
+	TimedOut,
+	Indeterminate,
+};
+
 struct DownloadItem {
 	FullMsgId fullId;
 	std::optional<PhotoSnapshot> photo;
@@ -71,51 +85,64 @@ qint64 fileSize(const QString &path);
 	not_null<PhotoData*> photo);
 [[nodiscard]] DocumentSnapshot snapshotDocument(not_null<DocumentData*> document);
 [[nodiscard]] DocumentPaths loadDocuments(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const std::vector<DownloadItem> &items,
 	const Fn<bool()> &cancelled);
-void sendMessageSync(
-	not_null<Main::Session*> session,
+
+[[nodiscard]] SendSyncResult sendMessageSync(
+	const base::weak_ptr<Main::Session> &session,
 	Api::MessageToSend &&message,
-	base::weak_ptr<History> targetHistory);
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled = {});
 
-void sendDocumentSync(not_null<Main::Session*> session,
-					  Ui::PreparedGroup &group,
-					  SendMediaType type,
-					  TextWithTags &&caption,
-					  const Api::SendAction &action,
-					  base::weak_ptr<History> targetHistory);
 
-void sendStickerSync(not_null<Main::Session*> session,
-						 Api::MessageToSend &&message,
-						 DocumentId documentId,
-						 base::weak_ptr<History> targetHistory);
-void waitForMsgSync(
-	not_null<Main::Session*> session,
-	base::weak_ptr<History> targetHistory);
+[[nodiscard]] SendSyncResult sendDocumentSync(
+	const base::weak_ptr<Main::Session> &session,
+	Ui::PreparedGroup &group,
+	SendMediaType type,
+	TextWithTags &&caption,
+	const Api::SendAction &action,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled = {});
+
+
+[[nodiscard]] SendSyncResult sendStickerSync(
+	const base::weak_ptr<Main::Session> &session,
+	Api::MessageToSend &&message,
+	DocumentId documentId,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled = {});
+
 void loadPhotoSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const PhotoSnapshot &photo,
 	Data::FileOrigin origin,
 	const Fn<bool()> &cancelled);
 [[nodiscard]] QString loadDocumentSync(
-	not_null<Main::Session*> session,
+	const base::weak_ptr<Main::Session> &session,
 	const DocumentSnapshot &document,
 	Data::FileOrigin origin,
 	const Fn<bool()> &cancelled);
-void forwardMessagesSync(not_null<Main::Session*> session,
-						 const MessageIdsList &itemIds,
-						 const ApiWrap::SendAction &action,
-						 Data::ForwardOptions options,
-						 base::weak_ptr<History> targetHistory);
-void sendVoiceSync(not_null<Main::Session*> session,
-				   const QByteArray &data,
-				   int64_t duration,
-				   bool video,
-				   Api::MessageToSend &&message,
-				   base::weak_ptr<History> targetHistory);
+[[nodiscard]] ForwardMessagesSyncResult forwardMessagesSync(
+	const base::weak_ptr<Main::Session> &session,
+	const MessageIdsList &itemIds,
+	const ApiWrap::SendAction &action,
+	Data::ForwardOptions options,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled,
+	Fn<void(Api::SendResult, int)> requestResultCallback = nullptr);
 
-UploadedFile uploadFileSync(not_null<Main::Session*> session,
+
+[[nodiscard]] SendSyncResult sendVoiceSync(
+	const base::weak_ptr<Main::Session> &session,
+	const QByteArray &data,
+	int64_t duration,
+	bool video,
+	Api::MessageToSend &&message,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled = {});
+
+UploadedFile uploadFileSync(const base::weak_ptr<Main::Session> &session,
 							PeerId peerId,
 							const QString &path,
 							SendMediaType type,
@@ -124,11 +151,15 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 							const Fn<bool()> &cancelled = {});
 
 std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
-	not_null<Main::Session*> session,
-	FullMsgId itemId);
+	const base::weak_ptr<Main::Session> &session,
+	FullMsgId itemId,
+	const Fn<bool()> &cancelled = {});
 
-bool sendRichMessageSync(not_null<Main::Session*> session,
-						 const MTPInputRichMessage &richMessage,
-						 const Api::SendAction &action,
-						 base::weak_ptr<History> targetHistory);
+
+[[nodiscard]] SendSyncResult sendRichMessageSync(
+	const base::weak_ptr<Main::Session> &session,
+	const MTPInputRichMessage &richMessage,
+	const Api::SendAction &action,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled = {});
 } // namespace AyuSync

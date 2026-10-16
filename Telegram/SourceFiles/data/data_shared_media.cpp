@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/components/scheduled_messages.h"
 #include "data/data_document.h"
 #include "data/data_media_types.h"
+#include "data/data_peer.h"
 #include "data/data_photo.h"
 #include "data/data_saved_music.h"
 #include "data/data_session.h"
@@ -95,6 +96,30 @@ bool SharedMediaAllowSearch(Storage::SharedMediaType type) {
 	}
 }
 
+bool SharedMediaThreadFilterSupported(
+		not_null<PeerData*> peer,
+		MsgId topicRootId,
+		Storage::SharedMediaType type) {
+	if (!topicRootId || !peer->isChannel()) {
+		return true;
+	}
+	switch (type) {
+	case Type::ChatPhoto: return false;
+	default: return true;
+	}
+}
+
+Storage::SharedMediaKey SharedMediaLoadableKey(
+		not_null<PeerData*> peer,
+		Storage::SharedMediaKey key) {
+	if (SharedMediaThreadFilterSupported(peer, key.topicRootId, key.type)) {
+		return key;
+	} else if (key.type == Type::ChatPhoto) {
+		key.topicRootId = MsgId();
+	}
+	return key;
+}
+
 rpl::producer<SparseIdsSlice> SharedMediaViewer(
 		not_null<Main::Session*> session,
 		Storage::SharedMediaKey key,
@@ -102,6 +127,9 @@ rpl::producer<SparseIdsSlice> SharedMediaViewer(
 		int limitAfter) {
 	Expects(IsServerMsgId(key.messageId) || (key.messageId == 0));
 	Expects((key.messageId != 0) || (limitBefore == 0 && limitAfter == 0));
+	key = SharedMediaLoadableKey(
+		session->data().peer(key.peerId),
+		key);
 
 	return [=](auto consumer) {
 		auto lifetime = rpl::lifetime();
@@ -144,8 +172,18 @@ rpl::producer<SparseIdsSlice> SharedMediaViewer(
 		using OneRemoved = Storage::SharedMediaRemoveOne;
 		session->storage().sharedMediaOneRemoved(
 		) | rpl::filter([=](const OneRemoved &update) {
+			const auto matchedTypes = key.topicRootId
+				? update.matchedTopicTypes
+				: key.monoforumPeerId
+				? update.matchedMonoforumTypes
+				: update.matchedPeerWideTypes;
 			return (update.peerId == key.peerId)
-				&& update.types.test(key.type);
+				&& (!key.topicRootId
+					|| key.topicRootId == update.topicRootId)
+				&& (!key.monoforumPeerId
+					|| key.monoforumPeerId == update.monoforumPeerId)
+				&& update.types.test(key.type)
+				&& (!update.onlyMatched || matchedTypes.test(key.type));
 		}) | rpl::filter([=](const OneRemoved &update) {
 			return builder->removeOne(update.messageId);
 		}) | rpl::on_next(pushNextSnapshot, lifetime);

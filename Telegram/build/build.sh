@@ -132,13 +132,13 @@ if [ "$BuildTarget" == "linux" ]; then
   BinaryName="Telegram"
 elif [ "$BuildTarget" == "mac" ] ; then
   if [ "$arg1" == "x86_64" ] || [ "$arg1" == "arm64" ]; then
-    echo "Building version $AppVersionStrFull for macOS 10.13+ ($arg1).."
+    echo "Building version $AppVersionStrFull for macOS 13+ ($arg1).."
     MacArch="$arg1"
     if [ "$arg2" == "request_uuid" ] && [ "$arg3" != "" ]; then
       NotarizeRequestId="$arg3"
     fi
   else
-    echo "Building version $AppVersionStrFull for macOS 10.13+.."
+    echo "Building version $AppVersionStrFull for macOS 13+.."
     if [ "$arg2" != "" ]; then
       if [ "$arg1" == "request_uuid_x86_64" ]; then
         NotarizeRequestIdAMD64="$arg2"
@@ -446,6 +446,7 @@ if [ "$BuildTarget" == "mac" ] || [ "$BuildTarget" == "macstore" ]; then
         cp -f tsetup_template.dmg tsetup.temp.dmg
         TempDiskPath=`hdiutil attach -nobrowse -noautoopenrw -readwrite tsetup.temp.dmg | awk -F "\t" 'END {print $3}'`
         cp -R "./$BundleName" "$TempDiskPath/"
+        rm -f "$TempDiskPath/$BundleName/Contents/Resources/AppIcon.icns"
         bless --folder "$TempDiskPath/"
         hdiutil detach "$TempDiskPath"
         hdiutil convert tsetup.temp.dmg -format UDBZ -ov -o "$SetupFile"

@@ -30,7 +30,6 @@
 #include "history/history_item_helpers.h"
 #include "iv/iv_rich_page.h"
 #include "main/main_session.h"
-#include "mtproto/sender.h"
 #include "storage/localimageloader.h"
 
 #include <QtCore/QFile>
@@ -41,200 +40,510 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace AyuSync {
 
-void forwardMessagesSync(not_null<Main::Session*> session,
-							 const MessageIdsList &itemIds,
-							 const ApiWrap::SendAction &action,
-							 Data::ForwardOptions options,
-							 base::weak_ptr<History> targetHistory) {
-	auto latch = std::make_shared<TimedCountDownLatch>(1);
-	const auto forwardIds = itemIds;
-	const auto weakSession = base::make_weak(session);
+namespace {
 
-	crl::on_main([=]
-	{
-		const auto current = weakSession.get();
-		const auto history = targetHistory.get();
-		if (current && history) {
+enum class SendWaitResult {
+	Pending,
+	Succeeded,
+	Failed,
+	Indeterminate,
+	TimedOut,
+	Cancelled,
+};
+
+class RequestCancellations final {
+public:
+	void add(Fn<void()> cancellation) {
+		const auto lock = std::lock_guard(_mutex);
+		_cancellations.push_back(std::move(cancellation));
+	}
+
+	[[nodiscard]] std::vector<Fn<void()>> take() {
+		const auto lock = std::lock_guard(_mutex);
+		return base::take(_cancellations);
+	}
+
+private:
+	std::mutex _mutex;
+	std::vector<Fn<void()>> _cancellations;
+
+};
+
+[[nodiscard]] SendSyncResult ToSendSyncResult(SendWaitResult result) {
+	return (result == SendWaitResult::Succeeded)
+		? SendSyncResult::Succeeded
+		: (result == SendWaitResult::Failed)
+		? SendSyncResult::Failed
+		: SendSyncResult::Indeterminate;
+}
+
+[[nodiscard]] SendSyncResult ToSendSyncResult(Api::SendResult result) {
+	return (result == Api::SendResult::Succeeded)
+		? SendSyncResult::Succeeded
+		: (result == Api::SendResult::Failed)
+		? SendSyncResult::Failed
+		: SendSyncResult::Indeterminate;
+}
+
+} // namespace
+
+template <typename StartSend>
+[[nodiscard]] SendSyncResult waitForSendRequest(
+		const base::weak_ptr<Main::Session> &session,
+		base::weak_ptr<History> targetHistory,
+		const Fn<bool()> &cancelled,
+		int expectedResults,
+		StartSend &&startSend) {
+	constexpr auto kTimeout = std::chrono::minutes(5);
+	const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+	auto latch = std::make_shared<TimedCountDownLatch>(1);
+	auto result = std::make_shared<std::atomic<SendWaitResult>>(
+		SendWaitResult::Pending);
+	auto abandoned = std::make_shared<std::atomic<bool>>(false);
+	const auto isCancelled = cancelled;
+	const auto complete = [latch, result](Api::SendResult value) {
+		const auto mapped = value == Api::SendResult::Succeeded
+			? SendWaitResult::Succeeded
+			: value == Api::SendResult::Failed
+			? SendWaitResult::Failed
+			: SendWaitResult::Indeterminate;
+		auto expected = SendWaitResult::Pending;
+		if (result->compare_exchange_strong(expected, mapped)) {
+			latch->countDown();
+		}
+	};
+	const auto request = std::make_shared<Api::SendRequest>(
+		expectedResults,
+		complete,
+		[abandoned, isCancelled, deadline] {
+			return abandoned->load()
+				|| (isCancelled && isCancelled())
+				|| std::chrono::steady_clock::now() >= deadline;
+		});
+	const auto weakSession = session;
+
+	try {
+		crl::on_main([
+				weakSession,
+				targetHistory,
+				isCancelled,
+				deadline,
+				abandoned,
+				request,
+				startSend = std::forward<StartSend>(startSend)]() mutable {
+			if (abandoned->load()) {
+				return;
+			}
+			if ((isCancelled && isCancelled())
+				|| std::chrono::steady_clock::now() >= deadline) {
+				request->finishOne(Api::SendResult::Indeterminate);
+				return;
+			}
+			const auto current = weakSession.get();
+			const auto history = targetHistory.get();
+			if (!current || !history || &history->session() != current) {
+				request->finishOne(Api::SendResult::Failed);
+				return;
+			}
+			try {
+				startSend(current, history, request);
+			} catch (...) {
+				request->cancel();
+			}
+		});
+	} catch (...) {
+		request->finishOne(Api::SendResult::Failed);
+	}
+
+	const auto waited = WaitForDownload(*latch, kTimeout, cancelled);
+	if (waited == DownloadWaitResult::Completed
+		&& std::chrono::steady_clock::now() < deadline
+		&& !(cancelled && cancelled())) {
+		return ToSendSyncResult(result->load());
+	}
+	const auto terminal = (waited == DownloadWaitResult::TimedOut
+		|| std::chrono::steady_clock::now() >= deadline)
+		? SendWaitResult::TimedOut
+		: SendWaitResult::Cancelled;
+	auto expected = SendWaitResult::Pending;
+	result->compare_exchange_strong(expected, terminal);
+	abandoned->store(true);
+	crl::on_main_sync([request] {
+		request->cancel();
+	});
+	return SendSyncResult::Indeterminate;
+}
+
+ForwardMessagesSyncResult forwardMessagesSync(
+		const base::weak_ptr<Main::Session> &session,
+		const MessageIdsList &itemIds,
+		const ApiWrap::SendAction &action,
+		Data::ForwardOptions options,
+		base::weak_ptr<History> targetHistory,
+		const Fn<bool()> &cancelled,
+		Fn<void(Api::SendResult, int)> requestResultCallback) {
+	constexpr auto kTimeout = std::chrono::minutes(1);
+	if (cancelled && cancelled()) {
+		return ForwardMessagesSyncResult::Cancelled;
+	}
+	if (itemIds.empty()) {
+		return ForwardMessagesSyncResult::Failed;
+	}
+	const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+	auto latch = std::make_shared<TimedCountDownLatch>(1);
+	auto result = std::make_shared<std::atomic<SendWaitResult>>(
+		SendWaitResult::Pending);
+	auto abandoned = std::make_shared<std::atomic<bool>>(false);
+	auto cancellations = std::make_shared<RequestCancellations>();
+	const auto complete = [latch, result](
+			ForwardMessagesSyncResult value) {
+		auto expected = SendWaitResult::Pending;
+		const auto mapped = value == ForwardMessagesSyncResult::Succeeded
+			? SendWaitResult::Succeeded
+			: value == ForwardMessagesSyncResult::Failed
+			? SendWaitResult::Failed
+			: value == ForwardMessagesSyncResult::Cancelled
+			? SendWaitResult::Cancelled
+			: value == ForwardMessagesSyncResult::TimedOut
+			? SendWaitResult::TimedOut
+			: SendWaitResult::Indeterminate;
+		if (result->compare_exchange_strong(expected, mapped)) {
+			latch->countDown();
+		}
+	};
+	const auto forwardIds = itemIds;
+	const auto weakSession = session;
+	const auto isCancelled = cancelled;
+	const auto cancelRequestsOnMain = [cancellations] {
+		for (const auto &cancel : cancellations->take()) {
+			cancel();
+		}
+	};
+	const auto cancelOutstanding = [
+			abandoned,
+			cancelRequestsOnMain] {
+		abandoned->store(true);
+		crl::on_main_sync(cancelRequestsOnMain);
+	};
+
+	try {
+		crl::on_main([=]
+		{
+			if (abandoned->load()) {
+				return;
+			}
+			if (isCancelled && isCancelled()) {
+				complete(ForwardMessagesSyncResult::Cancelled);
+				return;
+			}
+			if (std::chrono::steady_clock::now() >= deadline) {
+				complete(ForwardMessagesSyncResult::TimedOut);
+				return;
+			}
+			const auto current = weakSession.get();
+			const auto history = targetHistory.get();
+			if (!current || !history || &history->session() != current) {
+				complete(ForwardMessagesSyncResult::Failed);
+				return;
+			}
 			auto safeAction = action;
 			safeAction.history = history;
 			const auto forwardItems = current->data().idsToItems(forwardIds);
 			if (forwardItems.size() != forwardIds.size()) {
-				latch->countDown();
+				complete(ForwardMessagesSyncResult::Failed);
 				return;
 			}
-			current->api().forwardMessages(
-				Data::ResolvedForwardDraft(forwardItems, options),
-				std::move(safeAction),
-				[latch] { latch->countDown(); });
-		} else {
-			latch->countDown();
-		}
-	});
-
-
-	latch->await(std::chrono::minutes(1));
-}
-
-void sendMessageSync(
-		not_null<Main::Session*> session,
-		Api::MessageToSend &&message,
-		base::weak_ptr<History> targetHistory) {
-	const auto action = message.action;
-	const auto weakSession = base::make_weak(session);
-	crl::on_main([=, message = std::move(message)]() mutable
-	{
-		const auto current = weakSession.get();
-		const auto history = targetHistory.get();
-		if (current && history) {
-			message.action.history = history;
-			// we cannot send events to objects
-			// owned by a different thread
-			// because sendMessage updates UI too
-
-			current->api().sendMessage(std::move(message));
-		}
-	});
-
-
-	waitForMsgSync(session, std::move(targetHistory));
-}
-
-void waitForMsgSync(
-	not_null<Main::Session*> session,
-		base::weak_ptr<History> targetHistory) {
-	auto latch = std::make_shared<TimedCountDownLatch>(1);
-	auto lifetime = std::make_shared<rpl::lifetime>();
-	const auto weakSession = base::make_weak(session);
-	const auto target = AyuForward::SnapshotForwardTarget(
-		session,
-		targetHistory);
-	if (!target) {
-		return;
+			try {
+				current->api().forwardMessagesWithResult(
+					Data::ResolvedForwardDraft(forwardItems, options),
+					std::move(safeAction),
+					[complete](Api::ForwardMessagesResult value) {
+						complete(value == Api::ForwardMessagesResult::Succeeded
+							? ForwardMessagesSyncResult::Succeeded
+							: value == Api::ForwardMessagesResult::Failed
+							? ForwardMessagesSyncResult::Failed
+							: ForwardMessagesSyncResult::Indeterminate);
+					},
+					[cancellations](Fn<void()> cancel) {
+						cancellations->add(std::move(cancel));
+					},
+					[abandoned, isCancelled, deadline] {
+						return abandoned->load()
+							|| (isCancelled && isCancelled())
+							|| std::chrono::steady_clock::now() >= deadline;
+					},
+						requestResultCallback);
+				} catch (...) {
+					abandoned->store(true);
+					cancelRequestsOnMain();
+					complete(ForwardMessagesSyncResult::Indeterminate);
+				}
+			});
+	} catch (...) {
+		complete(ForwardMessagesSyncResult::Failed);
 	}
-	const auto peerId = target->peerId;
 
-	crl::on_main([=]
-	{
-		if (const auto current = weakSession.get()) {
-			current->data().itemIdChanged()
-				| rpl::filter([=](const Data::Session::IdChange &update)
-				{
-					return peerId == update.newId.peer;
-				}) | rpl::on_next([=]
-									  {
-										  latch->countDown();
-									  },
-									  *lifetime);
-		} else {
+	const auto waited = WaitForDownload(*latch, kTimeout, cancelled);
+	const auto toForwardResult = [](SendWaitResult value) {
+		return value == SendWaitResult::Succeeded
+			? ForwardMessagesSyncResult::Succeeded
+			: value == SendWaitResult::Failed
+			? ForwardMessagesSyncResult::Failed
+			: value == SendWaitResult::Cancelled
+			? ForwardMessagesSyncResult::Cancelled
+			: value == SendWaitResult::TimedOut
+			? ForwardMessagesSyncResult::TimedOut
+			: ForwardMessagesSyncResult::Indeterminate;
+	};
+	if (waited == DownloadWaitResult::Completed
+		&& std::chrono::steady_clock::now() < deadline
+		&& !(cancelled && cancelled())) {
+		return toForwardResult(result->load());
+	}
+	auto expected = SendWaitResult::Pending;
+	const auto terminal = (waited == DownloadWaitResult::TimedOut
+		|| std::chrono::steady_clock::now() >= deadline)
+		? SendWaitResult::TimedOut
+		: SendWaitResult::Cancelled;
+	result->compare_exchange_strong(expected, terminal);
+	cancelOutstanding();
+	return toForwardResult(terminal);
+}
+
+[[nodiscard]] SendSyncResult sendMessageSync(
+	const base::weak_ptr<Main::Session> &session,
+	Api::MessageToSend &&message,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled) {
+	constexpr auto kTimeout = std::chrono::minutes(5);
+	const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+	auto latch = std::make_shared<TimedCountDownLatch>(1);
+	auto result = std::make_shared<std::atomic<SendWaitResult>>(
+		SendWaitResult::Pending);
+	auto abandoned = std::make_shared<std::atomic<bool>>(false);
+	auto cancellations = std::make_shared<RequestCancellations>();
+	const auto complete = [latch, result](Api::SendResult value) {
+		auto expected = SendWaitResult::Pending;
+		const auto mapped = value == Api::SendResult::Succeeded
+			? SendWaitResult::Succeeded
+			: value == Api::SendResult::Failed
+			? SendWaitResult::Failed
+			: SendWaitResult::Indeterminate;
+		if (result->compare_exchange_strong(expected, mapped)) {
 			latch->countDown();
 		}
-	});
+	};
+	const auto weakSession = session;
+	const auto isCancelled = cancelled;
+	const auto cancelOutstanding = [
+			abandoned,
+			cancellations] {
+		abandoned->store(true);
+		crl::on_main_sync([cancellations] {
+			for (const auto &cancel : cancellations->take()) {
+				cancel();
+			}
+		});
+	};
 
-	latch->await(std::chrono::minutes(5));
-	crl::on_main_sync([lifetime = base::take(lifetime)]
-	{
-		lifetime->destroy();
-	});
+	try {
+		crl::on_main([
+				weakSession,
+				targetHistory,
+				isCancelled,
+				deadline,
+				abandoned,
+				complete,
+				cancellations,
+				message = std::move(message)]() mutable {
+			if (abandoned->load()
+				|| (isCancelled && isCancelled())
+				|| std::chrono::steady_clock::now() >= deadline) {
+				complete(Api::SendResult::Indeterminate);
+				return;
+			}
+			const auto current = weakSession.get();
+			const auto history = targetHistory.get();
+			if (!current || !history || &history->session() != current) {
+				complete(Api::SendResult::Failed);
+				return;
+			}
+			if (abandoned->load()
+				|| (isCancelled && isCancelled())
+				|| std::chrono::steady_clock::now() >= deadline) {
+				complete(Api::SendResult::Indeterminate);
+				return;
+			}
+			message.action.history = history;
+			try {
+				current->api().sendMessageWithResult(
+					std::move(message),
+					[complete](Api::SendResult value) {
+						complete(value);
+					},
+					[cancellations](Fn<void()> cancel) {
+						cancellations->add(std::move(cancel));
+					},
+					[abandoned, isCancelled, deadline] {
+						return abandoned->load()
+							|| (isCancelled && isCancelled())
+							|| std::chrono::steady_clock::now() >= deadline;
+				});
+			} catch (...) {
+				abandoned->store(true);
+				for (const auto &cancel : cancellations->take()) {
+					cancel();
+				}
+				complete(Api::SendResult::Indeterminate);
+			}
+		});
+	} catch (...) {
+		complete(Api::SendResult::Failed);
+	}
+
+	const auto waitResult = WaitForDownload(*latch, kTimeout, cancelled);
+	if (waitResult == DownloadWaitResult::Completed
+		&& std::chrono::steady_clock::now() < deadline
+		&& !(cancelled && cancelled())) {
+		return ToSendSyncResult(result->load());
+	}
+	auto expected = SendWaitResult::Pending;
+	const auto terminal = (waitResult == DownloadWaitResult::TimedOut
+		|| std::chrono::steady_clock::now() >= deadline)
+		? SendWaitResult::TimedOut
+		: SendWaitResult::Cancelled;
+	result->compare_exchange_strong(expected, terminal);
+	cancelOutstanding();
+	return SendSyncResult::Indeterminate;
 }
 
-void sendDocumentSync(not_null<Main::Session*> session,
-					  Ui::PreparedGroup &group,
-					  SendMediaType type,
-					  TextWithTags &&caption,
-					  const Api::SendAction &action,
-					  base::weak_ptr<History> targetHistory) {
+[[nodiscard]] SendSyncResult sendDocumentSync(
+	const base::weak_ptr<Main::Session> &session,
+	Ui::PreparedGroup &group,
+	SendMediaType type,
+	TextWithTags &&caption,
+	const Api::SendAction &action,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled) {
+	if (group.list.files.empty()) {
+		return SendSyncResult::Failed;
+	}
+	auto hasAlbum = group.list.files.size() > 1;
+	if (hasAlbum
+		&& ranges::any_of(group.list.files, &Ui::PreparedFile::ttlSeconds)) {
+		hasAlbum = false;
+	}
+	const auto expectedResults = hasAlbum
+		? 1
+		: static_cast<int>(group.list.files.size());
 	auto groupId = std::make_shared<SendingAlbum>();
-	groupId->groupId = base::RandomValue<uint64>();
-	const auto weakSession = base::make_weak(session);
-
-	crl::on_main([=, lst = std::move(group.list), caption = std::move(caption)]() mutable
-	{
-		const auto current = weakSession.get();
-		const auto history = targetHistory.get();
-		if (!current || !history) {
-			return;
-		}
-		auto safeAction = action;
-		safeAction.history = history;
-		auto size = lst.files.size();
-		if (!lst.files.empty()) {
-			lst.files.front().caption = std::move(caption);
-		}
-		current->api().sendFiles(
-			std::move(lst),
-			type,
-			size > 1 ? groupId : nullptr,
-			std::move(safeAction));
-	});
-
-	waitForMsgSync(session, std::move(targetHistory));
+	return waitForSendRequest(
+		session,
+		std::move(targetHistory),
+		cancelled,
+		expectedResults,
+		[groupId,
+		 action,
+		 type,
+		 hasAlbum,
+		 list = std::move(group.list),
+		 caption = std::move(caption)](
+				Main::Session *current,
+				History *history,
+				std::shared_ptr<Api::SendRequest> request) mutable {
+			auto safeAction = action;
+			safeAction.history = history;
+			list.files.front().caption = std::move(caption);
+			current->api().sendFiles(
+				std::move(list),
+				type,
+				hasAlbum ? groupId : nullptr,
+				std::move(safeAction),
+				std::move(request));
+		});
 }
 
-void sendStickerSync(not_null<Main::Session*> session,
-						 Api::MessageToSend &&message,
-						 DocumentId documentId,
-						 base::weak_ptr<History> targetHistory) {
-	const auto action = message.action;
-	const auto weakSession = base::make_weak(session);
-	crl::on_main([=, message = std::move(message)]() mutable
-	{
-		const auto current = weakSession.get();
-		const auto history = targetHistory.get();
-		if (current && history && documentId) {
+[[nodiscard]] SendSyncResult sendStickerSync(
+	const base::weak_ptr<Main::Session> &session,
+	Api::MessageToSend &&message,
+	DocumentId documentId,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled) {
+	return waitForSendRequest(
+		session,
+		std::move(targetHistory),
+		cancelled,
+		1,
+		[message = std::move(message), documentId](
+				Main::Session *current,
+				History *history,
+				std::shared_ptr<Api::SendRequest> request) mutable {
+			if (!documentId) {
+				request->finishOne(Api::SendResult::Failed);
+				return;
+			}
 			message.action.history = history;
 			Api::SendExistingDocument(
 				std::move(message),
 				current->data().document(documentId),
-				std::nullopt);
-		}
-	});
-
-	waitForMsgSync(session, std::move(targetHistory));
+				std::nullopt,
+				std::move(request));
+		});
 }
 
-void sendVoiceSync(not_null<Main::Session*> session,
-					   const QByteArray &data,
-					   int64_t duration,
-					   bool video,
-					   Api::MessageToSend &&message,
-					   base::weak_ptr<History> targetHistory) {
+[[nodiscard]] SendSyncResult sendVoiceSync(
+	const base::weak_ptr<Main::Session> &session,
+	const QByteArray &data,
+	int64_t duration,
+	bool video,
+	Api::MessageToSend &&message,
+	base::weak_ptr<History> targetHistory,
+	const Fn<bool()> &cancelled) {
 	const auto action = message.action;
-	const auto weakSession = base::make_weak(session);
-	const auto target = AyuForward::SnapshotForwardTarget(
-		session,
-		targetHistory);
-	if (!target) {
-		return;
-	}
-	const auto peerId = target->peerId;
 	const auto voiceData = data;
-
-	crl::on_main([=]
-	{
-		const auto current = weakSession.get();
-		if (!current) {
-			return;
-		}
-		const auto to = FileLoadTo(
-			peerId,
-			action.options,
-			action.replyTo,
-			action.replaceMediaOf);
-		current->api().fileLoader()->addTask(
-			std::make_unique<FileLoadTask>(FileLoadTask::VoiceArgs{
+	return waitForSendRequest(
+		session,
+		std::move(targetHistory),
+		cancelled,
+		1,
+		[action,
+			voiceData,
+			duration,
+			video,
+			caption = std::move(message.textWithTags)](
+				Main::Session *current,
+				History *history,
+				std::shared_ptr<Api::SendRequest> request) {
+			const auto to = FileLoadTo(
+				history->peer->id,
+				action.options,
+				action.replyTo,
+				action.replaceMediaOf);
+			auto task = std::make_unique<FileLoadTask>(FileLoadTask::VoiceArgs{
 				.session = current,
 				.voice = voiceData,
 				.duration = duration,
 				.waveform = QVector<signed char>(),
 				.video = video,
 				.to = to,
-				.caption = message.textWithTags
-			}));
-	});
-	waitForMsgSync(session, std::move(targetHistory));
+				.caption = caption,
+				.sendRequest = request,
+			});
+			const auto taskId = task->id();
+			const auto weakSession = base::make_weak(current);
+			request->registerCancellation([=] {
+				if (const auto current = weakSession.get()) {
+					current->api().fileLoader()->cancelTask(taskId);
+				}
+			});
+			if (!request->shouldCancel()) {
+				current->api().fileLoader()->addTask(std::move(task));
+			}
+		});
 }
 
 namespace {
@@ -285,14 +594,14 @@ namespace {
 
 } // namespace
 
-UploadedFile uploadFileSync(not_null<Main::Session*> session,
+UploadedFile uploadFileSync(const base::weak_ptr<Main::Session> &session,
 							PeerId peerId,
 							const QString &path,
 							SendMediaType type,
 							bool forceFile,
 							const QString &displayName,
 							const Fn<bool()> &cancelled) {
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	if (!weakSession) {
 		return {};
 	}
@@ -421,20 +730,12 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 	const auto result = std::make_shared<UploadedFile>();
 	auto mediaLatch = std::make_shared<TimedCountDownLatch>(1);
 	const auto mediaAbandoned = std::make_shared<std::atomic_bool>(false);
-	std::shared_ptr<MTP::Sender> mediaApi;
-	crl::on_main_sync([&]
-	{
-		if (const auto current = weakSession.get()) {
-			mediaApi = std::make_shared<MTP::Sender>(&current->mtp());
-		}
-	});
-	if (!mediaApi) {
-		return {};
-	}
+	const auto mediaStartMutex = std::make_shared<std::mutex>();
+	const auto mediaRequestId = std::make_shared<mtpRequestId>(0);
 
 	crl::on_main([=]
 	{
-		if (mediaAbandoned->load()) {
+		if (mediaAbandoned->load() || (cancelled && cancelled())) {
 			mediaLatch->countDown();
 			return;
 		}
@@ -444,7 +745,12 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 			return;
 		}
 		const auto currentPeer = current->data().peer(peerId);
-		mediaApi->request(MTPmessages_UploadMedia(
+		const auto lock = std::lock_guard(*mediaStartMutex);
+		if (mediaAbandoned->load() || (cancelled && cancelled())) {
+			mediaLatch->countDown();
+			return;
+		}
+		*mediaRequestId = current->api().request(MTPmessages_UploadMedia(
 			MTP_flags(0),
 			MTPstring(),
 			currentPeer->input(),
@@ -479,32 +785,44 @@ UploadedFile uploadFileSync(not_null<Main::Session*> session,
 		*mediaLatch,
 		std::chrono::minutes(5),
 		cancelled);
-	if (mediaFinished != DownloadWaitResult::Completed) {
+	{
+		const auto lock = std::lock_guard(*mediaStartMutex);
 		mediaAbandoned->store(true);
 	}
-	crl::on_main_sync([
-		mediaApi = base::take(mediaApi),
-		mediaAbandoned
-	]() mutable
-	{
-		mediaAbandoned->store(true);
-		mediaApi.reset();
+	crl::on_main_sync([weakSession, mediaRequestId] {
+		if (*mediaRequestId) {
+			if (const auto current = weakSession.get()) {
+				current->api().request(*mediaRequestId).cancel();
+			}
+		}
 	});
 
-	return mediaFinished == DownloadWaitResult::Completed
+	return (mediaFinished == DownloadWaitResult::Completed)
+		&& !(cancelled && cancelled())
 		? *result
 		: UploadedFile();
 }
 
 std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
-	not_null<Main::Session*> session,
-	FullMsgId itemId) {
+	const base::weak_ptr<Main::Session> &session,
+	FullMsgId itemId,
+	const Fn<bool()> &cancelled) {
+	if (cancelled && cancelled()) {
+		return nullptr;
+	}
 	const auto resolved = std::make_shared<std::shared_ptr<const Iv::RichPage>>();
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
+	const auto abandoned = std::make_shared<std::atomic<bool>>(false);
+	const auto startMutex = std::make_shared<std::mutex>();
+	const auto requestId = std::make_shared<mtpRequestId>(0);
 
 	crl::on_main([=]
 	{
+		if (abandoned->load() || (cancelled && cancelled())) {
+			latch->countDown();
+			return;
+		}
 		const auto current = weakSession.get();
 		if (!current) {
 			latch->countDown();
@@ -534,12 +852,20 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 
 		const auto peerId = item->history()->peer->id;
 		const auto peerInput = item->history()->peer->input();
-
-		current->api().request(MTPmessages_GetRichMessage(
+		const auto lock = std::lock_guard(*startMutex);
+		if (abandoned->load() || (cancelled && cancelled())) {
+			latch->countDown();
+			return;
+		}
+		*requestId = current->api().request(MTPmessages_GetRichMessage(
 			peerInput,
 			MTP_int(itemId.msg)
 		)).done([=](const MTPmessages_Messages &result)
 		{
+			if (abandoned->load()) {
+				latch->countDown();
+				return;
+			}
 			const auto current = weakSession.get();
 			if (!current) {
 				latch->countDown();
@@ -593,31 +919,63 @@ std::shared_ptr<const Iv::RichPage> loadFullRichPageSync(
 		}).send();
 	});
 
-	const auto finished = latch->await(std::chrono::minutes(1));
+	const auto finished = WaitForDownload(
+		*latch,
+		std::chrono::minutes(1),
+		cancelled);
+	{
+		const auto lock = std::lock_guard(*startMutex);
+		abandoned->store(true);
+	}
+	crl::on_main_sync([weakSession, requestId] {
+		if (*requestId) {
+			if (const auto current = weakSession.get()) {
+				current->api().request(*requestId).cancel();
+			}
+		}
+	});
 
-	return finished ? *resolved : nullptr;
+	return (finished == DownloadWaitResult::Completed)
+		? *resolved
+		: nullptr;
 }
 
-bool sendRichMessageSync(not_null<Main::Session*> session,
-						 const MTPInputRichMessage &richMessage,
-						 const Api::SendAction &action,
-						 base::weak_ptr<History> targetHistory) {
-	const auto sent = std::make_shared<bool>(false);
+
+
+SendSyncResult sendRichMessageSync(
+		const base::weak_ptr<Main::Session> &session,
+		const MTPInputRichMessage &richMessage,
+		const Api::SendAction &action,
+		base::weak_ptr<History> targetHistory,
+		const Fn<bool()> &cancelled) {
+	if (cancelled && cancelled()) {
+		return SendSyncResult::Indeterminate;
+	}
+	const auto sendResult = std::make_shared<std::atomic<SendSyncResult>>(
+		SendSyncResult::Failed);
 	auto latch = std::make_shared<TimedCountDownLatch>(1);
-	const auto weakSession = base::make_weak(session);
+	const auto weakSession = session;
 	const auto target = AyuForward::SnapshotForwardTarget(
 		session,
 		targetHistory);
 	if (!target) {
-		return false;
+		return SendSyncResult::Failed;
 	}
 	const auto peerId = target->peerId;
+	const auto abandoned = std::make_shared<std::atomic<bool>>(false);
+	const auto startMutex = std::make_shared<std::mutex>();
+	const auto requestId = std::make_shared<mtpRequestId>(0);
 
 	crl::on_main([=]
 	{
+		if (abandoned->load() || (cancelled && cancelled())) {
+			latch->countDown();
+			return;
+		}
 		const auto current = weakSession.get();
 		const auto currentHistory = targetHistory.get();
-		if (!current || !currentHistory) {
+		if (!current || !currentHistory
+			|| &currentHistory->session() != current) {
 			latch->countDown();
 			return;
 		}
@@ -647,7 +1005,12 @@ bool sendRichMessageSync(not_null<Main::Session*> session,
 			sendFlags |= Flag::f_effect;
 		}
 
-		current->api().request(MTPmessages_SendMessage(
+		const auto lock = std::lock_guard(*startMutex);
+		if (abandoned->load() || (cancelled && cancelled())) {
+			latch->countDown();
+			return;
+		}
+		*requestId = current->api().request(MTPmessages_SendMessage(
 			MTP_flags(sendFlags),
 			peer->input(),
 			safeAction.mtpReplyTo(),
@@ -668,20 +1031,41 @@ bool sendRichMessageSync(not_null<Main::Session*> session,
 		)).done([=](const MTPUpdates &result)
 		{
 			if (const auto current = weakSession.get()) {
-				current->api().applyUpdates(result);
-				*sent = true;
+			current->api().applyUpdates(result);
+				if (!abandoned->load()) {
+					sendResult->store(SendSyncResult::Succeeded);
+				}
 			}
 			latch->countDown();
 		}).fail([=](const MTP::Error &error)
 		{
 			LOG(("AyuForward: rich message send failed: %1").arg(error.type()));
+			sendResult->store(ToSendSyncResult(Api::SendResultForError(error)));
 			latch->countDown();
 		}).send();
 	});
 
-	const auto finished = latch->await(std::chrono::minutes(2));
+	const auto finished = WaitForDownload(
+		*latch,
+		std::chrono::minutes(2),
+		cancelled);
+	{
+		const auto lock = std::lock_guard(*startMutex);
+		abandoned->store(true);
+	}
+	crl::on_main_sync([weakSession, requestId] {
+		if (*requestId) {
+			if (const auto current = weakSession.get()) {
+				current->api().request(*requestId).cancel();
+			}
+		}
+	});
 
-	return finished && *sent;
+	if (finished != DownloadWaitResult::Completed
+		|| (cancelled && cancelled())) {
+		return SendSyncResult::Indeterminate;
+	}
+	return sendResult->load();
 }
 
 } // namespace AyuSync

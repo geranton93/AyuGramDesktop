@@ -9,7 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/object_ptr.h"
 
+class DocumentData;
 class History;
+class HistoryItem;
 
 namespace style {
 struct FlatLabel;
@@ -259,6 +261,8 @@ private:
 
 [[nodiscard]] Main::Session *SessionByUniqueId(uint64 sessionUniqueId);
 [[nodiscard]] HistoryItem *MessageByGlobalId(GlobalMsgId globalId);
+[[nodiscard]] std::vector<not_null<DocumentData*>> ItemRichPageAudio(
+	not_null<const HistoryItem*> item);
 
 [[nodiscard]] QDateTime ItemDateTime(not_null<const HistoryItem*> item);
 [[nodiscard]] QString ItemDateText(

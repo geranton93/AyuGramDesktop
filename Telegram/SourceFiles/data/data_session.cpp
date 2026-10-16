@@ -1963,6 +1963,7 @@ void Session::photoLoadSettingsChanged() {
 	for (const auto &[id, photo] : _photos) {
 		photo->automaticLoadSettingsChanged();
 	}
+	_stories->photoLoadSettingsChanged();
 }
 
 void Session::documentLoadSettingsChanged() {

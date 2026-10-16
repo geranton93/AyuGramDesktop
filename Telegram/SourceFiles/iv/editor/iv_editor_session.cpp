@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_editing.h"
 #include "apiwrap.h"
 #include "base/flat_map.h"
+#include "base/flat_set.h"
 #include "base/timer.h"
 #include "base/weak_qptr.h"
 #include "base/weak_ptr.h"
@@ -110,7 +111,7 @@ constexpr auto kRichDraftAutosaveTimeout = crl::time(10 * 1000);
 class ArticleSession;
 
 struct ComposeThreadKey {
-	Main::Session *session = nullptr;
+	uint64 sessionId = 0;
 	PeerId peerId = 0;
 	::Data::DraftKey draftKey = ::Data::DraftKey::None();
 
@@ -122,13 +123,16 @@ struct ComposeThreadEntry {
 	rpl::variable<bool> fieldVisible = false;
 };
 
+void RegisterComposeThreadCleanup(not_null<Main::Session*> session);
+
 [[nodiscard]] ComposeThreadKey ComposeKey(
 		not_null<Main::Session*> session,
 		PeerId peerId,
 		MsgId topicRootId,
 		PeerId monoforumPeerId) {
+	RegisterComposeThreadCleanup(session);
 	return {
-		.session = session.get(),
+		.sessionId = session->uniqueId(),
 		.peerId = peerId,
 		.draftKey = ::Data::DraftKey::Cloud(topicRootId, monoforumPeerId),
 	};
@@ -149,31 +153,43 @@ struct ComposeThreadEntry {
 }
 
 [[nodiscard]] auto &ComposeThreadsSweptSessions() {
-	static auto result = base::flat_set<Main::Session*>();
+	static auto result = base::flat_set<uint64>();
 	return result;
 }
 
-void SweepComposeThreadsFor(not_null<Main::Session*> session) {
+void SweepComposeThreadsFor(uint64 sessionId) {
 	auto &threads = ComposeThreads();
 	for (auto i = begin(threads); i != end(threads);) {
-		if (i->first.session == session.get()) {
+		if (i->first.sessionId == sessionId) {
 			i = threads.erase(i);
 		} else {
 			++i;
 		}
 	}
-	ComposeThreadsSweptSessions().remove(session.get());
+	ComposeThreadsSweptSessions().remove(sessionId);
+}
+
+void RegisterComposeThreadCleanup(not_null<Main::Session*> session) {
+	const auto sessionId = session->uniqueId();
+	if (ComposeThreadsSweptSessions().emplace(sessionId).second) {
+		session->lifetime().add([sessionId] {
+			SweepComposeThreadsFor(sessionId);
+		});
+	}
 }
 
 [[nodiscard]] ComposeThreadEntry &ComposeThreadEntryFor(
 		const ComposeThreadKey &key) {
-	if (const auto session = key.session
-			; session && ComposeThreadsSweptSessions().emplace(session).second) {
-		session->lifetime().add([session] {
-			SweepComposeThreadsFor(session);
-		});
+	auto &threads = ComposeThreads();
+	if (const auto i = threads.find(key); i != end(threads)) {
+		return i->second;
 	}
-	return ComposeThreads()[key];
+	for (auto i = begin(threads); i != end(threads);) {
+		i = SessionByUniqueId(i->first.sessionId)
+			? (i + 1)
+			: threads.erase(i);
+	}
+	return threads[key];
 }
 
 [[nodiscard]] ComposeThreadEntry *LookupComposeThreadEntry(

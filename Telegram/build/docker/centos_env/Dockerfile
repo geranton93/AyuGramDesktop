@@ -160,7 +160,7 @@ RUN <<EOF
 git init patches
 cd patches
 git remote add origin https://github.com/desktop-app/patches.git
-git fetch --depth=1 origin c2cc44fca4a8d0e20d1ef0f40884d717c750f0a4
+git fetch --depth=1 origin c97ff78de632c72e35f9e3205e2447efeb58b986
 git reset --hard FETCH_HEAD
 rm -rf .git
 EOF
@@ -189,7 +189,7 @@ EOF
 
 FROM builder AS xz
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
-git clone -b v5.8.1 --depth=1 https://github.com/tukaani-project/xz.git
+git clone -b v5.8.4 --depth=1 https://github.com/tukaani-project/xz.git
 cd xz
 cmake -B build .
 cmake --build build
@@ -200,7 +200,7 @@ EOF
 
 FROM builder AS lcms2
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
-git clone -b lcms2.15 --depth=1 https://github.com/mm2/Little-CMS.git
+git clone -b lcms2.19.1 --depth=1 https://github.com/mm2/Little-CMS.git
 cd Little-CMS
 meson build --buildtype=plain --default-library=static
 meson compile -C build
@@ -284,21 +284,6 @@ cd ..
 rm -rf openh264
 EOF
 
-FROM builder AS de265
-RUN --mount=type=cache,target=/var/cache/ccache <<EOF
-git clone -b v1.1.1 --depth=1 https://github.com/strukturag/libde265.git
-cd libde265
-cmake -B build . \
-	-DCMAKE_BUILD_TYPE=None \
-	-DBUILD_SHARED_LIBS=OFF \
-	-DENABLE_DECODER=OFF \
-	-DENABLE_SDL=OFF
-cmake --build build
-DESTDIR=/usr/src/de265-cache cmake --install build
-cd ..
-rm -rf libde265
-EOF
-
 FROM builder AS vpx
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
 git init libvpx
@@ -352,35 +337,6 @@ cmake --build build
 DESTDIR=/usr/src/avif-cache cmake --install build
 cd ..
 rm -rf libavif
-EOF
-
-FROM builder AS heif
-COPY --link --from=de265 /usr/src/de265-cache /
-
-RUN --mount=type=cache,target=/var/cache/ccache <<EOF
-git clone -b v1.23.1 --depth=1 https://github.com/strukturag/libheif.git
-cd libheif
-cmake -B build . \
-	-DBUILD_SHARED_LIBS=OFF \
-	-DBUILD_DOCUMENTATION=OFF \
-	-DBUILD_TESTING=OFF \
-	-DENABLE_PLUGIN_LOADING=OFF \
-	-DWITH_X265=OFF \
-	-DWITH_AOM_DECODER=OFF \
-	-DWITH_AOM_ENCODER=OFF \
-	-DWITH_X264=OFF \
-	-DWITH_OpenH264_DECODER=OFF \
-	-DWITH_RAV1E=OFF \
-	-DWITH_RAV1E_PLUGIN=OFF \
-	-DWITH_SvtEnc=OFF \
-	-DWITH_SvtEnc_PLUGIN=OFF \
-	-DWITH_DAV1D=OFF \
-	-DWITH_LIBSHARPYUV=OFF \
-	-DWITH_EXAMPLES=OFF
-cmake --build build
-DESTDIR=/usr/src/heif-cache cmake --install build
-cd ..
-rm -rf libheif
 EOF
 
 FROM builder AS jxl
@@ -797,6 +753,39 @@ cd ..
 rm -rf ffmpeg
 EOF
 
+FROM patches AS heif
+COPY --link --from=ffmpeg /usr/src/ffmpeg-cache /
+
+RUN --mount=type=cache,target=/var/cache/ccache <<EOF
+git clone -b v1.23.5 --depth=1 https://github.com/strukturag/libheif.git
+cd libheif
+git apply ../patches/libheif.patch
+cmake -B build . \
+	-DBUILD_SHARED_LIBS=OFF \
+	-DBUILD_DOCUMENTATION=OFF \
+	-DBUILD_TESTING=OFF \
+	-DENABLE_PLUGIN_LOADING=OFF \
+	-DWITH_X265=OFF \
+	-DWITH_AOM_DECODER=OFF \
+	-DWITH_AOM_ENCODER=OFF \
+	-DWITH_X264=OFF \
+	-DWITH_OpenH264_DECODER=OFF \
+	-DWITH_RAV1E=OFF \
+	-DWITH_RAV1E_PLUGIN=OFF \
+	-DWITH_SvtEnc=OFF \
+	-DWITH_SvtEnc_PLUGIN=OFF \
+	-DWITH_DAV1D=OFF \
+	-DWITH_LIBDE265=OFF \
+	-DWITH_FFMPEG_DECODER=ON \
+	-DWITH_GDK_PIXBUF=OFF \
+	-DWITH_LIBSHARPYUV=OFF \
+	-DWITH_EXAMPLES=OFF
+cmake --build build
+DESTDIR=/usr/src/heif-cache cmake --install build
+cd ..
+rm -rf libheif
+EOF
+
 FROM builder AS pipewire
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
 git clone -b 0.3.62 --depth=1 https://github.com/PipeWire/pipewire.git
@@ -833,9 +822,8 @@ EOF
 
 FROM builder AS openssl
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
-git clone -b openssl-3.2.1 --depth=1 https://github.com/openssl/openssl.git
+git clone -b openssl-3.6.5 --depth=1 https://github.com/openssl/openssl.git
 cd openssl
-sed -i 's/$cmd $cmdflags -c -o/$cmd $cmdflags -g0 -c -o/' Configurations/unix-Makefile.tmpl
 ./config --openssldir=/etc/ssl no-shared no-tests no-dso
 make -j$(nproc)
 make DESTDIR=/usr/src/openssl-cache install_sw
@@ -1001,6 +989,34 @@ cd ..
 rm -rf tde2e
 EOF
 
+FROM patches AS tlottie
+RUN <<EOF
+RUST_TOOLCHAIN=1.96.1
+export RUSTUP_HOME=/usr/src/rustup
+export CARGO_HOME=/usr/src/cargo
+wget -O rustup-init.sh https://sh.rustup.rs
+sh rustup-init.sh -y --no-modify-path --profile minimal --default-toolchain $RUST_TOOLCHAIN
+rm rustup-init.sh
+export RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN
+export PATH=$CARGO_HOME/bin:$PATH
+export DESTDIR=/usr/src/tlottie-cache
+git init tlottie
+cd tlottie
+git remote add origin https://github.com/dkaraush/tlottie.git
+git fetch --depth=1 origin 31f1b542f88e7b4be9a01e749920d857535fc715
+git reset --hard FETCH_HEAD
+git apply ../patches/tlottie.patch
+cargo rustc --lib --release --locked \
+	--features c-api --crate-type staticlib \
+	--target x86_64-unknown-linux-gnu \
+	-- --print native-static-libs
+mkdir -p $DESTDIR/usr/local/lib $DESTDIR/usr/local/include/tlottie
+objcopy --strip-debug target/x86_64-unknown-linux-gnu/release/libtlottie.a $DESTDIR/usr/local/lib/libtlottie.a
+cp include/tlottie.h $DESTDIR/usr/local/include/tlottie/tlottie.h
+cd ..
+rm -rf tlottie rustup cargo
+EOF
+
 FROM builder
 COPY --link --from=zlib /usr/src/zlib-cache /
 COPY --link --from=xz /usr/src/xz-cache /
@@ -1011,7 +1027,6 @@ COPY --link --from=mozjpeg /usr/src/mozjpeg-cache /
 COPY --link --from=opus /usr/src/opus-cache /
 COPY --link --from=dav1d /usr/src/dav1d-cache /
 COPY --link --from=openh264 /usr/src/openh264-cache /
-COPY --link --from=de265 /usr/src/de265-cache /
 COPY --link --from=vpx /usr/src/vpx-cache /
 COPY --link --from=webp /usr/src/webp-cache /
 COPY --link --from=avif /usr/src/avif-cache /
@@ -1043,6 +1058,7 @@ COPY --link --from=breakpad /usr/src/breakpad-cache /
 COPY --link --from=webrtc /usr/src/webrtc-cache /
 COPY --link --from=ada /usr/src/ada-cache /
 COPY --link --from=tde2e /usr/src/tde2e-cache /
+COPY --link --from=tlottie /usr/src/tlottie-cache /
 
 COPY --link --from=patches /usr/src/patches patches
 RUN <<EOF

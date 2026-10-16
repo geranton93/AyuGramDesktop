@@ -50,7 +50,7 @@ public:
 	void setWaitForMarkAsShown(bool wait);
 
 	// Called from the main thread.
-	// Returns the position of the displayed frame.
+	// Returns the frame position, or kTimeUnknown if its deadline changed.
 	[[nodiscard]] crl::time markFrameDisplayed(crl::time now);
 	void addTimelineDelay(crl::time delayed);
 	bool markFrameShown();
@@ -88,7 +88,6 @@ private:
 		NativeFrame nativeFrame;
 		crl::time position = kTimeUnknown;
 		crl::time displayed = kTimeUnknown;
-		crl::time display = kTimeUnknown;
 		FrameFormat format = FrameFormat::None;
 
 		base::flat_map<const Instance*, Prepared> prepared;
@@ -121,6 +120,7 @@ private:
 
 		[[nodiscard]] PrepareState prepareState(
 			crl::time trackTime,
+			float64 playbackSpeed,
 			bool dropStaleFrames);
 
 		[[nodiscard]] PresentFrame presentFrame(
@@ -128,6 +128,9 @@ private:
 			TimePoint trackTime,
 			float64 playbackSpeed,
 			bool dropStaleFrames);
+		[[nodiscard]] bool rebaseDisplayTime(
+			TimePoint trackTime,
+			float64 playbackSpeed);
 		[[nodiscard]] bool firstPresentHappened() const;
 
 		// Called from the main thread.
@@ -146,6 +149,7 @@ private:
 
 		static constexpr auto kCounterUninitialized = -1;
 		std::atomic<int> _counter = kCounterUninitialized;
+		std::atomic<crl::time> _pendingDisplayTime = kTimeUnknown;
 
 		static constexpr auto kFramesCount = 4;
 		std::array<Frame, kFramesCount> _frames;

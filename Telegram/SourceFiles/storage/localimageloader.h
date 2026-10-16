@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/variant.h"
 #include "api/api_common.h"
 
+#include <atomic>
 #include <memory>
 
 namespace Ui {
@@ -25,6 +26,10 @@ struct VideoSource;
 namespace Main {
 class Session;
 } // namespace Main
+
+namespace Api {
+class SendRequest;
+} // namespace Api
 
 namespace Storage {
 struct ArchiveEntries;
@@ -53,18 +58,40 @@ enum class SendMediaType {
 	SecondaryFile,
 };
 
-using TaskId = void*; // no interface, just id
+using TaskId = uint64;
 inline constexpr auto kEmptyTaskId = TaskId();
 
 class Task {
 public:
+	Task();
+	Task(const Task&) = delete;
+	Task &operator=(const Task&) = delete;
+	Task(Task&&) = delete;
+	Task &operator=(Task&&) = delete;
+
 	virtual void process() = 0; // is executed in a separate thread
 	virtual void finish() = 0; // is executed in the same as TaskQueue thread
 	virtual ~Task() = default;
 
 	TaskId id() const {
-		return static_cast<TaskId>(const_cast<Task*>(this));
+		return _id;
 	}
+	void cancel() {
+		_cancelled->store(true);
+	}
+	[[nodiscard]] bool isCancelled() const {
+		return _cancelled->load();
+	}
+
+protected:
+	void shareCancellationWith(Task &other) const {
+		other._cancelled = _cancelled;
+	}
+
+private:
+	const TaskId _id;
+	std::shared_ptr<std::atomic<bool>> _cancelled
+		= std::make_shared<std::atomic<bool>>(false);
 
 };
 
@@ -96,6 +123,7 @@ private:
 	std::deque<std::unique_ptr<Task>> _tasksToProcess;
 	std::deque<std::unique_ptr<Task>> _tasksToFinish;
 	TaskId _taskInProcessId = TaskId();
+	Task *_taskInProcess = nullptr;
 	QMutex _tasksToProcessMutex, _tasksToFinishMutex;
 	QThread *_thread = nullptr;
 	TaskQueueWorker *_worker = nullptr;
@@ -152,6 +180,7 @@ struct SendingAlbum {
 	uint64 groupId = 0;
 	std::vector<Item> items;
 	Api::SendOptions options;
+	std::shared_ptr<Api::SendRequest> sendRequest;
 	bool musicPreparedBatching = false;
 	bool sent = false;
 
@@ -191,7 +220,8 @@ struct FilePrepareResult {
 	TaskId taskId = kEmptyTaskId;
 	uint64 id = 0;
 	FileLoadTo to;
-	std::shared_ptr<SendingAlbum> album;
+	std::weak_ptr<SendingAlbum> album;
+	std::shared_ptr<Api::SendRequest> sendRequest;
 	SendMediaType type = SendMediaType::File;
 	QString filepath;
 	QByteArray content;
@@ -245,6 +275,9 @@ public:
 		const QString &filepath,
 		const QByteArray &content,
 		const QString &filemime);
+	[[nodiscard]] static bool IsVideoFile(
+		const QString &filepath,
+		const QString &filemime);
 	static bool FillImageInformation(
 		QImage &&image,
 		bool animated,
@@ -266,9 +299,11 @@ public:
 		bool forceFile = false;
 		bool sendLargePhotos = false;
 		std::shared_ptr<Media::Encode::Job> animationJob;
+		bool animationAsGif = true;
 		std::shared_ptr<Ui::PreparedFileArchive> archive;
 		uint64 idOverride = 0;
 		QString displayName;
+		std::shared_ptr<Api::SendRequest> sendRequest;
 	};
 
 	struct VoiceArgs {
@@ -279,6 +314,7 @@ public:
 		bool video = false;
 		FileLoadTo to;
 		TextWithTags caption;
+		std::shared_ptr<Api::SendRequest> sendRequest;
 	};
 
 	explicit FileLoadTask(Args &&args);
@@ -340,8 +376,10 @@ private:
 	bool _forceFile = false;
 	bool _sendLargePhotos = false;
 	std::shared_ptr<Media::Encode::Job> _animationJob;
+	bool _animationAsGif = true;
 	std::shared_ptr<Ui::PreparedFileArchive> _archive;
 
 	std::shared_ptr<FilePrepareResult> _result;
+	std::shared_ptr<Api::SendRequest> _sendRequest;
 
 };
