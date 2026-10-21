@@ -176,15 +176,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 1
-
-      - name: Cache native dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ github.workspace }}/../Libraries
-            ${{ github.workspace }}/../ThirdParty
-          key: ayugram-macos-${{ hashFiles('Telegram/build/prepare/prepare.py', 'Telegram/build/qt_version.py') }}
-          restore-keys: ayugram-macos-
+          submodules: recursive
 
       - name: Prepare native dependencies
         shell: bash
@@ -363,6 +355,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 1
+          submodules: recursive
 
       - name: Read the required Windows SDK version
         shell: bash
@@ -378,15 +371,6 @@ jobs:
           arch: ${{ matrix.msvc_arch }}
           sdk: ${{ env.SDK }}
           toolset: ${{ matrix.toolset }}
-
-      - name: Cache native dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ github.workspace }}/../Libraries
-            ${{ github.workspace }}/../ThirdParty
-          key: ayugram-windows-${{ matrix.target }}-${{ hashFiles('Telegram/build/prepare/prepare.py', 'Telegram/build/qt_version.py') }}
-          restore-keys: ayugram-windows-${{ matrix.target }}-
 
       - name: Prepare native dependencies
         shell: pwsh
@@ -544,12 +528,15 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 1
+          submodules: recursive
 
-      - name: Cache Docker build layers and ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        id: cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/ayugram-ccache
           key: ayugram-linux-ccache-${{ hashFiles('Telegram/build/docker/centos_env/Dockerfile', 'Telegram/build/docker/centos_env/pyproject.toml') }}
+          restore-keys: ayugram-linux-ccache-
 
       - name: Build the pinned Linux toolchain image
         shell: bash
@@ -644,6 +631,13 @@ jobs:
           path: ${{ runner.temp }}/ayugram-artifacts
           if-no-files-found: error
           retention-days: 14
+
+      - name: Save ccache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ayugram-ccache
+          key: ayugram-linux-ccache-${{ hashFiles('Telegram/build/docker/centos_env/Dockerfile', 'Telegram/build/docker/centos_env/pyproject.toml') }}
 
   publish:
     name: Publish fork release and update feeds
