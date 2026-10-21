@@ -442,13 +442,20 @@ void AddHistoryAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 		return;
 	}
 
+	const auto history = item->history();
+	const auto itemId = item->fullId();
+
 	menu->addAction(
 		tr::ayu_EditsHistoryMenuText(tr::now),
 		[=]
 		{
-			if (const auto window = item->history()->session().tryResolveWindow()) {
+			const auto current = history->owner().message(itemId);
+			if (!current) {
+				return;
+			}
+			if (const auto window = history->session().tryResolveWindow()) {
 				window->showSection(
-					std::make_shared<MessageHistory::SectionMemento>(item->history()->peer, item, 0));
+					std::make_shared<MessageHistory::SectionMemento>(current->history()->peer, current, 0));
 			}
 		},
 		&st::ayuEditsHistoryIcon);
@@ -466,15 +473,20 @@ void AddHideMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 
 	const auto history = item->history();
 	const auto owner = &history->owner();
+	const auto itemId = item->fullId();
 	menu->addAction(
 		tr::ayu_ContextHideMessage(tr::now),
 		[=]()
 		{
-			const auto ids = owner->itemOrItsGroup(item);
+			const auto current = owner->message(itemId);
+			if (!current) {
+				return;
+			}
+			const auto ids = owner->itemOrItsGroup(current);
 			for (const auto &fullId : ids) {
-				if (const auto current = owner->message(fullId)) {
-					AyuState::hide(current);
-					current->destroy();
+				if (const auto item = owner->message(fullId)) {
+					AyuState::hide(item);
+					item->destroy();
 				}
 			}
 			history->requestChatListMessage();
@@ -493,18 +505,24 @@ void AddUserMessagesAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 	}
 
 	if (item->history()->peer->isChat() || item->history()->peer->isMegagroup()) {
+		const auto history = item->history();
+		const auto itemId = item->fullId();
 		menu->addAction(
 			tr::ayu_UserMessagesMenuText(tr::now),
 			[=]
 			{
-				if (const auto controller = item->history()->session().tryResolveWindow()) {
-					const auto peer = item->history()->peer;
+				const auto current = history->owner().message(itemId);
+				if (!current) {
+					return;
+				}
+				if (const auto controller = history->session().tryResolveWindow()) {
+					const auto peer = history->peer;
 					const auto key = (peer && !peer->isUser())
-										 ? item->topic()
-											   ? Dialogs::Key{item->topic()}
-											   : Dialogs::Key{item->history()}
-										 : Dialogs::Key{item->history()};
-					controller->searchInChat(key, item->from());
+										 ? current->topic()
+										   ? Dialogs::Key{current->topic()}
+										   : Dialogs::Key{history}
+									 : Dialogs::Key{history};
+					controller->searchInChat(key, current->from());
 				}
 			},
 			&st::menuIconTTL);
@@ -750,17 +768,18 @@ void AddRepeatMessageAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item, Hi
 				: session->sendAsPeers().resolveChosen(peer).get();
 
 			const auto inRepliesView = (context == HistoryView::Context::Replies);
-			const auto replyTo = item->replyTo();
-			const auto hasReply = replyTo.messageId.msg != 0;
 			const auto shiftPressed = base::IsShiftPressed();
-
-			const auto useNoQuote = shiftPressed || (inRepliesView && !history->peer->isForum());
-			const auto preserveReply = inRepliesView ? hasReply : (hasReply && shiftPressed);
 
 			const auto currentItem = history->owner().message(itemId);
 			if (!currentItem) {
 				return;
 			}
+
+			const auto replyTo = currentItem->replyTo();
+			const auto hasReply = replyTo.messageId.msg != 0;
+
+			const auto useNoQuote = shiftPressed || (inRepliesView && !history->peer->isForum());
+			const auto preserveReply = inRepliesView ? hasReply : (hasReply && shiftPressed);
 
 			auto action = Api::SendAction(
 				history,

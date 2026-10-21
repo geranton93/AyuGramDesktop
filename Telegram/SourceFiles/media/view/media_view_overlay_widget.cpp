@@ -4523,11 +4523,7 @@ void OverlayWidget::activate() {
 	QApplication::setActiveWindow(_window);
 	setFocus();
 
-	if (AyuSettings::getInstance().streamerMode()) {
-		AyuFeatures::StreamerMode::hideWidgetWindow(_window);
-	} else {
-		AyuFeatures::StreamerMode::showWidgetWindow(_window);
-	}
+	refreshScreenshotProtection();
 }
 
 void OverlayWidget::show(OpenRequest request) {
@@ -6098,7 +6094,8 @@ bool OverlayWidget::contentNeedsScreenshotProtection() const {
 }
 
 void OverlayWidget::refreshScreenshotProtection() {
-	_screenshotProtected = contentNeedsScreenshotProtection();
+	_screenshotProtected = contentNeedsScreenshotProtection()
+		|| AyuSettings::getInstance().streamerMode();
 	Platform::SetWindowScreenshotProtection(
 		_window,
 		(_screenshotProtected

@@ -252,6 +252,7 @@ InnerWidget::InnerWidget(
 	  _controller(controller),
 	  _peer(peer),
 	  _item(item),
+	  _itemId(item ? item->fullId() : FullMsgId()),
 	  _topicId(topicId),
 	  _history(peer->owner().history(peer)),
 	  _api(&_peer->session().mtp()),
@@ -352,6 +353,13 @@ InnerWidget::InnerWidget(
 
 Main::Session &InnerWidget::session() const {
 	return _controller->session();
+}
+
+HistoryItem *InnerWidget::ResolveItem() const {
+	if (!_itemId) {
+		return nullptr;
+	}
+	return session().data().message(_itemId);
 }
 
 rpl::producer<int> InnerWidget::scrollToSignal() const {
@@ -510,6 +518,10 @@ bool InnerWidget::tooltipWindowActive() const {
 
 HistoryView::Context InnerWidget::elementContext() {
 	return HistoryView::Context::AdminLog;
+}
+
+HistoryView::GramReadLine *InnerWidget::elementGramReadLine() {
+	return nullptr;
 }
 
 bool InnerWidget::elementUnderCursor(
@@ -746,13 +758,12 @@ void InnerWidget::preloadMore(Direction direction) {
 
 	const auto reqNum = ++_loadRequestNum;
 
-	const auto item = _item;
+	const auto item = ResolveItem();
 	const auto peer = _peer;
 	const auto topicId = _topicId;
 	const auto edited = (item != nullptr);
-	const auto userId = edited
-		? item->history()->owner().session().userId().bare & PeerId::kChatTypeMask
-		: peer->session().userId().bare & PeerId::kChatTypeMask;
+	const auto accountId = peer->session().userId().bare;
+	const auto userId = accountId & PeerId::kChatTypeMask;
 	const auto dialogId = edited
 		? getDialogIdFromPeer(item->history()->peer)
 		: getDialogIdFromPeer(peer);
@@ -765,6 +776,7 @@ void InnerWidget::preloadMore(Direction direction) {
 		std::vector<AyuMessageBase> messages;
 		if (edited) { // viewing edited history
 			messages = AyuMessages::getEditedMessages(
+				accountId,
 				userId,
 				dialogId,
 				messageId,
@@ -773,6 +785,7 @@ void InnerWidget::preloadMore(Direction direction) {
 				perPage);
 		} else { // viewing deleted messages
 			messages = AyuMessages::getDeletedMessages(
+				accountId,
 				userId,
 				dialogId,
 				topicId,

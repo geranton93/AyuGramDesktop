@@ -328,7 +328,7 @@ void RunDelete(
 			} else {
 				current->data().processNonChannelMessagesDeleted(ids);
 			}
-			state->deleted = state->deleted.current() + ids.size();
+			state->deleted = state->deleted.current() + result.data().vpts_count().v;
 			advance(index + ids.size());
 		};
 		const auto fail = [=](const MTP::Error &error) {
@@ -802,6 +802,9 @@ void FillRemoveMediaBox(
 		},
 		st::attentionBoxButton);
 	box->addButton(tr::lng_cancel(), [=] {
+		if (state->phase.current() == Phase::Deleting) {
+			ShowRemoveResult(*state);
+		}
 		box->closeBox();
 	});
 

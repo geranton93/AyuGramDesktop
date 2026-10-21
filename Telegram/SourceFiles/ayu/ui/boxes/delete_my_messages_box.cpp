@@ -222,7 +222,7 @@ void RunDelete(
 			} else {
 				current->data().processNonChannelMessagesDeleted(ids);
 			}
-			state->deleted = state->deleted.current() + ids.size();
+			state->deleted = state->deleted.current() + result.data().vpts_count().v;
 			advance(index + ids.size());
 		};
 		const auto fail = [=](const MTP::Error &error) {
@@ -265,9 +265,8 @@ void RunDelete(
 				.handleFloodErrors()
 				.send();
 		} else {
-			using Flag = MTPmessages_DeleteMessages::Flag;
 			api->request(MTPmessages_DeleteMessages(
-				MTP_flags(Flag::f_revoke),
+				MTP_flags(0),
 				MTP_vector<MTPint>(ids)))
 				.done(done)
 				.fail(fail)
@@ -520,6 +519,9 @@ void FillDeleteMyMessagesBox(
 		},
 		st::attentionBoxButton);
 	box->addButton(tr::lng_cancel(), [=] {
+		if (state->phase.current() == Phase::Deleting) {
+			ShowDeleteResult(*state);
+		}
 		box->closeBox();
 	});
 

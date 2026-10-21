@@ -1,14 +1,14 @@
 // This is the source code of AyuGram for Desktop.
 //
-// We do not and cannot prevent the use of our code,
+// We do and cannot prevent the use of our code,
 // but be respectful and credit the original author.
 //
 // Copyright @Radolyn, 2026
 
 #include "ayu/features/streamer_mode/streamer_mode.h"
 
-#include "ayu/features/streamer_mode/platform/platform_streamer_mode.h"
 #include "core/application.h"
+#include "platform/platform_specific.h"
 #include "window/window_controller.h"
 
 #include <QtCore/QVariant>
@@ -27,8 +27,10 @@ constexpr auto kHiddenProperty = "AyuStreamerModeHidden";
 
 void SetWindowCaptureExcluded(QWidget *widget, bool excluded) {
 	const auto window = widget->window();
-	Platform::SetWindowCaptureExcluded(window, excluded);
 	window->setProperty(kHiddenProperty, excluded);
+	if (excluded) {
+		Platform::SetWindowScreenshotProtection(window, true);
+	}
 }
 
 } // namespace
@@ -46,8 +48,8 @@ void apply(bool enabled) {
 				&& !IsWindowCaptureExcluded(widget)) {
 				SetWindowCaptureExcluded(widget, true);
 			}
-		} else if (IsWindowCaptureExcluded(widget)) {
-			SetWindowCaptureExcluded(widget, false);
+		} else {
+			widget->setProperty(kHiddenProperty, false);
 		}
 	}
 }
@@ -57,7 +59,7 @@ void hideWidgetWindow(QWidget *widget) {
 }
 
 void showWidgetWindow(QWidget *widget) {
-	SetWindowCaptureExcluded(widget, false);
+	widget->window()->setProperty(kHiddenProperty, false);
 }
 
 } // namespace AyuFeatures::StreamerMode

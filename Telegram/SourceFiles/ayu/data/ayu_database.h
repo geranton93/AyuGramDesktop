@@ -22,15 +22,15 @@ namespace AyuDatabase {
 void initialize();
 
 void addEditedMessage(const EditedMessage &message);
-std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit);
-bool hasRevisions(ID userId, ID dialogId, ID messageId);
+std::vector<EditedMessage> getEditedMessages(ID accountId, ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit);
+bool hasRevisions(ID accountId, ID userId, ID dialogId, ID messageId);
 
 void addDeletedMessage(const DeletedMessage &message);
 void addDeletedMessages(const std::vector<DeletedMessage> &messages);
-std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery = "");
-bool hasDeletedMessages(ID userId, ID dialogId, ID topicId);
-void removeDeletedMessage(ID userId, ID dialogId, ID messageId);
-void clearDeletedMessages(ID userId, ID dialogId, ID topicId);
+std::vector<DeletedMessage> getDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery = "");
+bool hasDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId);
+void removeDeletedMessage(ID accountId, ID userId, ID dialogId, ID messageId);
+void clearDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId);
 
 std::vector<RegexFilter> getAllRegexFilters();
 RegexFilter getById(std::vector<char> id);

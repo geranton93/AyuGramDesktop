@@ -54,10 +54,14 @@ public:
 
 class DeletedMessage : public AyuMessageBase
 {
+public:
+	ID accountId = 0;
 };
 
 class EditedMessage : public AyuMessageBase
 {
+public:
+	ID accountId = 0;
 };
 
 class DeletedDialog

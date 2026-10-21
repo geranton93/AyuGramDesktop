@@ -56,6 +56,7 @@ public:
 		ID topicId);
 
 	[[nodiscard]] Main::Session &session() const;
+	[[nodiscard]] HistoryItem *ResolveItem() const;
 
 	[[nodiscard]] not_null<Ui::ChatTheme*> theme() const {
 		return _theme.get();
@@ -87,6 +88,7 @@ public:
 
 	// HistoryView::ElementDelegate interface.
 	HistoryView::Context elementContext() override;
+	HistoryView::GramReadLine *elementGramReadLine() override;
 	bool elementUnderCursor(
 		not_null<const HistoryView::Element*> view) override;
 	HistoryView::SelectionModeResult elementInSelectionMode(const HistoryView::Element *) override;
@@ -266,6 +268,7 @@ private:
 	const not_null<Window::SessionController*> _controller;
 	const not_null<PeerData*> _peer;
 	HistoryItem *_item;
+	FullMsgId _itemId;
 	ID _topicId;
 	const not_null<History*> _history;
 	MTP::Sender _api;

@@ -273,13 +273,6 @@ set(ayugram_files
         ayu/libs/sqlite/sqlite_orm.h
         ayu/features/hidden_folders/hidden_folders.cpp
         ayu/features/hidden_folders/hidden_folders.h
-        ayu/features/streamer_mode/platform/linux/streamer_mode_linux.cpp
-        ayu/features/streamer_mode/platform/linux/streamer_mode_linux.h
-        ayu/features/streamer_mode/platform/mac/streamer_mode_mac.mm
-        ayu/features/streamer_mode/platform/mac/streamer_mode_mac.h
-        ayu/features/streamer_mode/platform/win/streamer_mode_win.cpp
-        ayu/features/streamer_mode/platform/win/streamer_mode_win.h
-        ayu/features/streamer_mode/platform/platform_streamer_mode.h
         ayu/features/streamer_mode/streamer_mode.cpp
         ayu/features/streamer_mode/streamer_mode.h
         ayu/features/message_shot/message_shot.cpp

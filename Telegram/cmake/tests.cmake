@@ -130,3 +130,22 @@ set_target_properties(test_filter_regex PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 add_dependencies(Telegram test_filter_regex)
+
+add_executable(test_ayu_archive_schema)
+init_target(test_ayu_archive_schema "(tests)")
+
+target_include_directories(test_ayu_archive_schema PRIVATE ${src_loc})
+
+nice_target_sources(test_ayu_archive_schema ${src_loc}
+PRIVATE
+    ayu/libs/sqlite/sqlite3.c
+    ayu/libs/sqlite/sqlite3.h
+    ayu/libs/sqlite/sqlite_orm.h
+    tests/ayu_archive_schema_test.cpp
+)
+
+set_target_properties(test_ayu_archive_schema PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+add_dependencies(Telegram test_ayu_archive_schema)

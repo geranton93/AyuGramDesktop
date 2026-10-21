@@ -1,4 +1,4 @@
-name: Ayu UI source contracts
+name: Ayu source contracts
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   source-contracts:
-    name: UI lifetime source guards (not native tests)
+    name: Source guards (not native tests)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -25,3 +25,38 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest Telegram/build/tests/test_ayu_ui_lifetimes.py -v
+
+      - name: Check archive schema contract
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest Telegram/build/tests/test_ayu_archive_schema.py -v
+
+      - name: Check forward worker boundary
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest Telegram/build/tests/forward_worker_boundary_test.py -v
+
+      - name: Check streaming prefetch selection
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest Telegram/build/tests/test_streaming_prefetch_selection.py -v
+
+  native-archive-schema:
+    name: Archive schema migration (native)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build the archive schema test
+        run: |
+          cc -O1 -c -o /tmp/sqlite3.o Telegram/SourceFiles/ayu/libs/sqlite/sqlite3.c
+          c++ -std=c++20 -O1 -I Telegram/SourceFiles \
+            -c -o /tmp/archive_test.o \
+            Telegram/SourceFiles/tests/ayu_archive_schema_test.cpp
+          c++ -o /tmp/test_ayu_archive_schema \
+            /tmp/archive_test.o /tmp/sqlite3.o -lpthread -ldl
+
+      - name: Run the archive schema test
+        run: /tmp/test_ayu_archive_schema

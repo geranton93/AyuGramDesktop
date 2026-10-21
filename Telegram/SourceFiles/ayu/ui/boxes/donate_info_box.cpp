@@ -166,15 +166,10 @@ void FillDonateInfoBox(not_null<Ui::GenericBox*> box, not_null<Window::SessionCo
 	Ui::AddSkip(box->verticalLayout());
 
 	auto emojiHelper = Ui::Text::CustomEmojiHelper();
-	const auto tonSymbol = emojiHelper.paletteDependent({
-		.factory = [=]
-		{
-			return Ui::Earn::IconCurrencyColored(
-				st::boxDividerLabel.style.font,
-				st::boxDividerLabel.textFg->c);
-		},
-		.margin = st::channelEarnCurrencyLearnMargins
-	});
+	const auto tonSymbol = emojiHelper.paletteDependent(
+		Ui::Earn::IconCurrencyEmoji({
+			.margin = st::channelEarnCurrencyLearnMargins
+		}));
 
 	const auto dollarAmount = RCManager::getInstance().donateAmountUsd().prepend("$");
 	const auto tonAmount = RCManager::getInstance().donateAmountTon();

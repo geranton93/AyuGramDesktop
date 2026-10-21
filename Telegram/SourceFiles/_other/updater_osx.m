@@ -266,22 +266,35 @@ int main(int argc, const char * argv[]) {
 	for (int i = 0; i < 5; ++i) {
 		__block NSError *error = nil;
 		__block BOOL launched = NO;
-		// launchApplicationAtURL:options:configuration:error: is deprecated
-		// since macOS 10.3. openApplicationAtURL:configuration: replaces it
-		// but is asynchronous, so a semaphore keeps this call synchronous.
-		NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
-		configuration.arguments = args;
-		configuration.activates = NO;
-		dispatch_semaphore_t launchedSemaphore = dispatch_semaphore_create(0);
-		[[NSWorkspace sharedWorkspace]
-			openApplicationAtURL:[NSURL fileURLWithPath:appPath]
-			configuration:configuration
-			completionHandler:^(NSRunningApplication *runningApplication, NSError *openError) {
-				launched = (runningApplication != nil);
-				error = openError;
-				dispatch_semaphore_signal(launchedSemaphore);
-			}];
-		dispatch_semaphore_wait(launchedSemaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+		if (@available(macOS 10.15, *)) {
+			// launchApplicationAtURL:options:configuration:error: is deprecated
+			// since macOS 10.3. openApplicationAtURL:configuration: replaces it
+			// but is asynchronous, so a semaphore keeps this call synchronous.
+			NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+			configuration.arguments = args;
+			configuration.activates = YES;
+			dispatch_semaphore_t launchedSemaphore = dispatch_semaphore_create(0);
+			[[NSWorkspace sharedWorkspace]
+				openApplicationAtURL:[NSURL fileURLWithPath:appPath]
+				configuration:configuration
+				completionHandler:^(NSRunningApplication *runningApplication, NSError *openError) {
+					launched = (runningApplication != nil);
+					error = openError;
+					dispatch_semaphore_signal(launchedSemaphore);
+				}];
+			dispatch_semaphore_wait(launchedSemaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+		} else {
+			NSWorkspaceLaunchConfiguration *configuration = [NSWorkspaceLaunchConfiguration configuration];
+			configuration.arguments = args;
+			NSError *launchError = nil;
+			NSRunningApplication *result = [[NSWorkspace sharedWorkspace]
+				launchApplicationAtURL:[NSURL fileURLWithPath:appPath]
+				options:NSWorkspaceLaunchDefault
+				configuration:configuration
+				error:&launchError];
+			launched = (result != nil);
+			error = launchError;
+		}
 		if (launched) {
 			closeLog();
 			return 0;

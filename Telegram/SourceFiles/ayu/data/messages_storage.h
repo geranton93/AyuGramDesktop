@@ -14,6 +14,7 @@ namespace AyuMessages {
 
 void addEditedMessage(not_null<HistoryItem *> item);
 std::vector<AyuMessageBase> getEditedMessages(
+	ID accountId,
 	ID userId,
 	ID dialogId,
 	ID messageId,
@@ -26,6 +27,7 @@ bool hasRevisions(not_null<HistoryItem*> item);
 void addDeletedMessage(not_null<HistoryItem*> item);
 void addDeletedMessages(const std::vector<not_null<HistoryItem*>> &items);
 std::vector<AyuMessageBase> getDeletedMessages(
+	ID accountId,
 	ID userId,
 	ID dialogId,
 	ID topicId,

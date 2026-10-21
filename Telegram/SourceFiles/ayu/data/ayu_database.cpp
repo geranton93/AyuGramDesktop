@@ -34,6 +34,7 @@ auto storage = make_storage(
 	make_table<DeletedMessage>(
 		"DeletedMessage",
 		make_column("fakeId", &DeletedMessage::fakeId, primary_key().autoincrement()),
+		make_column("accountId", &DeletedMessage::accountId, default_value(0)),
 		make_column("userId", &DeletedMessage::userId),
 		make_column("dialogId", &DeletedMessage::dialogId),
 		make_column("groupedId", &DeletedMessage::groupedId),
@@ -62,8 +63,8 @@ auto storage = make_storage(
 		make_column("mediaPath", &DeletedMessage::mediaPath),
 		make_column("hqThumbPath", &DeletedMessage::hqThumbPath),
 		make_column("documentType", &DeletedMessage::documentType),
-		make_column("mediaDc", &DeletedMessage::mediaDc),
-		make_column("mediaSize", &DeletedMessage::mediaSize),
+		make_column("mediaDc", &DeletedMessage::mediaDc, default_value(0)),
+		make_column("mediaSize", &DeletedMessage::mediaSize, default_value(0)),
 		make_column("documentSerialized", &DeletedMessage::documentSerialized),
 		make_column("thumbsSerialized", &DeletedMessage::thumbsSerialized),
 		make_column("documentAttributesSerialized", &DeletedMessage::documentAttributesSerialized),
@@ -72,6 +73,7 @@ auto storage = make_storage(
 	make_table<EditedMessage>(
 		"EditedMessage",
 		make_column("fakeId", &EditedMessage::fakeId, primary_key().autoincrement()),
+		make_column("accountId", &EditedMessage::accountId, default_value(0)),
 		make_column("userId", &EditedMessage::userId),
 		make_column("dialogId", &EditedMessage::dialogId),
 		make_column("groupedId", &EditedMessage::groupedId),
@@ -100,8 +102,8 @@ auto storage = make_storage(
 		make_column("mediaPath", &EditedMessage::mediaPath),
 		make_column("hqThumbPath", &EditedMessage::hqThumbPath),
 		make_column("documentType", &EditedMessage::documentType),
-		make_column("mediaDc", &EditedMessage::mediaDc),
-		make_column("mediaSize", &EditedMessage::mediaSize),
+		make_column("mediaDc", &EditedMessage::mediaDc, default_value(0)),
+		make_column("mediaSize", &EditedMessage::mediaSize, default_value(0)),
 		make_column("documentSerialized", &EditedMessage::documentSerialized),
 		make_column("thumbsSerialized", &EditedMessage::thumbsSerialized),
 		make_column("documentAttributesSerialized", &EditedMessage::documentAttributesSerialized),
@@ -369,12 +371,35 @@ void addEditedMessage(const EditedMessage &message) {
 	}
 }
 
-std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit) {
+namespace {
+
+void attributeUnattributedRows(ID accountId) {
+	if (!accountId) {
+		return;
+	}
+	try {
+		storage.update_all(
+			set(c(&DeletedMessage::accountId) = accountId),
+			where(c(&DeletedMessage::accountId) == 0));
+		storage.update_all(
+			set(c(&EditedMessage::accountId) = accountId),
+			where(c(&EditedMessage::accountId) == 0));
+	} catch (std::exception &ex) {
+		LOG(("Failed to attribute legacy archive rows: %1").arg(ex.what()));
+	}
+}
+
+}
+
+std::vector<EditedMessage> getEditedMessages(ID accountId, ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		const auto pageSize = std::clamp(totalLimit, 0, kMaxArchivePageSize);
+		attributeUnattributedRows(accountId);
 		return storage.get_all<EditedMessage>(
 			where(
+				(column<EditedMessage>(&EditedMessage::accountId) == accountId
+					or column<EditedMessage>(&EditedMessage::accountId) == 0) and
 				column<EditedMessage>(&EditedMessage::userId) == userId and
 				column<EditedMessage>(&EditedMessage::dialogId) == dialogId and
 				column<EditedMessage>(&EditedMessage::messageId) == messageId and
@@ -390,12 +415,14 @@ std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageI
 	}
 }
 
-bool hasRevisions(ID userId, ID dialogId, ID messageId) {
+bool hasRevisions(ID accountId, ID userId, ID dialogId, ID messageId) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return !storage.select(
 			columns(column<EditedMessage>(&EditedMessage::messageId)),
 			where(
+				(column<EditedMessage>(&EditedMessage::accountId) == accountId
+					or column<EditedMessage>(&EditedMessage::accountId) == 0) and
 				column<EditedMessage>(&EditedMessage::userId) == userId and
 				column<EditedMessage>(&EditedMessage::dialogId) == dialogId and
 				column<EditedMessage>(&EditedMessage::messageId) == messageId
@@ -457,16 +484,19 @@ void addDeletedMessages(const std::vector<DeletedMessage> &messages) {
 	}
 }
 
-std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery) {
+std::vector<DeletedMessage> getDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery) {
 	if (searchQuery.size() > kMaxArchiveSearchBytes) {
 		return {};
 	}
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		const auto pageSize = std::clamp(totalLimit, 0, kMaxArchivePageSize);
+		attributeUnattributedRows(accountId);
 		if (searchQuery.empty()) {
 			return storage.get_all<DeletedMessage>(
 				where(
+					(column<DeletedMessage>(&DeletedMessage::accountId) == accountId
+						or column<DeletedMessage>(&DeletedMessage::accountId) == 0) and
 					column<DeletedMessage>(&DeletedMessage::userId) == userId and
 					column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 					(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0) and
@@ -489,6 +519,8 @@ std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicI
 		const auto pattern = "%" + escaped + "%";
 		return storage.get_all<DeletedMessage>(
 			where(
+				(column<DeletedMessage>(&DeletedMessage::accountId) == accountId
+					or column<DeletedMessage>(&DeletedMessage::accountId) == 0) and
 				column<DeletedMessage>(&DeletedMessage::userId) == userId and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0) and
@@ -505,12 +537,14 @@ std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicI
 	}
 }
 
-bool hasDeletedMessages(ID userId, ID dialogId, ID topicId) {
+bool hasDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		return !storage.select(
 			columns(column<DeletedMessage>(&DeletedMessage::dialogId)),
 			where(
+				(column<DeletedMessage>(&DeletedMessage::accountId) == accountId
+					or column<DeletedMessage>(&DeletedMessage::accountId) == 0) and
 				column<DeletedMessage>(&DeletedMessage::userId) == userId and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0)
@@ -523,11 +557,12 @@ bool hasDeletedMessages(ID userId, ID dialogId, ID topicId) {
 	}
 }
 
-void removeDeletedMessage(ID userId, ID dialogId, ID messageId) {
+void removeDeletedMessage(ID accountId, ID userId, ID dialogId, ID messageId) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<DeletedMessage>(
 			where(
+				column<DeletedMessage>(&DeletedMessage::accountId) == accountId and
 				column<DeletedMessage>(&DeletedMessage::userId) == userId and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				column<DeletedMessage>(&DeletedMessage::messageId) == messageId
@@ -540,11 +575,12 @@ void removeDeletedMessage(ID userId, ID dialogId, ID messageId) {
 	}
 }
 
-void clearDeletedMessages(ID userId, ID dialogId, ID topicId) {
+void clearDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		storage.remove_all<DeletedMessage>(
 			where(
+				column<DeletedMessage>(&DeletedMessage::accountId) == accountId and
 				column<DeletedMessage>(&DeletedMessage::userId) == userId and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0)
