@@ -67,9 +67,9 @@ jobs:
           tag_version="${BASH_REMATCH[1]}"
           tag_suffix="${BASH_REMATCH[2]:-}"
 
-          app_version="$(sed -n 's/^AppVersion //p' Telegram/build/version)"
-          version_string="$(sed -n 's/^AppVersionStr //p' Telegram/build/version)"
-          beta_channel="$(sed -n 's/^BetaChannel //p' Telegram/build/version)"
+          app_version="$(awk '$1 == "AppVersion" { print $2 }' Telegram/build/version)"
+          version_string="$(awk '$1 == "AppVersionStr" { print $2 }' Telegram/build/version)"
+          beta_channel="$(awk '$1 == "BetaChannel" { print $2 }' Telegram/build/version)"
           test -n "$app_version"
           test -n "$version_string"
           test "$tag_version" = "$version_string"
