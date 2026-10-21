@@ -1,0 +1,31 @@
+Telegram/lib_lottie
+  s_c5ed9cd4e03e75::t_96f72ba4c9a3c8 1
+Telegram/codegen
+  s_b15f79dde7c731::t_6398d60e2af256 1
+Telegram/lib_webview
+  s_b15f79dde7c731::t_2d2a00da77be0b 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bb036d9872a8909c93a72e62e69ed7122b65e975",
+  "prompts": {},
+  "sessions": {
+    "s_b15f79dde7c731": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc9ec180-61c1-4ccb-894c-c9837a318fcd",
+        "model": "unknown"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    },
+    "s_c5ed9cd4e03e75": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "56c6fdac-2806-43b4-a9ca-d37f01a2d8d1",
+        "model": "MiniMax-M3.1-Flash-Preview"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
