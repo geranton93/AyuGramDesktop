@@ -1,0 +1,14 @@
+.github/workflows/release.yml
+  h_c6950de7515385 35-36,99,107-125,153-154,197,243,247-252,255-289,419-429,672-684
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19eed0fb8202a082283863dba05cdff7a36c86ee",
+  "prompts": {},
+  "humans": {
+    "h_c6950de7515385": {
+      "author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
