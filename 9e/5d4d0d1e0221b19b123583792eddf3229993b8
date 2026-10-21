@@ -1,0 +1,19 @@
+.codegraph/.gitignore
+  s_b15f79dde7c731::t_d8d3c3aec8464d 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9e5d4d0d1e0221b19b123583792eddf3229993b8",
+  "prompts": {},
+  "sessions": {
+    "s_b15f79dde7c731": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc9ec180-61c1-4ccb-894c-c9837a318fcd",
+        "model": "unknown"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
