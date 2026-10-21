@@ -376,6 +376,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          git config --global user.name 'AyuGram CI'
+          git config --global user.email 'ci@ayugram.local'
           $env:Platform = '${{ matrix.platform }}'
           if ('${{ matrix.target }}' -eq 'winarm') {
             $env:QT = '6.11.2'
