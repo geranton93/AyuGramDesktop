@@ -7,6 +7,7 @@ Release/
 /Telegram/tests/
 /Telegram/gyp/tests/*.test
 /Telegram/out/
+/tests/
 /Telegram/*.user
 *.vcxproj*
 *.sln

@@ -192,6 +192,7 @@ Enjoy using **AyuGram**? Consider sending us a tip!
 - [SQLite](https://github.com/sqlite/sqlite)
 - [sqlite_orm](https://github.com/fnc12/sqlite_orm)
 - [androidx sources](https://github.com/androidx/androidx)
+- [zxcvbn-c](https://github.com/tsyrogit/zxcvbn-c) (MIT)
 
 ### Icons
 

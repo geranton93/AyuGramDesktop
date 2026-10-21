@@ -650,7 +650,7 @@ void ForumTopic::paintUserpic(
 			const auto size = Data::FrameSizeFromTag(tag) / ratio;
 			position = QPoint(
 				(context.width - size) / 2,
-				(st->height - size) / 2);
+				(st::defaultDialogRow.height - size) / 2);
 		}
 		_icon->paint(p, {
 			.textColor = (context.active
@@ -672,7 +672,7 @@ void ForumTopic::paintUserpic(
 		if (context.narrow) {
 			position = QPoint(
 				(context.width - size) / 2,
-				(st->height - size) / 2);
+				(st::defaultDialogRow.height - size) / 2);
 		} else {
 			const auto esize = st::emojiSize;
 			const auto shift = (esize - size) / 2;

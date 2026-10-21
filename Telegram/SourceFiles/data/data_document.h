@@ -31,6 +31,7 @@ enum class NameType : uchar;
 } // namespace Core
 
 namespace Storage {
+class StreamedFileDownloader;
 namespace Cache {
 struct Key;
 } // namespace Cache
@@ -42,6 +43,7 @@ struct VideoQuality;
 
 namespace Media::Streaming {
 class Loader;
+class Reader;
 } // namespace Media::Streaming
 
 namespace Data {
@@ -306,6 +308,7 @@ public:
 
 	[[nodiscard]] MediaKey mediaKey() const;
 	[[nodiscard]] Storage::Cache::Key cacheKey() const;
+	[[nodiscard]] LocationType locationType() const;
 	[[nodiscard]] uint8 cacheTag() const;
 
 	[[nodiscard]] bool canBeStreamed() const;
@@ -314,6 +317,15 @@ public:
 		bool forceRemoteLoader) const
 	-> std::unique_ptr<Media::Streaming::Loader>;
 	[[nodiscard]] bool useStreamingLoader() const;
+	[[nodiscard]] auto createStreamedDownloader(
+		std::shared_ptr<Media::Streaming::Reader> reader,
+		Data::FileOrigin origin,
+		std::optional<MediaKey> fileLocationKey,
+		const QString &toFile,
+		LoadToCacheSetting toCache,
+		LoadFromCloudSetting fromCloud,
+		bool autoLoading) const
+	-> std::unique_ptr<Storage::StreamedFileDownloader>;
 
 	void setInappPlaybackFailed();
 	[[nodiscard]] bool inappPlaybackFailed() const;
@@ -379,7 +391,6 @@ private:
 
 	friend class Serialize::Document;
 
-	[[nodiscard]] LocationType locationType() const;
 	void validateLottieSticker();
 	void setMaybeSupportsStreaming(bool supports);
 	void setLoadedInMediaCacheLocation();
