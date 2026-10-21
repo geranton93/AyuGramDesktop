@@ -168,7 +168,7 @@ jobs:
           - arch: x86_64
             feed_platform: mac
             artifact_arch: x64
-            runner: macos-15-intel
+            runner: macos-15
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out the tagged source
@@ -183,7 +183,8 @@ jobs:
           path: |
             ${{ github.workspace }}/../Libraries
             ${{ github.workspace }}/../ThirdParty
-          key: ayugram-macos-${{ matrix.arch }}-${{ hashFiles('Telegram/build/prepare/prepare.py', 'Telegram/build/qt_version.py') }}
+          key: ayugram-macos-${{ hashFiles('Telegram/build/prepare/prepare.py', 'Telegram/build/qt_version.py') }}
+          restore-keys: ayugram-macos-
 
       - name: Prepare native dependencies
         shell: bash
@@ -336,25 +337,47 @@ jobs:
             platform: x86
             feed_platform: win
             runner: windows-2022
+            msvc_arch: x64_x86
+            toolset: '14.44'
           - target: win64
             cmake_arch: x64
             cmake_generator: Visual Studio 17 2022
             platform: x64
             feed_platform: win64
             runner: windows-2022
+            msvc_arch: x64
+            toolset: '14.44'
           - target: winarm
             cmake_arch: ARM64
-            cmake_generator: Visual Studio 17 2022
+            cmake_generator: Visual Studio 18 2026
             platform: arm64
             feed_platform: winarm
-            runner: windows-11-arm
+            runner: windows-11-vs2026-arm
+            msvc_arch: arm64
+            toolset: ''
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 1
+
+      - name: Read the required Windows SDK version
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$(grep -m1 'SDK version' docs/building-win.md | sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/')"
+          test -n "$sdk"
+          echo "SDK=$sdk" >> "$GITHUB_ENV"
+
+      - name: Native tools command prompt
+        uses: Eden-CI/msvc-dev-cmd@1bd71f95d6f3d1b2b3395b335cc63bcdc90cf223
+        with:
+          arch: ${{ matrix.msvc_arch }}
+          sdk: ${{ env.SDK }}
+          toolset: ${{ matrix.toolset }}
 
       - name: Cache native dependencies
         uses: actions/cache@v4
@@ -363,6 +386,7 @@ jobs:
             ${{ github.workspace }}/../Libraries
             ${{ github.workspace }}/../ThirdParty
           key: ayugram-windows-${{ matrix.target }}-${{ hashFiles('Telegram/build/prepare/prepare.py', 'Telegram/build/qt_version.py') }}
+          restore-keys: ayugram-windows-${{ matrix.target }}-
 
       - name: Prepare native dependencies
         shell: pwsh
@@ -375,6 +399,22 @@ jobs:
             $env:QT = '5.15.19'
           }
           python Telegram/build/prepare/prepare.py silent
+
+      - name: NuGet sources
+        shell: pwsh
+        run: |
+          $nuget = Join-Path $env:GITHUB_WORKSPACE '..\ThirdParty\NuGet\nuget.exe'
+          if (-not (Test-Path $nuget)) {
+            $command = Get-Command nuget.exe -ErrorAction SilentlyContinue
+            if ($command) { $nuget = $command.Source }
+          }
+          if (-not $nuget) {
+            Write-Host '::notice::NuGet was not found; the offline package source stays configured.'
+            exit 0
+          }
+          & $nuget sources Disable -Name "Microsoft Visual Studio Offline Packages" 2>&1 | Out-Null
+          & $nuget sources Add -Source https://api.nuget.org/v3/index.json 2>&1 | Out-Null
+          exit 0
 
       - name: Build, sign and package Windows artifacts
         shell: pwsh
