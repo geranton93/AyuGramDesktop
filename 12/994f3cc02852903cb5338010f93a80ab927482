@@ -1,0 +1,19 @@
+.github/actionlint.yaml
+  s_4b0eea0052dd79::t_5c658cfc8290d9 1-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "12994f3cc02852903cb5338010f93a80ab927482",
+  "prompts": {},
+  "sessions": {
+    "s_4b0eea0052dd79": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15ee3-4084-7071-b730-a9281616cb2a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "geranton93 <Xlive93@yandex.ru>"
+    }
+  }
+}
