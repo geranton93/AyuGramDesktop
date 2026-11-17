@@ -379,11 +379,7 @@ jobs:
           git config --global user.name 'AyuGram CI'
           git config --global user.email 'ci@ayugram.local'
           $env:Platform = '${{ matrix.platform }}'
-          if ('${{ matrix.target }}' -eq 'winarm') {
-            $env:QT = '6.11.2'
-          } else {
-            $env:QT = '5.15.19'
-          }
+          $env:QT = '6.11.2'
           python Telegram/build/prepare/prepare.py silent
 
       - name: NuGet sources
@@ -414,7 +410,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:Platform = '${{ matrix.platform }}'
-          $env:QT = if ('${{ matrix.target }}' -eq 'winarm') { '6.11.2' } else { '5.15.19' }
+          $env:QT = '6.11.2'
           $version = '${{ needs.preflight.outputs.version_string }}'
           $versionFull = '${{ needs.preflight.outputs.version_full }}'
           $suffix = '${{ needs.preflight.outputs.suffix }}'

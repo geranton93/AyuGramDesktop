@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/player/media_player_instance.h"
 #include "media/streaming/media_streaming_loader_mtproto.h"
 #include "media/streaming/media_streaming_loader_local.h"
+#include "platform/platform_file_utilities.h"
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
 #include "storage/streamed_file_downloader.h"
@@ -109,6 +110,14 @@ void UpdateStickerSetIdentifier(
 		: attributesQuality;
 }
 
+[[nodiscard]] bool IsBidiControl(QChar ch) {
+	const auto code = ch.unicode();
+	return (code == 0x061C) // ALM, LRM/RLM, LRE..RLO with PDF, LRI..PDI.
+		|| (code == 0x200E || code == 0x200F)
+		|| (code >= 0x202A && code <= 0x202E)
+		|| (code >= 0x2066 && code <= 0x2069);
+}
+
 } // namespace
 
 QString FileNameUnsafe(
@@ -120,7 +129,9 @@ QString FileNameUnsafe(
 		bool savingAs,
 		const QDir &dir) {
 	name = base::FileNameFromUserString(name);
-	if (Core::App().settings().askDownloadPath() || savingAs) {
+	const auto toDirectory = !savingAs && (dir.path() != u"."_q);
+	if (savingAs
+		|| (Core::App().settings().askDownloadPath() && !toDirectory)) {
 		if (!name.isEmpty() && name.at(0) == QChar::fromLatin1('.')) {
 			name = filedialogDefaultName(prefix, name);
 		} else if (dir.path() != u"."_q) {
@@ -174,16 +185,15 @@ QString FileNameUnsafe(
 			return path;
 		}
 	}();
+	if (toDirectory) {
+		path = dir.absolutePath() + '/';
+	}
 	if (path.isEmpty()) return QString();
 	if (name.isEmpty()) name = u".unknown"_q;
 	if (name.at(0) == QChar::fromLatin1('.')) {
 		if (!QDir().exists(path)) QDir().mkpath(path);
 		return filedialogDefaultName(prefix, name, path);
 	}
-	if (dir.path() != u"."_q) {
-		path = dir.absolutePath() + '/';
-	}
-
 	QString nameStart, extension;
 	int32 extPos = name.lastIndexOf('.');
 	if (extPos >= 0) {
@@ -236,8 +246,11 @@ QString DocumentFileNameForSave(
 		bool forceSavingAs,
 		const QString &already,
 		const QDir &dir) {
-	auto alreadySavingFilename = data->loadingFilePath();
-	if (!alreadySavingFilename.isEmpty()) {
+	const auto toDirectory = !forceSavingAs && (dir.path() != u"."_q);
+	const auto alreadySavingFilename = data->loadingFilePath();
+	if (!alreadySavingFilename.isEmpty()
+		&& (!toDirectory
+			|| QFileInfo(alreadySavingFilename).absoluteDir() == dir)) {
 		return alreadySavingFilename;
 	}
 
@@ -910,10 +923,6 @@ bool DocumentData::videoThumbnailLoading() const {
 	return _videoThumbnail.loader != nullptr;
 }
 
-bool DocumentData::videoThumbnailFailed() const {
-	return (_videoThumbnail.flags & Data::CloudFile::Flag::Failed);
-}
-
 void DocumentData::loadVideoThumbnail(Data::FileOrigin origin) {
 	const auto autoLoading = false;
 	const auto finalCheck = [=] {
@@ -1176,18 +1185,10 @@ void DocumentData::setFileName(const QString &remoteFileName) {
 	// We don't want LTR/RTL mark/embedding/override/isolate chars
 	// in filenames, because they introduce a security issue, when
 	// an executable "Fil[x]gepj.exe" may look like "Filexe.jpeg".
-	QChar controls[] = {
-		QChar(0x200E), // LTR Mark
-		QChar(0x200F), // RTL Mark
-		QChar(0x202A), // LTR Embedding
-		QChar(0x202B), // RTL Embedding
-		QChar(0x202D), // LTR Override
-		QChar(0x202E), // RTL Override
-		QChar(0x2066), // LTR Isolate
-		QChar(0x2067), // RTL Isolate
-	};
-	for (const auto &ch : controls) {
-		_filename = std::move(_filename).replace(ch, "_");
+	for (auto &ch : _filename) {
+		if (IsBidiControl(ch)) {
+			ch = '_';
+		}
 	}
 	_nameType = Core::DetectNameType(_filename);
 }
@@ -1236,66 +1237,66 @@ void DocumentData::save(
 		const auto &l = location(true);
 		if (!toFile.isEmpty()) {
 			if (!media->bytes().isEmpty()) {
+				const auto &bytes = media->bytes();
+				auto file = QFile(toFile);
 				if (destination) {
 					if (!destination->isOpen()
-						|| destination->write(media->bytes())
-							!= qint64(media->bytes().size())) {
+						|| destination->write(bytes) != bytes.size()
+						|| !destination->flush()) {
 						destination->close();
 						destination->remove();
 						return;
 					}
 					destination->close();
-				} else {
-					QFile f(toFile);
-					if (f.open(QIODevice::WriteOnly)) {
-						f.write(media->bytes());
-						f.close();
-					}
+				} else if (!file.open(QIODevice::WriteOnly)
+					|| file.write(bytes) != bytes.size()
+					|| !file.flush()) {
+					return;
 				}
+				if (file.isOpen()) {
+					file.close();
+				}
+				Platform::File::PostprocessDownloaded(
+					QFileInfo(toFile).absoluteFilePath());
 
 				setLocation(Core::FileLocation(toFile));
 				session().local().writeFileLocation(
 					mediaKey(),
 					Core::FileLocation(toFile));
 			} else if (l.accessEnable()) {
+				auto copied = false;
 				const auto &alreadyName = l.name();
 				if (alreadyName != toFile) {
 					if (destination) {
-						QFile source(alreadyName);
-						if (!source.open(QIODevice::ReadOnly)) {
-							destination->close();
-							destination->remove();
-							l.accessDisable();
-							return;
-						}
-						auto copied = true;
-						while (!source.atEnd()) {
+						auto source = QFile(alreadyName);
+						copied = destination->isOpen()
+							&& source.open(QIODevice::ReadOnly);
+						while (copied && !source.atEnd()) {
 							const auto chunk = source.read(kFileCopyChunkSize);
-							if (chunk.isEmpty()) {
-								copied = false;
-								break;
-							}
-							if (destination->write(chunk)
-								!= qint64(chunk.size())) {
-								copied = false;
-								break;
-							}
+							copied = !chunk.isEmpty()
+								&& destination->write(chunk) == chunk.size();
 						}
-						if (!copied) {
-							destination->close();
-							destination->remove();
-							l.accessDisable();
-							return;
-						}
+						copied = copied && destination->flush();
 						destination->close();
+						if (!copied) {
+							destination->remove();
+						}
 					} else {
 						QFile(toFile).remove();
-						QFile(alreadyName).copy(toFile);
+						copied = QFile(alreadyName).copy(toFile);
 					}
 				} else if (destination) {
 					destination->close();
 				}
 				l.accessDisable();
+				if (copied) {
+					Platform::File::PostprocessDownloaded(
+						QFileInfo(toFile).absoluteFilePath());
+					setLocation(Core::FileLocation(toFile));
+					session().local().writeFileLocation(
+						mediaKey(),
+						Core::FileLocation(toFile));
+				}
 			} else if (destination) {
 				destination->close();
 				destination->remove();
@@ -1316,6 +1317,8 @@ void DocumentData::save(
 		if (fromCloud == LoadFromCloudOrLocal) {
 			_loader->permitLoadFromCloud();
 		}
+	} else if (toFile.isEmpty() && size > Storage::kMaxFileInMemory) {
+		return;
 	} else {
 		status = FileReady;
 		auto reader = owner().streaming().sharedReader(this, origin, true);
@@ -1405,13 +1408,18 @@ void DocumentData::handleLoaderUpdates() {
 			}));
 		} else if (error.failureReason == FailureReason::FileWriteFailure) {
 			if (!Core::App().settings().downloadPath().isEmpty()) {
-				Core::App().settings().setDownloadPathBookmark(QByteArray());
-				Core::App().settings().setDownloadPath(QString());
-				Core::App().saveSettingsDelayed();
 				InvokeQueued(qApp, [] {
-					Ui::show(
+					static auto box = base::weak_qptr<Ui::GenericBox>();
+					static auto nextWarningAt = crl::time();
+					const auto now = crl::now();
+					if (box || now < nextWarningAt) {
+						return;
+					}
+					nextWarningAt = now + 60 * crl::time(1000);
+					box = Ui::show(
 						Ui::MakeInformBox(
-							tr::lng_download_path_failed(tr::now)));
+							tr::lng_download_path_failed(tr::now)),
+						Ui::LayerOption::KeepOther);
 				});
 			}
 		}
@@ -1552,10 +1560,13 @@ bool DocumentData::saveFromDataChecked() {
 	}
 	auto file = QFile(path);
 	if (!file.open(QIODevice::WriteOnly)
-		|| file.write(bytes) != bytes.size()) {
+		|| file.write(bytes) != bytes.size()
+		|| !file.flush()) {
 		return false;
 	}
 	file.close();
+	Platform::File::PostprocessDownloaded(
+		QFileInfo(file).absoluteFilePath());
 	_location = Core::FileLocation(path);
 	session().local().writeFileLocation(mediaKey(), _location);
 	return true;

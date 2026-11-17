@@ -147,6 +147,8 @@ public:
 	}
 
 	void checkTopicCreated(FullMsgId rootId, MsgId realRoot);
+	void checkReplyTargetSent(FullMsgId localId, MsgId realId);
+	void discardCreatingTopic(not_null<History*> history, MsgId rootId);
 	[[nodiscard]] FullMsgId convertTopicReplyToId(
 		not_null<History*> history,
 		FullMsgId replyToId) const;
@@ -190,7 +192,7 @@ private:
 	};
 	struct DelayedByTopicMessage {
 		uint64 randomId = 0;
-		FullMsgId replyTo;
+		FullReplyTo replyTo;
 		Fn<PreparedMessage(not_null<History*>, FullReplyTo)> message;
 		Fn<void(const MTPUpdates&, const MTP::Response&)> done;
 		Fn<void(const MTP::Error&, const MTP::Response&)> fail;
@@ -278,6 +280,9 @@ private:
 		FullMsgId,
 		std::vector<DelayedByTopicMessage>> _creatingTopics;
 	base::flat_map<FullMsgId, MsgId> _createdTopicIds;
+	base::flat_map<
+		FullMsgId,
+		std::vector<DelayedByTopicMessage>> _delayedByReplyTarget;
 	base::flat_set<mtpRequestId> _creatingTopicRequests;
 
 	base::flat_map<

@@ -18,7 +18,12 @@ class DocumentMedia;
 
 namespace Info::Profile {
 
-struct MusicButtonData;
+struct AyuMusicButtonData {
+	QString title;
+	QString performer;
+	FullMsgId msgId;
+	std::shared_ptr<Data::DocumentMedia> mediaView;
+};
 
 struct ResultCover
 {
@@ -30,10 +35,10 @@ struct ResultCover
 class AyuMusicButton final : public Ui::RippleButton
 {
 public:
-	AyuMusicButton(QWidget *parent, MusicButtonData data, std::optional<QColor> overrideBg, Fn<void()> handler);
+	AyuMusicButton(QWidget *parent, AyuMusicButtonData data, std::optional<QColor> overrideBg, Fn<void()> handler);
 	~AyuMusicButton();
 
-	void updateData(MusicButtonData data);
+	void updateData(AyuMusicButtonData data);
 
 	rpl::producer<> onReady() const {
 		return _onReady.events();

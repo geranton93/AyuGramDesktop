@@ -284,13 +284,11 @@ int main(int argc, const char * argv[]) {
 				}];
 			dispatch_semaphore_wait(launchedSemaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 		} else {
-			NSWorkspaceLaunchConfiguration *configuration = [NSWorkspaceLaunchConfiguration configuration];
-			configuration.arguments = args;
 			NSError *launchError = nil;
 			NSRunningApplication *result = [[NSWorkspace sharedWorkspace]
 				launchApplicationAtURL:[NSURL fileURLWithPath:appPath]
 				options:NSWorkspaceLaunchDefault
-				configuration:configuration
+				configuration:@{NSWorkspaceLaunchConfigurationArguments: args}
 				error:&launchError];
 			launched = (result != nil);
 			error = launchError;

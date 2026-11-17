@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_session.h"
 #include "window/themes/window_theme.h"
+#include "window/window_saved_windows.h"
 #include "lang/lang_instance.h"
 
 #include <QtCore/QDirIterator>
@@ -67,7 +68,7 @@ using Database = Storage::Cache::Database;
 
 QString _basePath, _userBasePath, _userDbPath;
 
-TaskQueue *_localLoader = nullptr;
+auto _localLoader = (TaskQueue*)nullptr;
 
 QByteArray _settingsSalt;
 
@@ -608,7 +609,8 @@ void writeUpdateManifest(
 		|| f.write(signature) != signature.size()
 		|| f.write(manifest) != manifest.size()
 		|| !f.commit()) {
-		LOG(("Storage Error: Could not write the update manifest."));
+		LOG(("Storage Error: Could not write the update manifest: %1."
+			).arg(f.errorString()));
 	}
 }
 
@@ -846,6 +848,10 @@ void reset() {
 	Window::Theme::Background()->reset();
 	_oldSettingsVersion = 0;
 	Core::App().settings().resetOnLastLogout();
+	Core::App().reseedWindowInSettings();
+	if (const auto saved = Core::App().savedWindows()) {
+		saved->resetOnLastLogout();
+	}
 	writeSettings();
 }
 

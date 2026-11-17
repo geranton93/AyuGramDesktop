@@ -61,6 +61,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_window.h"
 
 #include <QtGui/QGuiApplication>
+#include <QtGui/QPainterPath>
 #include <QtGui/QScreen>
 #include <QSvgRenderer>
 
@@ -808,11 +809,12 @@ void NotifyPreview::paint(Painter &p, int x, int y) {
 		QSize{ st::notifyPreviewUserpicSize, st::notifyPreviewUserpicSize });
 
 	if (_nameShown) {
-		const auto r = AyuUserpic::ComputeRadiusF(userpic.width());
-		auto clip = QPainterPath();
-		clip.addRoundedRect(QRectF(userpic), r, r);
+		auto hq = PainterHighQualityEnabler(p);
 		p.save();
-		p.setClipPath(clip);
+		auto clip = QPainterPath();
+		const auto radius = AyuUserpic::ComputeRadiusF(userpic.width());
+		clip.addRoundedRect(QRectF(userpic), radius, radius);
+		p.setClipPath(clip, Qt::IntersectClip);
 		_userpic.render(&p, QRectF(userpic));
 		p.restore();
 	} else {

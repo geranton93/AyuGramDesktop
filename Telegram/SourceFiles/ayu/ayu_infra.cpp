@@ -63,18 +63,13 @@ void initIcon() {
 }
 
 void initStreamerMode() {
-	// Register Streamer Mode as a standing reason in the same registry
-	// upstream's own screenshot-protection feature uses, instead of only
-	// applying it separately (per-window, on our own schedule): the two
-	// otherwise fight over the same non-ref-counted OS primitive, and
-	// whichever one last touched a given window would win - including
-	// upstream's own registry resetting every top-level window back to
-	// unprotected whenever an unrelated content reason (e.g. closing a
-	// payment box) drops its own reason count to zero.
 	static auto lifetime = rpl::lifetime();
-	Core::App().screenshotProtection().addContentReason(
-		AyuSettings::getInstance().streamerModeValue(),
-		lifetime);
+	lifetime.destroy();
+	const auto protection = &Core::App().screenshotProtection();
+	AyuSettings::getInstance().streamerModeValue(
+	) | rpl::on_next(crl::guard(protection, [=](bool enabled) {
+		protection->setStreamerMode(enabled);
+	}), lifetime);
 }
 
 void init() {

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/info_profile_inner_widget.h"
 
 #include "info/info_controller.h"
+#include "info/saved/info_saved_music_common.h"
 #include "info/info_memento.h"
 #include "info/info_wrap_widget.h"
 #include "info/profile/info_profile_widget.h"
@@ -21,7 +22,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/tabs/info_profile_tabs_host.h"
 #include "info/profile/info_profile_icon.h"
 #include "info/profile/info_profile_members.h"
-#include "info/profile/info_profile_music_button.h"
 #include "info/profile/info_profile_shared_media_classic.h"
 #include "info/profile/info_profile_top_bar.h"
 #include "info/profile/info_profile_actions.h"
@@ -29,22 +29,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/saved/info_saved_music_widget.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
-#include "data/data_document.h"
 #include "data/data_forum_topic.h"
 #include "data/data_peer.h"
 #include "data/data_photo.h"
 #include "data/data_file_origin.h"
 #include "data/data_user.h"
-#include "data/data_saved_music.h"
 #include "data/data_saved_sublist.h"
-#include "info/saved/info_saved_music_common.h"
 #include "info_profile_actions.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
 #include "lang/lang_keys.h"
 #include "ui/text/custom_emoji_helper.h"
-#include "ui/text/format_song_document_name.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/labels.h"
@@ -191,9 +187,7 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 	auto result = object_ptr<Ui::VerticalLayout>(parent);
 
 	if (!_savedMessages) {
-		const auto musicPeer = _sublist
-			? _sublist->sublistPeer().get()
-			: _peer.get();
+		const auto musicPeer = _sublist ? _sublist->sublistPeer() : _peer;
 		AddSavedMusic(
 			result.data(),
 			_controller,
@@ -549,13 +543,14 @@ bool InnerWidget::hasFlexibleTopBar() const {
 
 base::weak_qptr<Ui::RpWidget> InnerWidget::createPinnedToTop(
 		not_null<Ui::RpWidget*> parent) {
+	const auto shown = _sublist ? _sublist->sublistPeer().get() : _peer.get();
 	const auto content = Ui::CreateChild<TopBar>(
 		parent,
 		TopBar::Descriptor{
 			.controller = _controller->parentController(),
 			.key = _controller->key(),
 			.wrap = _controller->wrapValue(),
-			.peer = _sublist ? _sublist->sublistPeer().get() : nullptr,
+			.peer = _sublist ? shown : nullptr,
 			.backToggles = _backToggles.value(),
 			.showFinished = _showFinished.events(),
 			.customStatus = (_savedMessages

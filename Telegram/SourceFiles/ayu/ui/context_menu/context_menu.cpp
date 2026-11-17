@@ -979,7 +979,7 @@ void AddBurnAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 					}
 				})).send();
 		}),
-		&st::menuIconTTLAny);
+		&st::menuIconTTL);
 }
 
 void AddCreateFilterAction(not_null<Ui::PopupMenu*> menu,

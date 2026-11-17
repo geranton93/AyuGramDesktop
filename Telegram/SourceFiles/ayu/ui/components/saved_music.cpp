@@ -14,7 +14,6 @@
 #include "data/data_document_media.h"
 #include "data/data_file_origin.h"
 #include "data/data_session.h"
-#include "info/profile/info_profile_music_button.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "styles/palette.h"
@@ -182,7 +181,7 @@ std::optional<QRgb> ExtractColorFromCover(const QImage &cover) {
 
 AyuMusicButton::AyuMusicButton(
 	QWidget *parent,
-	MusicButtonData data,
+	AyuMusicButtonData data,
 	std::optional<QColor> overrideBg,
 	Fn<void()> handler)
 	: RippleButton(parent, st::infoMusicButtonRipple)
@@ -217,7 +216,7 @@ AyuMusicButton::AyuMusicButton(
 
 AyuMusicButton::~AyuMusicButton() = default;
 
-void AyuMusicButton::updateData(MusicButtonData data) {
+void AyuMusicButton::updateData(AyuMusicButtonData data) {
 	_performer->setText(data.performer);
 	_title->setText(data.title);
 	_performerText = data.performer;

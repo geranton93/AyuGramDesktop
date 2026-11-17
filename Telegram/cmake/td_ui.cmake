@@ -43,6 +43,7 @@ set(style_files
     boxes/share_box.style
     boxes/stickers_box.style
     boxes/url_auth_box_content.style
+    boxes/keys_legend.style
     info/community_requests/info_community_requests_widget.style
     settings/sections/settings_notifications.style
     ui/boxes/calendar_box.style
@@ -88,6 +89,7 @@ set(style_files
     media/view/media_view.style
     overview/overview.style
     wallet/wallet.style
+    tgw/tgw.style
     window/window.style
     window/window_main_menu.style
     editor/editor.style
@@ -167,6 +169,8 @@ PRIVATE
     dialogs/ui/chat_search_empty.h
     dialogs/ui/chat_search_in.cpp
     dialogs/ui/chat_search_in.h
+    dialogs/ui/dialogs_bottom_button.cpp
+    dialogs/ui/dialogs_bottom_button.h
     dialogs/ui/dialogs_pill.cpp
     dialogs/ui/dialogs_pill.h
     dialogs/ui/dialogs_quick_action_context.h
@@ -398,8 +402,6 @@ PRIVATE
     statistics/widgets/point_details_widget.cpp
     statistics/widgets/point_details_widget.h
 
-    ui/boxes/auto_delete_settings.cpp
-    ui/boxes/auto_delete_settings.h
     ui/boxes/boost_box.cpp
     ui/boxes/boost_box.h
     ui/boxes/calendar_box.cpp
@@ -539,6 +541,8 @@ PRIVATE
     ui/controls/send_as_button.h
     ui/controls/send_button.cpp
     ui/controls/send_button.h
+    ui/controls/slider_tick_labels.cpp
+    ui/controls/slider_tick_labels.h
     ui/controls/stars_rating.cpp
     ui/controls/stars_rating.h
     ui/controls/subsection_tabs_slider.cpp
@@ -552,6 +556,8 @@ PRIVATE
     ui/controls/swipe_handler_data.h
     ui/controls/tabbed_search.cpp
     ui/controls/tabbed_search.h
+    ui/controls/text_copied_toast.cpp
+    ui/controls/text_copied_toast.h
     ui/controls/title_sub_widget.cpp
     ui/controls/title_sub_widget.h
     ui/controls/ton_common.cpp
@@ -571,6 +577,8 @@ PRIVATE
     ui/effects/fireworks_animation.h
     ui/effects/glare.cpp
     ui/effects/glare.h
+    ui/effects/layer_backdrop.cpp
+    ui/effects/layer_backdrop.h
     ui/effects/loading_element.cpp
     ui/effects/loading_element.h
     ui/effects/ministar_particles.cpp
@@ -730,6 +738,8 @@ PRIVATE
     wallet/wallet_card_angle.h
     wallet/wallet_card_gradient.cpp
     wallet/wallet_card_gradient.h
+    wallet/wallet_card_tint.cpp
+    wallet/wallet_card_tint.h
     wallet/wallet_sending_effects.cpp
     wallet/wallet_sending_effects.h
 

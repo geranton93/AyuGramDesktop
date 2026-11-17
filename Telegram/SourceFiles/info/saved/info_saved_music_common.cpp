@@ -13,7 +13,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "info/info_controller.h"
 #include "info/info_memento.h"
-#include "info/profile/info_profile_music_button.h"
 #include "info/saved/info_saved_music_widget.h"
 #include "ui/text/format_song_document_name.h"
 #include "ui/widgets/buttons.h"
@@ -35,12 +34,11 @@ namespace Info::Saved {
 
 namespace {
 
-[[nodiscard]] Profile::MusicButtonData DocumentMusicButtonData(
+[[nodiscard]] Profile::AyuMusicButtonData DocumentMusicButtonData(
 		not_null<DocumentData*> document, not_null<HistoryItem*> message) {
 	const auto name = Ui::Text::FormatSongNameFor(document);
 
 	return {
-		.name = name,
 		.title = name.composedName().title,
 		.performer = name.composedName().performer,
 		.msgId = message->fullId(),

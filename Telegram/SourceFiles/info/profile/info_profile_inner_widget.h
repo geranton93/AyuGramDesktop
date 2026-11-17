@@ -117,7 +117,6 @@ private:
 	rpl::event_stream<> _showFinished;
 
 	std::shared_ptr<Data::PhotoMedia> _nonPersonalView;
-
 	rpl::variable<std::optional<QColor>> _topBarColor;
 
 	Members *_members = nullptr;

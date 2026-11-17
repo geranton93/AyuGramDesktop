@@ -25,7 +25,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class History;
 class DocumentData;
-class Image;
 struct InlineBotQuery;
 
 namespace style {
@@ -222,6 +221,7 @@ public:
 	[[nodiscard]] rpl::producer<> replyCancelled() const;
 	[[nodiscard]] rpl::producer<> replyCancelledExternal() const;
 	[[nodiscard]] rpl::producer<Api::SendOptions> sendRequests() const;
+	[[nodiscard]] rpl::producer<> replyToForwardRequests() const;
 	[[nodiscard]] rpl::producer<VoiceToSend> sendVoiceRequests() const;
 	[[nodiscard]] rpl::producer<QString> sendCommandRequests() const;
 	[[nodiscard]] rpl::producer<MessageToEdit> editRequests() const;
@@ -416,6 +416,7 @@ private:
 		not_null<Ui::RpWidget*> button,
 		Fn<void(Api::SendOptions)> send);
 	bool updateReplaceMediaButton();
+	void startMediaReplace();
 	void updateOuterGeometry(QRect rect);
 	void paintBackground(QPainter &p, QRect full, QRect clip);
 
@@ -426,6 +427,7 @@ private:
 	[[nodiscard]] SendMenu::Details sendMenuDetails() const;
 	[[nodiscard]] SendMenu::Details saveMenuDetails() const;
 	[[nodiscard]] SendMenu::Details sendButtonMenuDetails() const;
+	[[nodiscard]] bool canReplyToForward() const;
 	[[nodiscard]] Api::SendOptions adjustedSupportSendOptions(
 		Qt::KeyboardModifiers modifiers) const;
 
@@ -627,6 +629,7 @@ private:
 	const Fn<void(not_null<DocumentData*>)> _unavailableEmojiPasted;
 
 	rpl::event_stream<Api::SendOptions> _sendCustomRequests;
+	rpl::event_stream<> _replyToForwardRequests;
 	rpl::event_stream<Qt::KeyboardModifiers> _fieldSubmits;
 	rpl::event_stream<Api::SendOptions> _scrollToMaxRequests;
 	rpl::event_stream<> _cancelRequests;
@@ -685,6 +688,8 @@ private:
 	rpl::lifetime _sessionLifetime;
 	rpl::lifetime _threadFieldVisibleLifetime;
 	rpl::lifetime _uploaderSubscriptions;
+	// Last, so the handler ends before any members it uses are destroyed.
+	rpl::lifetime _recordingStateLifetime;
 
 };
 
@@ -692,15 +697,5 @@ private:
 	not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<bool> SendDisabledBySlowmode(
 	not_null<PeerData*> peer);
-
-void ShowPhotoEditSpoilerMenu(
-	not_null<Ui::RpWidget*> parent,
-	not_null<HistoryItem*> item,
-	const std::optional<bool> &override,
-	Fn<void(bool)> callback);
-
-[[nodiscard]] Image *MediaPreviewWithOverriddenSpoiler(
-	not_null<HistoryItem*> item,
-	bool spoiler);
 
 } // namespace HistoryView

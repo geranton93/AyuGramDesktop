@@ -11,7 +11,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/runtime_composer.h"
 #include "base/flags.h"
 #include "base/weak_ptr.h"
-#include "iv/iv_rich_page.h"
 #include "ui/userpic_view.h"
 
 // AyuGram includes
@@ -33,6 +32,11 @@ struct Reaction;
 struct ReactionId;
 } // namespace Data
 
+namespace Iv {
+struct BuiltRichQuote;
+struct RichPageBlocksSlice;
+} // namespace Iv
+
 namespace Window {
 class SessionController;
 } // namespace Window
@@ -42,6 +46,7 @@ class PathShiftGradient;
 struct BubblePattern;
 struct ChatPaintContext;
 struct ChatPaintHighlight;
+struct ChatPaintRichQuote;
 class ChatStyle;
 struct ReactionFlyAnimationArgs;
 class ReactionFlyAnimation;
@@ -71,6 +76,7 @@ class GramReadLine;
 class Media;
 class Reply;
 struct HistoryMessageRichPage;
+struct HighlightYRange;
 
 enum class Context : char {
 	History,
@@ -425,7 +431,7 @@ struct SelectedQuote {
 	bool overflown = false;
 
 	explicit operator bool() const {
-		return item && !highlight.quote.empty();
+		return item && (!highlight.quote.empty() || highlight.richQuote);
 	}
 	friend inline bool operator==(SelectedQuote, SelectedQuote) = default;
 };
@@ -594,12 +600,20 @@ public:
 		const MessageSelection &selection) const;
 	[[nodiscard]] Iv::RichPageBlocksSlice selectedRichBlocks(
 		const MessageSelection &selection) const;
+	[[nodiscard]] std::optional<Iv::BuiltRichQuote> selectedRichQuote(
+		const MessageSelection &selection) const;
+	[[nodiscard]] SelectedQuote selectedReplyQuote(
+		const MessageSelection &selection) const;
 	virtual SelectedQuote selectedQuote(
 		TextSelection selection) const = 0;
 	virtual SelectedQuote selectedQuote(
 		const MessageSelection &selection) const;
 	virtual TextSelection selectionFromQuote(
 		const SelectedQuote &quote) const = 0;
+	[[nodiscard]] Ui::ChatPaintRichQuote richSelectionFromQuote(
+		const SelectedQuote &quote) const;
+	[[nodiscard]] virtual HighlightYRange richQuoteHighlightYRange(
+		const Ui::ChatPaintRichQuote &quote) const;
 	[[nodiscard]] virtual TextSelection adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const;
@@ -671,7 +685,8 @@ public:
 	[[nodiscard]] virtual bool toggleSelectionByHandlerClick(
 		const ClickHandlerPtr &handler) const;
 	[[nodiscard]] virtual bool allowTextSelectionByHandler(
-		const ClickHandlerPtr &handler) const;
+		const ClickHandlerPtr &handler,
+		bool fromTouch) const;
 
 	[[nodiscard]] bool usesBubblePattern(const PaintContext &context) const;
 
@@ -744,7 +759,6 @@ public:
 		Data::ReactionId,
 		std::unique_ptr<Ui::ReactionFlyAnimation>>;
 
-	void animateUnreadEffect();
 	[[nodiscard]] virtual auto takeEffectAnimation()
 	-> std::unique_ptr<Ui::ReactionFlyAnimation>;
 
