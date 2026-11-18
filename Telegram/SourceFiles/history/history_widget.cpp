@@ -4648,7 +4648,7 @@ void HistoryWidget::updateControlsVisibility() {
 			}
 		}
 		if (_replaceMedia) {
-			_replaceMedia->show();
+			_replaceMedia->setVisible(settings.showAttachButtonInMessageField());
 			_attachToggle->hide();
 		} else {
 			SWITCH_BUTTON(_attachToggle, settings.showAttachButtonInMessageField());
@@ -9933,6 +9933,12 @@ void HistoryWidget::sendInlineResult(InlineBots::ResultSelected result) {
 		return;
 	}
 
+	const auto sendType = sendMenuDetails().type;
+	if (sendType == SendMenu::Type::Scheduled
+		|| sendType == SendMenu::Type::ScheduledToUser
+		|| sendType == SendMenu::Type::Reminder) {
+		applyGhostScheduling(action);
+	}
 	controller()->sendingAnimation().appendSending(
 		result.messageSendingFrom);
 	session().api().sendInlineResult(

@@ -401,7 +401,7 @@ Reactions::Reactions(not_null<Session*> owner)
 		}
 	}, _lifetime);
 
-	_owner->session().changes().realtimeSublistUpdates(
+	_owner->session().changes().sublistUpdates(
 		SublistUpdate::Flag::Destroyed
 	) | rpl::on_next([=](const SublistUpdate &update) {
 		forgetSublist(update.sublist.get());

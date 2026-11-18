@@ -3991,7 +3991,7 @@ FullMsgId ApiWrap::forwardMessages(
 	const auto fullAyuForward = AyuForward::isFullAyuForwardNeeded(draft.items);
 	const auto itemIds = _session->data().itemsToIds(draft.items);
 	if (itemIds.size() != draft.items.size()) {
-		return;
+		return {};
 	}
 	const auto forwardOptions = draft.options;
 	const auto sourceSession = base::make_weak(_session);
@@ -4014,7 +4014,7 @@ FullMsgId ApiWrap::forwardMessages(
 				forwardOptions,
 				targetHistory);
 		});
-		return;
+		return {};
 	}
 
 	const auto ayuIntelligentForwardNeeded = AyuForward::isAyuForwardNeeded(draft.items);
@@ -4035,7 +4035,7 @@ FullMsgId ApiWrap::forwardMessages(
 				forwardOptions,
 				targetHistory);
 		});
-		return;
+		return {};
 	}
 
 	auto &histories = _session->data().histories();

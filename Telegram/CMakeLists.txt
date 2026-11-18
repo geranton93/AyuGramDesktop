@@ -332,6 +332,7 @@ set(ayugram_files
         ayu/data/messages_storage.cpp
         ayu/data/messages_storage.h
         ayu/data/entities.h
+        ayu/data/archive_owner.h
         ayu/data/ayu_database.cpp
         ayu/data/ayu_database.h
 

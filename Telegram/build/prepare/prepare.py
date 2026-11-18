@@ -1807,6 +1807,7 @@ win:
         -static ^
         -static-runtime ^
         -feature-c++20 ^
+        -feature-relocatable ^
         -openssl linked ^
         -system-webp ^
         -system-zlib ^
@@ -2151,11 +2152,16 @@ mac:
     printf 'pub use ::tlottie;\\npub use ::wallet_engine;\\n' > src/lib.rs
     cargo add --path ../tlottie --features c-api
     cargo add --path ../wallet-engine
+    # The pinned Rust compiler can misalign Mach-O string tables when
+    # stripping debug information. macOS 27 then rejects proc macros
+    # and the shared library used by the wallet bindings generator.
+    # Keep stripping disabled for both architectures and the host tools.
     buildOneArch() {
         cargo rustc --lib --release \\
             --crate-type staticlib --crate-type cdylib \\
             --target $1 \\
             --config "profile.release.opt-level='z'" \\
+            --config "profile.release.strip='none'" \\
             --config "profile.release.lto='thin'" \\
             --config "profile.release.codegen-units=1" \\
             --config "profile.release.panic='unwind'" \\

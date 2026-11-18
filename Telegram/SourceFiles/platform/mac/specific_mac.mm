@@ -406,6 +406,7 @@ void RequestPermission(PermissionType type, Fn<void(PermissionStatus)> resultCal
 					resultCallback(granted ? PermissionStatus::Granted : PermissionStatus::Denied);
 				});
 			}];
+			return;
 		}
 		break;
 	}

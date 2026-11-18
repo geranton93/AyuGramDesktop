@@ -4,12 +4,20 @@
 
 Choose a folder for the future build, for example **/home/user/TBuild**. It will be named ***BuildPath*** in the rest of this document. All commands will be launched from Terminal.
 
-### Clone source code and prepare libraries
+### Clone source code and select a build image
 
-Install [poetry](https://python-poetry.org), [docker](https://www.docker.com/) and [docker-buildx](https://docs.docker.com/reference/cli/docker/buildx/), go to ***BuildPath*** and run
+Install [Docker](https://www.docker.com/) and [Buildx](https://docs.docker.com/reference/cli/docker/buildx/), go to ***BuildPath*** and clone the source.
 
     git clone --recursive https://github.com/geranton93/AyuGramDesktop.git tdesktop
+
+To use the prebuilt Telegram Desktop image, set the image name as follows. Docker pulls it when needed.
+
+    AYUGRAM_BUILD_IMAGE=ghcr.io/telegramdesktop/tdesktop/centos_env:latest
+
+To build the image locally, install [Poetry](https://python-poetry.org) and run the following commands from ***BuildPath***.
+
     ./tdesktop/Telegram/build/prepare/linux.sh
+    AYUGRAM_BUILD_IMAGE=tdesktop:centos_env
 
 ### Building the project
 
@@ -21,7 +29,7 @@ Go to ***BuildPath*/tdesktop** and run
     docker run --rm -it \
         -u $(id -u) \
         -v "$PWD:/usr/src/tdesktop" \
-        ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
+        "${AYUGRAM_BUILD_IMAGE:?Select a build image first}" \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
         -D TDESKTOP_API_ID="${TDESKTOP_API_ID:?Set TDESKTOP_API_ID first}" \
         -D TDESKTOP_API_HASH="${TDESKTOP_API_HASH:?Set TDESKTOP_API_HASH first}"
@@ -32,7 +40,7 @@ Or, to create a debug build, run
         -u $(id -u) \
         -v "$PWD:/usr/src/tdesktop" \
         -e CONFIG=Debug \
-        ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
+        "${AYUGRAM_BUILD_IMAGE:?Select a build image first}" \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
         -D TDESKTOP_API_ID="${TDESKTOP_API_ID:?Set TDESKTOP_API_ID first}" \
         -D TDESKTOP_API_HASH="${TDESKTOP_API_HASH:?Set TDESKTOP_API_HASH first}"
@@ -43,7 +51,7 @@ You can use `strip` command to reduce binary size.
 
 ### Visual Studio Code integration
 
-Ensure you've followed the instruction up to the [**Clone source code and prepare libraries**](#clone-source-code-and-prepare-libraries) step at least.
+Follow the local-image route in [**Clone source code and select a build image**](#clone-source-code-and-select-a-build-image). Dev Containers uses the `tdesktop:centos_env` tag created by that route.
 
 Open the repository in Visual Studio Code, install the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension and add the following to `.vscode/settings.json` (using [your **api_id** and **api_hash**](#obtain-your-api-credentials)):
 

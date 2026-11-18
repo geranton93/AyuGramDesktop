@@ -6,9 +6,10 @@
 // Copyright @Radolyn, 2026
 #include "ayu/data/ayu_database.h"
 
+#include "ayu/data/archive_owner.h"
 #include "ayu/data/entities.h"
-#include "ayu/libs/sqlite/sqlite_orm.h"
 #include "base/unixtime.h"
+#include "data/data_peer_id.h"
 
 #include <algorithm>
 #include <mutex>
@@ -371,36 +372,13 @@ void addEditedMessage(const EditedMessage &message) {
 	}
 }
 
-namespace {
-
-void attributeUnattributedRows(ID accountId) {
-	if (!accountId) {
-		return;
-	}
-	try {
-		storage.update_all(
-			set(c(&DeletedMessage::accountId) = accountId),
-			where(c(&DeletedMessage::accountId) == 0));
-		storage.update_all(
-			set(c(&EditedMessage::accountId) = accountId),
-			where(c(&EditedMessage::accountId) == 0));
-	} catch (std::exception &ex) {
-		LOG(("Failed to attribute legacy archive rows: %1").arg(ex.what()));
-	}
-}
-
-}
-
 std::vector<EditedMessage> getEditedMessages(ID accountId, ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit) {
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		const auto pageSize = std::clamp(totalLimit, 0, kMaxArchivePageSize);
-		attributeUnattributedRows(accountId);
 		return storage.get_all<EditedMessage>(
 			where(
-				(column<EditedMessage>(&EditedMessage::accountId) == accountId
-					or column<EditedMessage>(&EditedMessage::accountId) == 0) and
-				column<EditedMessage>(&EditedMessage::userId) == userId and
+				ArchiveOwnedBy<EditedMessage>(accountId, userId, PeerId::kChatTypeMask) and
 				column<EditedMessage>(&EditedMessage::dialogId) == dialogId and
 				column<EditedMessage>(&EditedMessage::messageId) == messageId and
 				(column<EditedMessage>(&EditedMessage::fakeId) > minId or minId == 0) and
@@ -421,9 +399,7 @@ bool hasRevisions(ID accountId, ID userId, ID dialogId, ID messageId) {
 		return !storage.select(
 			columns(column<EditedMessage>(&EditedMessage::messageId)),
 			where(
-				(column<EditedMessage>(&EditedMessage::accountId) == accountId
-					or column<EditedMessage>(&EditedMessage::accountId) == 0) and
-				column<EditedMessage>(&EditedMessage::userId) == userId and
+				ArchiveOwnedBy<EditedMessage>(accountId, userId, PeerId::kChatTypeMask) and
 				column<EditedMessage>(&EditedMessage::dialogId) == dialogId and
 				column<EditedMessage>(&EditedMessage::messageId) == messageId
 			),
@@ -436,39 +412,37 @@ bool hasRevisions(ID accountId, ID userId, ID dialogId, ID messageId) {
 }
 
 void addDeletedMessage(const DeletedMessage &message) {
-	const std::lock_guard<std::mutex> lock(DatabaseMutex);
-	auto saved = false;
-	try {
-		storage.begin_transaction();
-		storage.insert(message);
-		storage.commit();
-		saved = true;
-	} catch (std::exception &ex) {
-		try {
-			storage.rollback();
-		} catch (...) {
-		}
-		archivedRowCount<DeletedMessage>().reset();
-		LOG(("Failed to save deleted message for some reason: %1").arg(ex.what()));
-	}
-	if (saved) {
-		pruneOldestRows<DeletedMessage>(kMaxArchivedRowsPerTable, 1);
-	}
+	addDeletedMessages(std::span(&message, 1));
 }
 
-void addDeletedMessages(const std::vector<DeletedMessage> &messages) {
+void addDeletedMessages(std::span<const DeletedMessage> messages) {
 	if (messages.empty()) {
 		return;
 	}
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
-	auto saved = false;
+	auto inserted = 0;
 	try {
 		storage.begin_transaction();
 		for (const auto &message : messages) {
+			const auto duplicate = storage.select(
+				columns(column<DeletedMessage>(&DeletedMessage::messageId)),
+				where(
+					ArchiveOwnedBy<DeletedMessage>(
+						message.accountId,
+						message.userId,
+						PeerId::kChatTypeMask) and
+					column<DeletedMessage>(&DeletedMessage::dialogId) == message.dialogId and
+					column<DeletedMessage>(&DeletedMessage::messageId) == message.messageId
+				),
+				limit(1)
+			);
+			if (!duplicate.empty()) {
+				continue;
+			}
 			storage.insert(message);
+			++inserted;
 		}
 		storage.commit();
-		saved = true;
 	} catch (std::exception &ex) {
 		try {
 			storage.rollback();
@@ -476,11 +450,10 @@ void addDeletedMessages(const std::vector<DeletedMessage> &messages) {
 		}
 		archivedRowCount<DeletedMessage>().reset();
 		LOG(("Failed to save deleted messages batch for some reason: %1").arg(ex.what()));
+		return;
 	}
-	if (saved) {
-		pruneOldestRows<DeletedMessage>(
-			kMaxArchivedRowsPerTable,
-			static_cast<int>(messages.size()));
+	if (inserted) {
+		pruneOldestRows<DeletedMessage>(kMaxArchivedRowsPerTable, inserted);
 	}
 }
 
@@ -491,13 +464,10 @@ std::vector<DeletedMessage> getDeletedMessages(ID accountId, ID userId, ID dialo
 	const std::lock_guard<std::mutex> lock(DatabaseMutex);
 	try {
 		const auto pageSize = std::clamp(totalLimit, 0, kMaxArchivePageSize);
-		attributeUnattributedRows(accountId);
 		if (searchQuery.empty()) {
 			return storage.get_all<DeletedMessage>(
 				where(
-					(column<DeletedMessage>(&DeletedMessage::accountId) == accountId
-						or column<DeletedMessage>(&DeletedMessage::accountId) == 0) and
-					column<DeletedMessage>(&DeletedMessage::userId) == userId and
+					ArchiveOwnedBy<DeletedMessage>(accountId, userId, PeerId::kChatTypeMask) and
 					column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 					(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0) and
 					(column<DeletedMessage>(&DeletedMessage::messageId) > minId or minId == 0) and
@@ -519,9 +489,7 @@ std::vector<DeletedMessage> getDeletedMessages(ID accountId, ID userId, ID dialo
 		const auto pattern = "%" + escaped + "%";
 		return storage.get_all<DeletedMessage>(
 			where(
-				(column<DeletedMessage>(&DeletedMessage::accountId) == accountId
-					or column<DeletedMessage>(&DeletedMessage::accountId) == 0) and
-				column<DeletedMessage>(&DeletedMessage::userId) == userId and
+				ArchiveOwnedBy<DeletedMessage>(accountId, userId, PeerId::kChatTypeMask) and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0) and
 				(column<DeletedMessage>(&DeletedMessage::messageId) > minId or minId == 0) and
@@ -543,9 +511,7 @@ bool hasDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId) {
 		return !storage.select(
 			columns(column<DeletedMessage>(&DeletedMessage::dialogId)),
 			where(
-				(column<DeletedMessage>(&DeletedMessage::accountId) == accountId
-					or column<DeletedMessage>(&DeletedMessage::accountId) == 0) and
-				column<DeletedMessage>(&DeletedMessage::userId) == userId and
+				ArchiveOwnedBy<DeletedMessage>(accountId, userId, PeerId::kChatTypeMask) and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0)
 			),
@@ -562,8 +528,7 @@ void removeDeletedMessage(ID accountId, ID userId, ID dialogId, ID messageId) {
 	try {
 		storage.remove_all<DeletedMessage>(
 			where(
-				column<DeletedMessage>(&DeletedMessage::accountId) == accountId and
-				column<DeletedMessage>(&DeletedMessage::userId) == userId and
+				ArchiveOwnedBy<DeletedMessage>(accountId, userId, PeerId::kChatTypeMask) and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				column<DeletedMessage>(&DeletedMessage::messageId) == messageId
 			)
@@ -580,8 +545,7 @@ void clearDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId) {
 	try {
 		storage.remove_all<DeletedMessage>(
 			where(
-				column<DeletedMessage>(&DeletedMessage::accountId) == accountId and
-				column<DeletedMessage>(&DeletedMessage::userId) == userId and
+				ArchiveOwnedBy<DeletedMessage>(accountId, userId, PeerId::kChatTypeMask) and
 				column<DeletedMessage>(&DeletedMessage::dialogId) == dialogId and
 				(column<DeletedMessage>(&DeletedMessage::topicId) == topicId or topicId == 0)
 			)

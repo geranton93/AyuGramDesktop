@@ -5344,7 +5344,7 @@ void ComposeControls::updateControlsVisibility() {
 		_sendAs->show();
 	}
 	if (_replaceMedia) {
-		_replaceMedia->show();
+		_replaceMedia->setVisible(settings.showAttachButtonInMessageField());
 	}
 	if (_botMenu) {
 		_botMenu->show();

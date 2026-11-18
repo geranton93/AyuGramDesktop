@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_forward_reply.h"
 
 #include "apiwrap.h"
+#include "ayu/features/forward/ayu_forward.h"
 #include "chat_helpers/compose/compose_show.h"
 #include "data/data_changes.h"
 #include "data/data_chat_participant_status.h"
@@ -21,7 +22,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Api {
 
 bool CanReplyToForward(const HistoryItemsList &items) {
-	return (items.size() == 1) && !items.front()->isSavedMusicItem();
+	return (items.size() == 1)
+		&& !items.front()->isSavedMusicItem()
+		&& !AyuForward::isFullAyuForwardNeeded(items)
+		&& !AyuForward::isAyuForwardNeeded(items);
 }
 
 bool SendForwardWithReply(ForwardReply &&descriptor) {

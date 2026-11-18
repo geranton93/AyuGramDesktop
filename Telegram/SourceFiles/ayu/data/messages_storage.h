@@ -8,6 +8,7 @@
 
 #include "ayu/data/entities.h"
 
+#include <optional>
 #include <string>
 
 namespace AyuMessages {
@@ -24,6 +25,8 @@ std::vector<AyuMessageBase> getEditedMessages(
 std::vector<AyuMessageBase> getEditedMessages(not_null<HistoryItem*> item, ID minId, ID maxId, int totalLimit);
 bool hasRevisions(not_null<HistoryItem*> item);
 
+[[nodiscard]] std::optional<DeletedMessage> snapshotDeletedMessage(
+	not_null<HistoryItem*> item);
 void addDeletedMessage(not_null<HistoryItem*> item);
 void addDeletedMessages(const std::vector<not_null<HistoryItem*>> &items);
 std::vector<AyuMessageBase> getDeletedMessages(

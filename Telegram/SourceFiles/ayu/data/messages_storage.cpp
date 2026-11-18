@@ -85,11 +85,7 @@ void map(not_null<HistoryItem*> item, AyuMessageBase &message) {
 	message.groupedId = item->groupId().raw();
 	message.peerId = item->history()->peer->id.value & PeerId::kChatTypeMask;
 	message.fromId = item->from()->id.value & PeerId::kChatTypeMask;
-	if (item->topic()) {
-		message.topicId = item->topicRootId().bare;
-	} else {
-		message.topicId = 0;
-	}
+	message.topicId = item->forumTopicRootId().bare;
 	message.messageId = item->id.bare;
 	message.date = item->date();
 	message.flags = AyuMapper::mapItemFlagsToMTPFlags(item);
@@ -172,9 +168,10 @@ bool hasRevisions(not_null<HistoryItem*> item) {
 	return AyuDatabase::hasRevisions(accountId, userId, dialogId, msgId);
 }
 
-void addDeletedMessage(not_null<HistoryItem*> item) {
+std::optional<DeletedMessage> snapshotDeletedMessage(
+		not_null<HistoryItem*> item) {
 	try {
-		DeletedMessage message;
+		auto message = DeletedMessage();
 		map(item, message);
 		message.accountId = item->history()->owner().session().userId().bare;
 
@@ -182,12 +179,18 @@ void addDeletedMessage(not_null<HistoryItem*> item) {
 			message.text = DeletedMediaText(item);
 		}
 		if (message.text.empty()) {
-			return;
+			return std::nullopt;
 		}
-
-		AyuDatabase::addDeletedMessage(message);
+		return message;
 	} catch (const std::bad_alloc &) {
 		LOG(("AyuMessages: Failed to archive deleted message"));
+		return std::nullopt;
+	}
+}
+
+void addDeletedMessage(not_null<HistoryItem*> item) {
+	if (const auto message = snapshotDeletedMessage(item)) {
+		AyuDatabase::addDeletedMessage(*message);
 	}
 }
 
@@ -200,15 +203,8 @@ void addDeletedMessages(const std::vector<not_null<HistoryItem*>> &items) {
 			std::vector<DeletedMessage> messages;
 			messages.reserve(count);
 			for (auto i = offset; i != offset + count; ++i) {
-				DeletedMessage message;
-				map(items[i], message);
-				message.accountId = items[i]->history()->owner()
-					.session().userId().bare;
-				if (message.text.empty()) {
-					message.text = DeletedMediaText(items[i]);
-				}
-				if (!message.text.empty()) {
-					messages.push_back(std::move(message));
+				if (auto message = snapshotDeletedMessage(items[i])) {
+					messages.push_back(std::move(*message));
 				}
 			}
 			AyuDatabase::addDeletedMessages(messages);

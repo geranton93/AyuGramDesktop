@@ -594,6 +594,7 @@ public:
 	[[nodiscard]] FullMsgId replyToFullId() const;
 	[[nodiscard]] MsgId replyToTop() const;
 	[[nodiscard]] MsgId topicRootId() const;
+	[[nodiscard]] MsgId forumTopicRootId() const;
 	[[nodiscard]] FullStoryId replyToStory() const;
 	[[nodiscard]] FullReplyTo replyTo() const;
 	[[nodiscard]] bool inThread(MsgId rootId) const;
@@ -709,8 +710,8 @@ private:
 	void createComponents(CreateConfig &&config);
 	void setupForwardedComponent(const CreateConfig &config);
 	void applyInitialEffectWatched();
+	void removeFromSharedMediaIndex(Storage::SharedMediaTypesMask types);
 
-	[[nodiscard]] MsgId notificationTopicRootId() const;
 	[[nodiscard]] bool generateLocalEntitiesByReply() const;
 	[[nodiscard]] TextWithEntities withLocalEntities(
 		const TextWithEntities &textWithEntities) const;

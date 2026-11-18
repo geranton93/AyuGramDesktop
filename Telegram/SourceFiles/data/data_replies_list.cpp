@@ -132,7 +132,9 @@ void RepliesList::apply(const RepliesReadTillUpdate &update) {
 	if (update.out) {
 		setOutboxReadTill(update.readTillId);
 		return;
-	} else if (update.readTillId >= _inboxReadTillId) {
+	}
+	_readTillNotSent.sent(update.readTillId);
+	if (update.readTillId >= _inboxReadTillId) {
 		setInboxReadTill(
 			update.readTillId,
 			ComputeUnreadCountLocally(

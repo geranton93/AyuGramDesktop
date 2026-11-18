@@ -1839,11 +1839,6 @@ void SetupChatBackground(
 		tile->toggle(shown(), anim::type::instant);
 	}, tile->lifetime());
 
-	adaptive->toggleOn(controller->adaptive().chatLayoutValue(
-	) | rpl::map([](Window::Adaptive::ChatLayout layout) {
-		return (layout == Window::Adaptive::ChatLayout::Wide);
-	}));
-
 	adaptive->entity()->checkedChanges(
 	) | rpl::on_next([=](bool checked) {
 		Core::App().settings().setAdaptiveForWide(checked);

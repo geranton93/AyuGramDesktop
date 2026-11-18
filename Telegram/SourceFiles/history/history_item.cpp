@@ -2422,7 +2422,7 @@ void HistoryItem::destroy() {
 	_history->destroyMessage(this);
 }
 
-MsgId HistoryItem::notificationTopicRootId() const {
+MsgId HistoryItem::forumTopicRootId() const {
 	const auto rootId = topicRootId();
 	// A bot has no General topic, enforcing one would list it empty.
 	const auto botGeneral = (rootId == Data::ForumTopic::kGeneralId)
@@ -2431,14 +2431,14 @@ MsgId HistoryItem::notificationTopicRootId() const {
 }
 
 not_null<Data::Thread*> HistoryItem::notificationThread() const {
-	if (const auto rootId = notificationTopicRootId()) {
+	if (const auto rootId = forumTopicRootId()) {
 		return _history->asForum()->enforceTopicFor(rootId);
 	}
 	return _history;
 }
 
 Data::Thread *HistoryItem::maybeNotificationThread() const {
-	if (const auto rootId = notificationTopicRootId()) {
+	if (const auto rootId = forumTopicRootId()) {
 		return _history->asForum()->topicFor(rootId);
 	}
 	return _history;
@@ -3289,6 +3289,9 @@ void HistoryItem::destroyHistoryEntry() {
 }
 
 Storage::SharedMediaTypesMask HistoryItem::sharedMediaTypes() const {
+	if (isDeleted()) {
+		return {};
+	}
 	auto result = Storage::SharedMediaTypesMask{};
 	const auto saved = Get<HistoryMessageSavedMediaData>();
 	const auto media = saved ? saved->media.get() : _media.get();
@@ -3334,16 +3337,18 @@ void HistoryItem::addToSharedMediaIndex() {
 }
 
 void HistoryItem::removeFromSharedMediaIndex() {
-	if (isRegular()) {
-		if (const auto types = sharedMediaTypes()) {
-			_history->session().storage().remove(
-				Storage::SharedMediaRemoveOne(
-					_history->peer->id,
-					topicRootId(),
-					sublistPeerId(),
-					types,
-					id));
-		}
+	removeFromSharedMediaIndex(sharedMediaTypes());
+}
+
+void HistoryItem::removeFromSharedMediaIndex(Storage::SharedMediaTypesMask types) {
+	if (isRegular() && types) {
+		_history->session().storage().remove(
+			Storage::SharedMediaRemoveOne(
+				_history->peer->id,
+				topicRootId(),
+				sublistPeerId(),
+				types,
+				id));
 	}
 }
 
@@ -4405,8 +4410,10 @@ void HistoryItem::setPostAuthor(const QString &postAuthor) {
 }
 
 void HistoryItem::setDeleted() {
+	const auto mediaTypes = sharedMediaTypes();
 	_deleted = true;
 	_deletedAnimated = true;
+	removeFromSharedMediaIndex(mediaTypes);
 
 	// cleanup mentions and reactions as they tend to bug with deleted messages (e.g. can't remove mention)
 	if (isUnreadMention()) {

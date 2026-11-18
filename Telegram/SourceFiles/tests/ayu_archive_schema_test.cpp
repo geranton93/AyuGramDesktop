@@ -5,7 +5,7 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
-#include "ayu/libs/sqlite/sqlite_orm.h"
+#include "ayu/data/archive_owner.h"
 
 #include <cstdio>
 #include <string>
@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace {
 
 using namespace sqlite_orm;
+using ID = long long;
 
 struct ArchiveRow {
 	long long fakeId = 0;
@@ -153,73 +154,64 @@ int main() {
 		std::remove(path.c_str());
 	}
 
-	// Archived rows belong to the account that wrote them: a query scoped to
-	// one account must not return another account's rows, and a row written
-	// before accounts were tracked must end up owned by exactly one account.
 	{
-		const auto path = TempPath("scoped");
-		std::remove(path.c_str());
-		auto storage = make_storage(
-			path,
-			CurrentTable());
+		constexpr auto kFirstUser = 42LL;
+		constexpr auto kSecondUser = 43LL;
+		constexpr auto kUserIdMask = 0xFFFFFFFFFFFFLL;
+		constexpr auto kExplicitAccount = (1LL << 48) | kSecondUser;
+		auto storage = make_storage("", CurrentTable());
 		storage.sync_schema();
-		storage.insert(ArchiveRow{
-			.fakeId = 0,
-			.accountId = 1,
-			.userId = 42,
-			.dialogId = 7,
-			.messageId = 1,
-			.text = "first",
-			.mediaDc = 0,
-			.mediaSize = 0,
-		});
-		storage.insert(ArchiveRow{
-			.fakeId = 0,
-			.accountId = 2,
-			.userId = 42,
-			.dialogId = 7,
-			.messageId = 2,
-			.text = "second",
-			.mediaDc = 0,
-			.mediaSize = 0,
-		});
-		storage.insert(ArchiveRow{
-			.fakeId = 0,
-			.accountId = 0,
-			.userId = 42,
-			.dialogId = 7,
-			.messageId = 3,
-			.text = "legacy",
-			.mediaDc = 0,
-			.mediaSize = 0,
-		});
+		const auto insert = [&](ID accountId, ID userId, int messageId) {
+			storage.insert(ArchiveRow{
+				.accountId = accountId,
+				.userId = userId,
+				.dialogId = 7,
+				.messageId = messageId,
+			});
+		};
+		insert(kFirstUser, kFirstUser, 1);
+		insert(kSecondUser, kSecondUser, 2);
+		insert(0, kFirstUser, 3);
+		insert(0, kSecondUser, 4);
+		insert(kFirstUser, kSecondUser, 5);
+		insert(kFirstUser, 0, 6);
+		insert(kExplicitAccount, kSecondUser, 7);
 
-		const auto first = storage.get_all<ArchiveRow>(
-			where(column<ArchiveRow>(&ArchiveRow::accountId) == 1));
-		if (first.size() != 1) {
-			return Fail(4, "account scoped query returned rows of another account");
+		const auto owned = [](ID accountId, ID userId) {
+			return AyuDatabase::ArchiveOwnedBy<ArchiveRow>(
+				accountId, userId, kUserIdMask);
+		};
+		const auto readIds = [&](ID accountId, ID userId) {
+			return storage.select(
+				&ArchiveRow::messageId,
+				where(owned(accountId, userId)),
+				order_by(&ArchiveRow::messageId));
+		};
+		if (readIds(kFirstUser, kFirstUser) != std::vector<int>{ 1, 3 }) {
+			return Fail(4, "first account read another owner's row");
 		}
-		if (first.front().messageId != 1) {
-			return Fail(5, "account scoped query returned the wrong row");
+		if (readIds(kSecondUser, kSecondUser) != std::vector<int>{ 2, 4, 5 }) {
+			return Fail(5, "second account lost a legacy row");
 		}
-
-		storage.update_all(
-			set(c(&ArchiveRow::accountId) = 1),
-			where(c(&ArchiveRow::accountId) == 0));
-		const auto claimed = storage.get_all<ArchiveRow>(
-			where(column<ArchiveRow>(&ArchiveRow::accountId) == 1));
-		if (claimed.size() != 2) {
-			return Fail(6, "unattributed rows were not claimed by the account");
+		if (readIds(kExplicitAccount, kSecondUser) != std::vector<int>{ 4, 5, 7 }) {
+			return Fail(6, "explicitly scoped row became available to the wrong account");
 		}
-		const auto other = storage.get_all<ArchiveRow>(
-			where(column<ArchiveRow>(&ArchiveRow::accountId) == 2));
-		if (other.size() != 1) {
-			return Fail(7, "the second account lost its own row");
+		if (!readIds(0, 0).empty()
+			|| !readIds(0, kSecondUser).empty()
+			|| !readIds(kFirstUser, kSecondUser).empty()) {
+			return Fail(7, "invalid account identity exposed archived rows");
 		}
-		if (other.front().messageId != 2) {
-			return Fail(8, "the second account got the wrong row");
+		const auto accounts = storage.select(
+			&ArchiveRow::accountId, order_by(&ArchiveRow::messageId));
+		if (accounts != std::vector<ID>{
+				kFirstUser, kSecondUser, 0, 0, kFirstUser, kFirstUser, kExplicitAccount }) {
+			return Fail(8, "reading the archive reassigned stored rows");
 		}
-		std::remove(path.c_str());
+		storage.remove_all<ArchiveRow>(where(owned(kFirstUser, kFirstUser)));
+		if (!readIds(kFirstUser, kFirstUser).empty()
+			|| readIds(kSecondUser, kSecondUser) != std::vector<int>{ 2, 4, 5 }) {
+			return Fail(9, "purging the first account left rows or removed another owner's row");
+		}
 	}
 
 	return 0;

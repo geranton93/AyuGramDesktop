@@ -41,6 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_worker.h"
+#include "ayu/data/ayu_database.h"
 #include "ayu/data/messages_storage.h"
 #include "ayu/utils/telegram_helpers.h"
 
@@ -1095,9 +1096,13 @@ bool Histories::postponeEntryRequest(const State &state) const {
 void Histories::deleteMessages(
 		not_null<History*> history,
 		const QVector<MTPint> &ids,
-		bool revoke) {
+		bool revoke,
+		Fn<void()> confirmed) {
 	sendRequest(history, RequestType::Delete, [=](Fn<void()> finish) {
 		const auto done = [=](const MTPmessages_AffectedMessages &result) {
+			if (confirmed) {
+				confirmed();
+			}
 			session().api().applyAffectedMessages(history->peer, result);
 			finish();
 			history->requestChatListMessage();
@@ -1244,9 +1249,13 @@ void Histories::deleteMessagesByDates(
 }
 
 void Histories::deleteMessages(const MessageIdsList &ids, bool revoke) {
+	struct PendingDelete {
+		QVector<MTPint> ids;
+		std::vector<DeletedMessage> archived;
+	};
 	auto remove = std::vector<not_null<HistoryItem*>>();
 	remove.reserve(ids.size());
-	base::flat_map<not_null<History*>, QVector<MTPint>> idsByPeer;
+	base::flat_map<not_null<History*>, PendingDelete> idsByPeer;
 	base::flat_map<not_null<PeerData*>, QVector<MTPint>> scheduledIdsByPeer;
 	base::flat_map<BusinessShortcutId, QVector<MTPint>> quickIdsByShortcut;
 	base::flat_set<not_null<DocumentData*>> savedMusic;
@@ -1293,13 +1302,34 @@ void Histories::deleteMessages(const MessageIdsList &ids, bool revoke) {
 			if (item->isDeleted()) {
 				AyuMessages::removeDeletedMessage(item);
 			} else if (item->isRegular()) {
-				idsByPeer[history].push_back(MTP_int(itemId.msg));
+				auto &pending = idsByPeer[history];
+				pending.ids.push_back(MTP_int(itemId.msg));
+				if (item->out()
+					&& (revoke || history->peer->isChannel())
+					&& isMessageSavable(item)) {
+					if (auto message = AyuMessages::snapshotDeletedMessage(item)) {
+						pending.archived.push_back(std::move(*message));
+					}
+				}
 			}
 		}
 	}
 
-	for (const auto &[history, ids] : idsByPeer) {
-		history->owner().histories().deleteMessages(history, ids, revoke);
+	for (auto &[history, pending] : idsByPeer) {
+		auto confirmed = Fn<void()>();
+		if (!pending.archived.empty()) {
+			auto messages = std::make_shared<std::vector<DeletedMessage>>(
+				std::move(pending.archived));
+			confirmed = [peer = history->peer, messages = std::move(messages)] {
+				const auto &settings = AyuSettings::getInstance();
+				if (settings.saveDeletedMessages()
+					&& (!peer->isBot() || settings.saveForBots())) {
+					AyuDatabase::addDeletedMessages(*messages);
+				}
+			};
+		}
+		history->owner().histories().deleteMessages(
+			history, pending.ids, revoke, std::move(confirmed));
 	}
 	for (const auto &[peer, ids] : scheduledIdsByPeer) {
 		peer->session().api().request(MTPmessages_DeleteScheduledMessages(

@@ -12,6 +12,7 @@
 #include "api/api_sending.h"
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_state.h"
+#include "ayu/ayu_worker.h"
 #include "ayu/data/messages_storage.h"
 #include "ayu/features/filters/filters_controller.h"
 #include "ayu/features/forward/ayu_forward.h"
@@ -921,7 +922,23 @@ void AddReadUntilAction(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 					&& media->ttlSeconds() <= 0
 					&& !readItem->out();
 			}();
-			readHistory(readItem);
+			if (const auto topicRootId = readItem->forumTopicRootId()) {
+				session->api().request(MTPmessages_ReadDiscussion(
+					readItem->history()->peer->input(),
+					MTP_int(topicRootId),
+					MTP_int(itemId.msg)
+				)).done([=](const MTPBool &result) {
+					if (mtpIsTrue(result)) {
+						AyuWorker::markAsOnline(session);
+						session->data().updateRepliesReadTill({
+							.id = FullMsgId(itemId.peer, topicRootId),
+							.readTillId = itemId.msg,
+						});
+					}
+				}).send();
+			} else {
+				readHistory(readItem);
+			}
 			if (readContents) {
 				const auto ids = MTP_vector<MTPint>(1, MTP_int(itemId.msg));
 				const auto peer = session->data().peer(itemId.peer);

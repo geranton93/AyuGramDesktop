@@ -9,6 +9,7 @@
 #include "ayu/data/entities.h"
 
 #include <functional>
+#include <span>
 
 class SchemaVersion
 {
@@ -26,7 +27,7 @@ std::vector<EditedMessage> getEditedMessages(ID accountId, ID userId, ID dialogI
 bool hasRevisions(ID accountId, ID userId, ID dialogId, ID messageId);
 
 void addDeletedMessage(const DeletedMessage &message);
-void addDeletedMessages(const std::vector<DeletedMessage> &messages);
+void addDeletedMessages(std::span<const DeletedMessage> messages);
 std::vector<DeletedMessage> getDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery = "");
 bool hasDeletedMessages(ID accountId, ID userId, ID dialogId, ID topicId);
 void removeDeletedMessage(ID accountId, ID userId, ID dialogId, ID messageId);

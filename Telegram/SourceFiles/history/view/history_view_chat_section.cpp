@@ -141,6 +141,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/features/message_shot/message_shot.h"
+#include "ayu/utils/telegram_helpers.h"
 #include "base/unixtime.h"
 
 
@@ -3400,6 +3401,12 @@ void ChatWidget::sendInlineResult(
 		return;
 	}
 
+	const auto sendType = sendMenuDetails().type;
+	if (sendType == SendMenu::Type::Scheduled
+		|| sendType == SendMenu::Type::ScheduledToUser
+		|| sendType == SendMenu::Type::Reminder) {
+		applyGhostScheduling(action);
+	}
 	session().api().sendInlineResult(
 		bot,
 		result.get(),
@@ -3412,7 +3419,7 @@ void ChatWidget::sendInlineResult(
 	//onDraftSave();
 
 	bot->session().recentInlineBots().bump(bot);
-	finishSending(options);
+	finishSending(action.options);
 }
 
 SendMenu::Details ChatWidget::sendMenuDetails() const {

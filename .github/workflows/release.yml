@@ -178,6 +178,11 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
+      - name: Select Python for native preparation and generators
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Prepare native dependencies
         shell: bash
         run: |
@@ -187,6 +192,7 @@ jobs:
           brew list meson >/dev/null 2>&1 || brew install meson
           brew list nasm >/dev/null 2>&1 || brew install nasm
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
           python3 Telegram/build/prepare/prepare.py silent
 
       - name: Build AyuGram and Packer
@@ -196,7 +202,8 @@ jobs:
           TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
         run: |
           set -euo pipefail
-          cmake -S . -B out -G Xcode \
+          QT=6.11.2 cmake -S . -B out -G Xcode \
+            -DPython3_EXECUTABLE="$(command -v python3)" \
             -DDESKTOP_APP_SPECIAL_TARGET=mac \
             -DDESKTOP_APP_MAC_ARCH="${{ matrix.arch }}" \
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
@@ -297,6 +304,7 @@ jobs:
             --keys-dir Telegram/Resources/update \
             --primary-key "$primary" \
             --secondary-key "$secondary" \
+            --openssl "$(brew --prefix openssl@3)/bin/openssl" \
             --target mac --arch "$arch" \
             --version "${{ needs.preflight.outputs.version }}" \
             --channel "${{ needs.preflight.outputs.channel }}"
@@ -456,7 +464,11 @@ jobs:
             choco install innosetup --no-progress --yes
           }
           if (-not (Test-Path $iscc)) { throw 'Inno Setup 6 ISCC.exe was not found' }
-          & $iscc /DMyAppVersion=$version /DMyAppVersionFull=$versionFull `
+          $installerOptions = @()
+          if ('${{ needs.preflight.outputs.windows_signed }}' -ne '1') {
+            $installerOptions += '/DMyUnsignedInstaller=1'
+          }
+          & $iscc @installerOptions /DMyAppVersion=$version /DMyAppVersionFull=$versionFull `
             "/DReleasePath=$release" /DMyBuildTarget=${{ matrix.target }} "/DMyOutputBaseFilename=$setupBase" `
             (Join-Path $env:GITHUB_WORKSPACE 'Telegram\build\setup.iss')
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
@@ -667,6 +679,7 @@ jobs:
 
       - name: Verify the complete artifact set
         shell: bash
+        working-directory: release-assets
         run: |
           set -euo pipefail
           expected=(
@@ -678,11 +691,12 @@ jobs:
             "td-update-linux-x64-${VERSION}${SUFFIX}"
           )
           for file in "${expected[@]}"; do
-            test -f "release-assets/$file"
+            test -f "$file"
+            test -f "$file.sha256"
           done
-          count="$(find release-assets -maxdepth 1 -type f -name 'td-update-*' | wc -l | tr -d ' ')"
+          count="$(find . -maxdepth 1 -type f -name 'td-update-*' ! -name '*.sha256' | wc -l | tr -d ' ')"
           test "$count" = 6
-          for checksum in release-assets/*.sha256; do
+          for checksum in ./*.sha256; do
             file="${checksum%.sha256}"
             test -f "$file"
             sha256sum --check "$checksum"
