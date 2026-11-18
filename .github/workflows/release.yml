@@ -4,18 +4,23 @@ on:
   push:
     tags:
       - "v*"
+      - "!v*-ayugram-arm64"
   workflow_dispatch:
     inputs:
       tag:
         description: "Existing release tag to build, for example v7.2.7 or v7.2.7-beta"
         required: true
         type: string
+      macos_arm64_only:
+        description: "Build a macOS arm64 installer artifact for manual validation"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ayugram-release
+  group: ${{ inputs.macos_arm64_only && 'ayugram-arm64-artifact' || 'ayugram-release' }}
   cancel-in-progress: false
 
 env:
@@ -93,6 +98,10 @@ jobs:
 
           [[ "$TDESKTOP_API_ID" =~ ^[0-9]+$ ]]
           [[ "$TDESKTOP_API_HASH" =~ ^[a-fA-F0-9]{32}$ ]]
+          if [[ "$TDESKTOP_API_ID" == 17349 ]]; then
+            echo "A release requires the fork's own Telegram API ID." >&2
+            exit 1
+          fi
           missing=0
           for name in \
             AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY \
@@ -160,16 +169,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: arm64
-            feed_platform: armac
-            artifact_arch: arm
-            runner: macos-15
-          - arch: x86_64
-            feed_platform: mac
-            artifact_arch: x64
-            runner: macos-15
+        include: ${{ fromJSON(inputs.macos_arm64_only && '[{"arch":"arm64","feed_platform":"armac","artifact_arch":"arm","runner":"xcode-27"}]' || '[{"arch":"arm64","feed_platform":"armac","artifact_arch":"arm","runner":"macos-15"},{"arch":"x86_64","feed_platform":"mac","artifact_arch":"x64","runner":"macos-15"}]') }}
     runs-on: ${{ matrix.runner }}
+    env:
+      MACOS_ARM64_ONLY: ${{ inputs.macos_arm64_only || false }}
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
@@ -193,7 +196,17 @@ jobs:
           brew list nasm >/dev/null 2>&1 || brew install nasm
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
           brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
-          python3 Telegram/build/prepare/prepare.py silent
+          df -h .
+          if [[ "$MACOS_ARM64_ONLY" == true ]]; then
+            TDESKTOP_MAC_TOOLCHAIN=system MACOSX_DEPLOYMENT_TARGET=12.0 \
+              python3 Telegram/build/prepare/prepare.py mac-arm64-release silent
+            test -s ../Libraries/local/lib/libtdesktop_rust.a
+            test -s ../Libraries/local/src/wallet_engine/wallet_engine.cpp
+            rm -rf ../Libraries/tdesktop_rust/target ../Libraries/wallet-engine/bindgen/cpp/target
+          else
+            python3 Telegram/build/prepare/prepare.py silent
+          fi
+          df -h .
 
       - name: Build AyuGram and Packer
         shell: bash
@@ -202,7 +215,20 @@ jobs:
           TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
         run: |
           set -euo pipefail
-          QT=6.11.2 cmake -S . -B out -G Xcode \
+          args=(-S . -B out -G Xcode)
+          targets=(Telegram Packer)
+          parallel=(--parallel)
+          if [[ "$MACOS_ARM64_ONLY" == true ]]; then
+            targets=(Telegram)
+            parallel=(--parallel 3)
+            args+=(
+              -DCMAKE_CONFIGURATION_TYPES=Release
+              -DCMAKE_OSX_ARCHITECTURES=arm64
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+              -DCMAKE_XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS=NO
+            )
+          fi
+          QT=6.11.2 cmake "${args[@]}" \
             -DPython3_EXECUTABLE="$(command -v python3)" \
             -DDESKTOP_APP_SPECIAL_TARGET=mac \
             -DDESKTOP_APP_MAC_ARCH="${{ matrix.arch }}" \
@@ -211,9 +237,11 @@ jobs:
             -DDESKTOP_APP_ENABLE_LTO=ON \
             -DTDESKTOP_API_ID="$TDESKTOP_API_ID" \
             -DTDESKTOP_API_HASH="$TDESKTOP_API_HASH"
-          cmake --build out --config Release --target Telegram Packer --parallel
+          cmake --build out --config Release --target "${targets[@]}" "${parallel[@]}"
           test -d out/Release/AyuGram.app
-          test -x out/Release/Packer
+          if [[ "$MACOS_ARM64_ONLY" != true ]]; then
+            test -x out/Release/Packer
+          fi
 
       - name: Sign, notarize and package macOS artifacts
         shell: bash
@@ -288,26 +316,30 @@ jobs:
             codesign --verify --deep --strict "$app"
           fi
 
-          dmg="$artifact/td-setup-mac-${{ matrix.artifact_arch }}-${version}${suffix}.dmg"
-          hdiutil create -volname "AyuGram Desktop" \
-            -srcfolder "$app" -ov -format UDZO "$dmg"
+          if [[ "$MACOS_ARM64_ONLY" != true ]]; then
+            dmg="$artifact/td-setup-mac-${{ matrix.artifact_arch }}-${version}${suffix}.dmg"
+            hdiutil create -volname "AyuGram Desktop" \
+              -srcfolder "$app" -ov -format UDZO "$dmg"
+          fi
           portable="$artifact/td-portable-mac-${{ matrix.artifact_arch }}-${version}${suffix}.zip"
           ditto -c -k --keepParent "$app" "$portable"
 
-          printf '%s\n' "$AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY" > "$primary"
-          printf '%s\n' "$AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY" > "$secondary"
-          chmod 600 "$primary" "$secondary"
-          python3 Telegram/build/package_fork_update.py \
-            --packer "$release/Packer" \
-            --release-dir "$release" \
-            --output-dir "$artifact" \
-            --keys-dir Telegram/Resources/update \
-            --primary-key "$primary" \
-            --secondary-key "$secondary" \
-            --openssl "$(brew --prefix openssl@3)/bin/openssl" \
-            --target mac --arch "$arch" \
-            --version "${{ needs.preflight.outputs.version }}" \
-            --channel "${{ needs.preflight.outputs.channel }}"
+          if [[ "$MACOS_ARM64_ONLY" != true ]]; then
+            printf '%s\n' "$AYUGRAM_UPDATE_RELEASE_PRIVATE_KEY" > "$primary"
+            printf '%s\n' "$AYUGRAM_UPDATE_SECONDARY_PRIVATE_KEY" > "$secondary"
+            chmod 600 "$primary" "$secondary"
+            python3 Telegram/build/package_fork_update.py \
+              --packer "$release/Packer" \
+              --release-dir "$release" \
+              --output-dir "$artifact" \
+              --keys-dir Telegram/Resources/update \
+              --primary-key "$primary" \
+              --secondary-key "$secondary" \
+              --openssl "$(brew --prefix openssl@3)/bin/openssl" \
+              --target mac --arch "$arch" \
+              --version "${{ needs.preflight.outputs.version }}" \
+              --channel "${{ needs.preflight.outputs.channel }}"
+          fi
           for file in "$artifact"/*; do
             case "$file" in
               *.sha256) continue ;;
@@ -325,6 +357,7 @@ jobs:
           retention-days: 14
 
   build-windows:
+    if: ${{ !inputs.macos_arm64_only }}
     name: Windows ${{ matrix.feed_platform }}
     needs: preflight
     strategy:
@@ -440,8 +473,8 @@ jobs:
             -DDESKTOP_APP_SPECIAL_TARGET='${{ matrix.target }}' `
             -DDESKTOP_APP_DISABLE_AUTOUPDATE=OFF `
             -DDESKTOP_APP_ENABLE_LTO=ON `
-            -DTDESKTOP_API_ID=$env:TDESKTOP_API_ID `
-            -DTDESKTOP_API_HASH=$env:TDESKTOP_API_HASH
+            "-DTDESKTOP_API_ID=$env:TDESKTOP_API_ID" `
+            "-DTDESKTOP_API_HASH=$env:TDESKTOP_API_HASH"
           cmake --build out --config Release --target Telegram Packer --parallel
           if (-not (Test-Path (Join-Path $release 'AyuGram.exe'))) { throw 'AyuGram.exe was not built' }
           if (-not (Test-Path (Join-Path $release 'Updater.exe'))) { throw 'Updater.exe was not built' }
@@ -529,6 +562,7 @@ jobs:
           retention-days: 14
 
   build-linux:
+    if: ${{ !inputs.macos_arm64_only }}
     name: Linux x64
     needs: preflight
     runs-on: ubuntu-24.04

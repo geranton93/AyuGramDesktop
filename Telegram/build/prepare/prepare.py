@@ -63,6 +63,7 @@ optionsList = [
     'qt5',
     'qt6',
     'skip-release',
+    'mac-arm64-release',
     'build-stackwalk',
     'qt-asserts',
 ]
@@ -79,6 +80,14 @@ for arg in sys.argv[1:]:
     elif arg == 'shell':
         customRunCommand = True
         runCommand.append('shell')
+
+macArm64Release = 'mac-arm64-release' in options
+if macArm64Release:
+    if (not mac or os.uname().machine != 'arm64'
+            or 'skip-release' in options or 'build-stackwalk' in options):
+        error('mac-arm64-release requires native macOS arm64 and a Release build.')
+    if pathlib.Path(libsDir, 'local', 'Qt-' + qt).exists():
+        error('mac-arm64-release requires a fresh Qt install prefix.')
 
 pathPrefixes = [
     'ThirdParty\\msys64\\ucrt64\\bin',
@@ -1705,10 +1714,22 @@ else: # qt > '6'
     # checkouts share Libraries, so the cache key gets the content, not the path
     modifiedEnv['QT_ANGLE_CMAKE'] = qtAngleCmake
     branch = 'v$QT' + ('-lts-lgpl' if qt.startswith('6.2.') else '')
+    qtCloneOptions = '--depth 1 --single-branch ' if macArm64Release else ''
+    qtSubmoduleOptions = '--depth 1 ' if macArm64Release else ''
+    qtMacArchs = 'arm64' if macArm64Release else 'x86_64;arm64'
+    qtMacDebugInfo = '' if macArm64Release else '-force-debug-info'
+    qtMacReleaseConfigurations = '-release' if macArm64Release else '-debug-and-release'
+    qtMacCleanup = """
+    test -f "$USED_PREFIX/Qt-$QT/lib/cmake/Qt6/Qt6Config.cmake"
+    test "$(lipo -archs "$USED_PREFIX/Qt-$QT/lib/libQt6Core.a")" = arm64
+    cd "$LIBS_DIR"
+    rm -rf "qt_$QT"
+    mkdir "qt_$QT"
+""" if macArm64Release else ''
     stage('qt_' + qt, """
-    git clone -b """ + branch + """ https://github.com/qt/qt5.git qt_$QT
+    git clone """ + qtCloneOptions + """-b """ + branch + """ https://github.com/qt/qt5.git qt_$QT
     cd qt_$QT
-    git submodule update --init --recursive --progress qtbase qtimageformats qtshadertools qtsvg
+    git submodule update --init --recursive --progress """ + qtSubmoduleOptions + """qtbase qtimageformats qtshadertools qtsvg
 depends:patches/qtbase_""" + qt + """/*.patch
 depends:patches/qtsvg_""" + qt + """/*.patch
 win32_win64:
@@ -1725,14 +1746,14 @@ mac:
     CONFIGURATIONS=-debug
     ASSERTS=
 release:
-    CONFIGURATIONS=-debug-and-release
+    CONFIGURATIONS=""" + qtMacReleaseConfigurations + """
 mac_asserts:
     ASSERTS=-force-asserts
 mac:
     ./configure -prefix "$USED_PREFIX/Qt-$QT" \
         $CONFIGURATIONS \
         $ASSERTS \
-        -force-debug-info \
+        """ + qtMacDebugInfo + """ \
         -opensource \
         -confirm-license \
         -static \
@@ -1746,7 +1767,7 @@ mac:
         -no-feature-brotli \
         -no-feature-cxx17_filesystem \
         -platform macx-clang -- \
-        -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+        -DCMAKE_OSX_ARCHITECTURES=""" + f'"{qtMacArchs}"' + """ \
         -DCMAKE_OSX_SYSROOT="$SDKROOT" \
         -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
         -DCMAKE_PREFIX_PATH="$USED_PREFIX" \
@@ -1755,6 +1776,7 @@ mac:
 
     cmake --build .
     cmake --install .
+""" + qtMacCleanup + """
 win:
     cd qtbase
     setlocal enabledelayedexpansion
@@ -1882,6 +1904,27 @@ win:
     cmake --build out --config Debug
 release:
     cmake --build out --config Release
+""" + ("""
+mac:
+    MOZJPEG_PATH=$USED_PREFIX/include
+    OPUS_PATH=$USED_PREFIX/include/opus
+    LIBVPX_PATH=$USED_PREFIX/include
+    OPENH264_PATH=$USED_PREFIX/include
+    FFMPEG_PATH=$USED_PREFIX/include
+    mkdir -p out/Release
+    cd out/Release
+    cmake \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_OSX_ARCHITECTURES=arm64 \
+        -DTG_OWT_SPECIAL_TARGET=$SPECIAL_TARGET \
+        -DTG_OWT_LIBJPEG_INCLUDE_PATH=$MOZJPEG_PATH \
+        -DTG_OWT_OPENSSL_INCLUDE_PATH=$LIBS_DIR/openssl3/include \
+        -DTG_OWT_OPUS_INCLUDE_PATH=$OPUS_PATH \
+        -DTG_OWT_LIBVPX_INCLUDE_PATH=$LIBVPX_PATH \
+        -DTG_OWT_OPENH264_INCLUDE_PATH=$OPENH264_PATH \
+        -DTG_OWT_FFMPEG_INCLUDE_PATH=$FFMPEG_PATH ../..
+    cmake --build .
+""" if macArm64Release else """
 mac:
     MOZJPEG_PATH=$USED_PREFIX/include
     OPUS_PATH=$USED_PREFIX/include/opus
@@ -1953,7 +1996,7 @@ release:
     cd ..
     mkdir Release
     lipo -create Release.arm64/libtg_owt.a Release.x86_64/libtg_owt.a -output Release/libtg_owt.a
-""")
+"""))
 
 stage('ada', """
     git clone -b v3.2.9 https://github.com/ada-url/ada.git
